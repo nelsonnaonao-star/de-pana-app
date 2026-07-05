@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: red-on
+    env: node
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: VITE_FIREBASE_VAPID_KEY
+        sync: false
+      - key: FIREBASE_PRIVATE_VAPID_KEY
+        sync: false
+      - key: METERED_API_KEY
+        sync: false
+      - key: FCM_WEBHOOK_SECRET
+        sync: false

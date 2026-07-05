@@ -1,0 +1,1706 @@
+import React, { useState, useEffect } from "react";
+import { 
+  Check, AlertTriangle, Info, Search, Plus, MessageSquareMore, 
+  CircleDotDashed, Radio, TrendingUp, Briefcase, CircleUser, 
+  QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
+  HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
+  Smartphone, EyeOff, UserCheck
+} from "lucide-react";
+import { Chat, Message, ActiveCall } from "../types";
+import WelcomeScreen from "./WelcomeScreen";
+import ChatRoom from "./ChatRoom";
+import CallOverlay from "./CallOverlay";
+import QrScanner from "./QrScanner";
+import MyQrCode from "./MyQrCode";
+import AddContact from "./AddContact";
+import AddContactManual from "./AddContactManual";
+import BusinessPanel, { BusinessFlyer } from "./BusinessPanel";
+import RatesPanel from "./RatesPanel";
+import StatesPanel from "./StatesPanel";
+import ChannelsPanel from "./ChannelsPanel";
+import { useSupabase } from "../contexts/SupabaseContext";
+import { getMessages } from "../services/messages";
+import { createChat as createChatInSupabase } from "../services/chats";
+import { getMyFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
+
+interface PhoneSimulatorProps {
+  isCorrected?: boolean;
+  onToggle?: (val: boolean) => void;
+  externalCallTrigger?: ActiveCall | null;
+  onClearExternalCallTrigger?: () => void;
+  externalMessageTrigger?: Message | null;
+  onClearExternalMessageTrigger?: () => void;
+}
+
+export default function PhoneSimulator({
+  isCorrected,
+  onToggle,
+  externalCallTrigger = null,
+  onClearExternalCallTrigger = () => {},
+  externalMessageTrigger = null,
+  onClearExternalMessageTrigger = () => {}
+}: PhoneSimulatorProps) {
+  const { user, profile, chats: supabaseChats, refreshChats, refreshContacts } = useSupabase();
+
+  // Application Screen State
+  const [currentScreen, setCurrentScreen] = useState<
+    "welcome" | "chats" | "chat_room" | "qr_scanner" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual"
+  >("chats");
+
+  // Floating action menu
+  const [showActionMenu, setShowActionMenu] = useState(false);
+
+  // App User state
+  const [registeredUser, setRegisteredUser] = useState<{
+    name: string;
+    phone: string;
+    avatar: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (user && profile) {
+      setRegisteredUser({
+        name: profile.name,
+        phone: profile.phone_number,
+        avatar: profile.avatar || profile.avatar_url || "",
+      });
+    } else if (user) {
+      const fallbackName = user.email?.split("@")[0] || "Usuario";
+      setRegisteredUser({
+        name: fallbackName,
+        phone: "",
+        avatar: "",
+      });
+    }
+  }, [user, profile]);
+
+  // Active Chats & Selected Chat
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+
+  // Active Call Screen Overlay
+  const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+
+  // Swipe-to-delete state
+  const [swipedChatId, setSwipedChatId] = useState<string | null>(null);
+
+  // Search input filter
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Media editor state to hide navigation and maximize vertical screen space
+  const [isEditingMedia, setIsEditingMedia] = useState(false);
+
+  // RED ON Settings & Profile States
+  const [userId, setUserId] = useState("");
+  const [hideNumber, setHideNumber] = useState(false);
+  const [doubleCheck, setDoubleCheck] = useState(true);
+  const [blockedCount, setBlockedCount] = useState(0);
+  const [twoStepVerification, setTwoStepVerification] = useState(false);
+  const [twoStepPin, setTwoStepPin] = useState("");
+  const [muteChats, setMuteChats] = useState(false);
+  const [unreadBadges, setUnreadBadges] = useState(true);
+  const [mobileDataUsage, setMobileDataUsage] = useState("Ahorro");
+  const [autoDownloadPhotos, setAutoDownloadPhotos] = useState(true);
+  const [appFont, setAppFont] = useState<"Clásico" | "Mono" | "Elegante" | "Moderno">("Clásico");
+  const [backupDate, setBackupDate] = useState("");
+  const [backupChatsCount, setBackupChatsCount] = useState(0);
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  // Modal displays inside profile screen
+  const [activeSettingsModal, setActiveSettingsModal] = useState<
+    null | "cuenta" | "seguridad" | "notificaciones" | "datos" | "fuentes" | "ayuda" | "legal"
+  >(null);
+
+  // Toast notifications for user feedback
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 2500);
+  };
+
+  // Auto-reset editing state if screen changes
+  useEffect(() => {
+    if (currentScreen !== "business") {
+      setIsEditingMedia(false);
+    }
+  }, [currentScreen]);
+
+  const [flyers, setFlyers] = useState<BusinessFlyer[]>([]);
+
+  // Load flyers from API on mount
+  useEffect(() => {
+    if (!user) return;
+    getMyFlyers(user.id).then(apiFlyers => {
+      if (!apiFlyers || apiFlyers.length === 0) return;
+      const mapped: BusinessFlyer[] = apiFlyers.map((f: any) => ({
+        id: f.id,
+        businessName: f.business_name,
+        description: f.description || '',
+        location: f.location || '',
+        flyerUrl: f.flyer_url || '',
+        isGenerated: !!f.flyer_url,
+        templateId: f.template_id || undefined,
+        productName: f.product_name || undefined,
+        price: f.price || undefined,
+        musicUrl: f.music_url || '',
+        musicName: f.music_name || '',
+        views: f.views || 0,
+        clicks: f.clicks || 0,
+        ownerName: profile?.name || 'Usuario',
+        ownerAvatar: profile?.avatar || profile?.avatar_url || '',
+        ownerPhone: profile?.phone_number || '',
+      }));
+      setFlyers(mapped);
+    }).catch(() => {});
+  }, [user?.id]);
+
+  const handleAddNewFlyer = async (newFlyer: BusinessFlyer) => {
+    setFlyers(prev => [newFlyer, ...prev]);
+    if (!user) return;
+    try {
+      await createFlyer({
+        user_id: user.id,
+        business_name: newFlyer.businessName,
+        description: newFlyer.description,
+        location: newFlyer.location,
+        flyer_url: newFlyer.flyerUrl,
+        template_id: newFlyer.templateId,
+        product_name: newFlyer.productName,
+        price: newFlyer.price,
+        music_url: newFlyer.musicUrl,
+        music_name: newFlyer.musicName,
+      });
+    } catch {}
+  };
+
+  const handleIncrementView = (flyerId: string) => {
+    setFlyers(prev => prev.map(f => f.id === flyerId ? { ...f, views: f.views + 1 } : f));
+    incrementFlyerView(flyerId).catch(() => {});
+  };
+
+  const handleIncrementClick = (flyerId: string) => {
+    setFlyers(prev => prev.map(f => f.id === flyerId ? { ...f, clicks: f.clicks + 1 } : f));
+    incrementFlyerClick(flyerId).catch(() => {});
+  };
+
+  const handleStartBusinessChat = (businessName: string, avatar: string, initialText: string, flyerId: string) => {
+    const existing = chats.find(c => c.name.toLowerCase() === businessName.toLowerCase());
+    let targetId = "";
+
+    if (existing) {
+      targetId = existing.id;
+      const newMsg: Message = {
+        id: "msg_biz_" + Date.now(),
+        sender: "me",
+        text: initialText,
+        timestamp: "Ahora mismo",
+        type: "text"
+      };
+      setChats(prev => prev.map(c => {
+        if (c.id === targetId) {
+          return {
+            ...c,
+            lastMessage: initialText,
+            lastMessageTime: "Ahora mismo",
+            messages: [...c.messages, newMsg]
+          };
+        }
+        return c;
+      }));
+    } else {
+      targetId = "chat_biz_" + Date.now();
+      const newChat: Chat = {
+        id: targetId,
+        name: businessName,
+        avatar: avatar,
+        status: "online",
+        lastMessage: initialText,
+        lastMessageTime: "Ahora mismo",
+        unreadCount: 0,
+        messages: [
+          {
+            id: "msg_biz_" + Date.now(),
+            sender: "me",
+            text: initialText,
+            timestamp: "Ahora mismo",
+            type: "text"
+          }
+        ]
+      };
+      setChats(prev => [newChat, ...prev]);
+    }
+
+    setSelectedChatId(targetId);
+    setCurrentScreen("chat_room");
+  };
+
+  const handleStartChatFromState = (name: string, avatar: string, initialText: string) => {
+    const existing = chats.find(c => c.name.toLowerCase() === name.toLowerCase());
+    let targetId = "";
+
+    if (existing) {
+      targetId = existing.id;
+      const newMsg: Message = {
+        id: "msg_state_reply_" + Date.now(),
+        sender: "me",
+        text: initialText,
+        timestamp: "Ahora mismo",
+        type: "text"
+      };
+      setChats(prev => prev.map(c => {
+        if (c.id === targetId) {
+          return {
+            ...c,
+            lastMessage: initialText,
+            lastMessageTime: "Ahora mismo",
+            messages: [...c.messages, newMsg]
+          };
+        }
+        return c;
+      }));
+    } else {
+      targetId = "chat_state_reply_" + Date.now();
+      const newChat: Chat = {
+        id: targetId,
+        name: name,
+        avatar: avatar,
+        status: "online",
+        lastMessage: initialText,
+        lastMessageTime: "Ahora mismo",
+        unreadCount: 0,
+        messages: [
+          {
+            id: "msg_state_reply_" + Date.now(),
+            sender: "me",
+            text: initialText,
+            timestamp: "Ahora mismo",
+            type: "text"
+          }
+        ]
+      };
+      setChats(prev => [newChat, ...prev]);
+    }
+
+    setSelectedChatId(targetId);
+    setCurrentScreen("chat_room");
+  };
+
+  const handleRegister = (name: string, phone: string, avatar: string) => {
+    setRegisteredUser({ name, phone, avatar });
+    setCurrentScreen("chats");
+  };
+
+  // Load Supabase chats when available
+  useEffect(() => {
+    if (supabaseChats.length > 0) {
+      const mapped = supabaseChats.map((sc: any) => ({
+        id: sc.id,
+        name: sc.name,
+        avatar: sc.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
+        status: sc.is_online ? "online" : "offline",
+        lastMessage: sc.last_message || "",
+        lastMessageTime: sc.last_message_time
+          ? (() => {
+              const d = new Date(sc.last_message_time);
+              const now = new Date();
+              const isToday = d.toDateString() === now.toDateString();
+              return isToday
+                ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                : d.toLocaleDateString([], { day: "numeric", month: "short" });
+            })()
+          : "",
+        unreadCount: sc.unread_count || 0,
+        messages: [],
+      }));
+      setChats(mapped);
+    }
+  }, [supabaseChats]);
+
+  const handleCloudBackup = () => {
+    setIsBackingUp(true);
+    setTimeout(() => {
+      const now = new Date();
+      const formattedDate = `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`;
+      setBackupDate(formattedDate);
+      setBackupChatsCount(chats.length);
+      setIsBackingUp(false);
+      showToast("Copia de seguridad guardada con éxito ☁️");
+    }, 1500);
+  };
+
+  const handleCloudRestore = () => {
+    setIsRestoring(true);
+    setTimeout(async () => {
+      if (user) {
+        try {
+          await refreshChats();
+        } catch {}
+      }
+      setIsRestoring(false);
+      showToast("Mensajes restaurados con éxito 🔄");
+    }, 1500);
+  };
+
+  const handleOpenSupportChat = async () => {
+    const existing = chats.find(c => c.id === "soporte_redon");
+    if (!existing && user) {
+      try {
+        const newChat = await createChatInSupabase({
+          name: "Soporte RED ON 🛡️",
+          avatar: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=120&q=80",
+          profile_id: user.id,
+          admin_id: user.id,
+        });
+        await refreshChats();
+      } catch {}
+    }
+    setSelectedChatId("soporte_redon");
+    setCurrentScreen("chat_room");
+    setActiveSettingsModal(null);
+    showToast("Chat de soporte iniciado 💬");
+  };
+
+  useEffect(() => {
+    if (externalCallTrigger) {
+      setActiveCall(externalCallTrigger);
+      onClearExternalCallTrigger();
+    }
+  }, [externalCallTrigger, onClearExternalCallTrigger]);
+
+  useEffect(() => {
+    if (externalMessageTrigger) {
+      const chatTarget = "nelson"; // Default target
+      setChats((prevChats) =>
+        prevChats.map((c) => {
+          if (c.id === chatTarget) {
+            return {
+              ...c,
+              unreadCount: currentScreen !== "chat_room" || selectedChatId !== chatTarget ? c.unreadCount + 1 : 0,
+              lastMessage: externalMessageTrigger.text || "¡Archivo recibido!",
+              lastMessageTime: externalMessageTrigger.timestamp,
+              messages: [...c.messages, externalMessageTrigger]
+            };
+          }
+          return c;
+        })
+      );
+      onClearExternalMessageTrigger();
+    }
+  }, [externalMessageTrigger, currentScreen, selectedChatId, onClearExternalMessageTrigger]);
+
+  const activeChat = chats.find((c) => c.id === selectedChatId);
+
+  const handleSendMessageInRoom = (newMsg: Message) => {
+    if (!selectedChatId) return;
+
+    setChats((prevChats) =>
+      prevChats.map((c) => {
+        if (c.id === selectedChatId) {
+          return {
+            ...c,
+            lastMessage: newMsg.text || "Archivo multimedia",
+            lastMessageTime: newMsg.timestamp,
+            messages: [...c.messages, newMsg]
+          };
+        }
+        return c;
+      })
+    );
+  };
+
+  const handleTriggerCallFromChat = (type: "audio" | "video") => {
+    if (!activeChat) return;
+    setActiveCall({
+      id: "call_" + Date.now(),
+      contactName: activeChat.name,
+      contactAvatar: activeChat.avatar,
+      type: type,
+      status: "outgoing",
+      durationSeconds: 0,
+      isMuted: false,
+      isVideoOff: false,
+      isGroup: activeChat.id === "grupo_redon"
+    });
+
+    setTimeout(() => {
+      setActiveCall((prev) => (prev ? { ...prev, status: "connected" } : null));
+    }, 2000);
+  };
+
+  const handleContactAddedByQr = async (name: string, avatar: string) => {
+    if (user) {
+      try {
+        await createChatInSupabase({
+          name,
+          avatar,
+          profile_id: user.id,
+          admin_id: user.id,
+        });
+        await refreshChats();
+        await refreshContacts();
+      } catch {}
+    }
+    setCurrentScreen("chats");
+    showToast("Contacto agregado por QR ✅");
+  };
+
+  const handleDeleteChat = (chatId: string) => {
+    setChats(prev => prev.filter(c => c.id !== chatId));
+    setSwipedChatId(null);
+    if (selectedChatId === chatId) {
+      setSelectedChatId(null);
+    }
+  };
+
+  const filteredChats = chats.filter((c) =>
+    c.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <div className="relative w-screen h-screen bg-white flex flex-col overflow-hidden select-none">
+      {/* Toast Alert Notification */}
+      {toastMessage && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[100] bg-slate-950/90 backdrop-blur-md text-white text-[10px] font-black px-4 py-2 rounded-2xl border border-teal-500/30 flex items-center gap-2 shadow-2xl animate-fade-in pointer-events-none">
+          <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-ping"></span>
+          {toastMessage}
+        </div>
+      )}
+
+      
+      {/* ACTIVE CALL OVERLAY */}
+      {activeCall && (
+        <CallOverlay
+          call={activeCall}
+          onAccept={() => setActiveCall((prev) => (prev ? { ...prev, status: "connected" } : null))}
+          onDecline={() => setActiveCall(null)}
+          onToggleMute={() => setActiveCall((prev) => (prev ? { ...prev, isMuted: !prev.isMuted } : null))}
+          onToggleVideo={() => setActiveCall((prev) => (prev ? { ...prev, isVideoOff: !prev.isVideoOff } : null))}
+          onEndCall={() => setActiveCall(null)}
+        />
+      )}
+
+      {/* 1. WELCOME SCREEN / REGISTER WINDOW */}
+      {!registeredUser || currentScreen === "welcome" ? (
+        <WelcomeScreen onRegister={handleRegister} />
+      ) : (
+        // 2. SINGLE SCREEN MOBILE LAYOUT
+        <div className={`flex-1 flex flex-col overflow-hidden bg-white text-slate-800 relative h-full ${
+          appFont === "Mono" ? "font-mono" : 
+          appFont === "Elegante" ? "font-serif" : 
+          appFont === "Moderno" ? "font-sans tracking-tight font-semibold" : 
+          "font-sans"
+        }`}>
+          
+          {currentScreen === "chat_room" && activeChat ? (
+            <ChatRoom
+              chat={activeChat}
+              onBack={() => {
+                setSelectedChatId(null);
+                setCurrentScreen("chats");
+              }}
+              onSendMessage={handleSendMessageInRoom}
+              onTriggerCall={handleTriggerCallFromChat}
+              currentUserId={user?.id}
+              currentUserName={profile?.name}
+            />
+          ) : currentScreen === "qr_scanner" ? (
+            <QrScanner
+              userName={registeredUser?.name || "Nelson Castro"}
+              userPhone={registeredUser?.phone || "+58 412 1234567"}
+              onBack={() => setCurrentScreen("chats")}
+              onContactAdded={handleContactAddedByQr}
+            />
+          ) : currentScreen === "my_qr" ? (
+            <MyQrCode
+              userId={user?.id || ""}
+              name={registeredUser?.name || ""}
+              phone={registeredUser?.phone || ""}
+              avatar={registeredUser?.avatar || ""}
+              onBack={() => setCurrentScreen("chats")}
+            />
+          ) : currentScreen === "add_contact" ? (
+            <AddContact
+              currentUserId={user?.id || ""}
+              onBack={() => setCurrentScreen("chats")}
+              onContactAdded={handleContactAddedByQr}
+            />
+          ) : currentScreen === "add_contact_manual" ? (
+            <AddContactManual
+              currentUserId={user?.id || ""}
+              currentUserPhone={profile?.phone_number || registeredUser?.phone || ""}
+              onBack={() => setCurrentScreen("chats")}
+            />
+          ) : (
+            // Tab screen (Chats, States, Channels, Rates, Business, Profile)
+            <div className="flex-1 flex flex-col overflow-hidden h-full relative">
+              
+              {/* Header section based on selected tab */}
+              {currentScreen === "chats" && (
+                <div className="absolute top-0 left-0 right-0 text-white px-5 pt-6 pb-12 overflow-hidden z-20 h-[170px] pointer-events-none">
+                  <svg
+                    viewBox="0 0 320 180"
+                    className="absolute inset-0 w-full h-full z-0 select-none"
+                    preserveAspectRatio="none"
+                  >
+                    <defs>
+                      <linearGradient id="headerGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#14b8a6" />
+                        <stop offset="50%" stopColor="#197a82" />
+                        <stop offset="100%" stopColor="#3ab3b8" />
+                      </linearGradient>
+                      <linearGradient id="headerGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#0a4c51" />
+                        <stop offset="50%" stopColor="#10646a" />
+                        <stop offset="100%" stopColor="#188c94" />
+                      </linearGradient>
+                      <linearGradient id="headerGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" stopColor="#073337" />
+                        <stop offset="50%" stopColor="#0a4d52" />
+                        <stop offset="100%" stopColor="#116b72" />
+                      </linearGradient>
+                    </defs>
+                    <path d="M0,0 L0,150 C80,210 200,90 320,165 L320,0 Z" fill="url(#headerGrad1)" opacity="0.3" />
+                    <path d="M0,0 L0,135 C100,195 220,105 320,145 L320,0 Z" fill="url(#headerGrad2)" opacity="0.55" />
+                    <path d="M0,0 L0,115 C80,165 180,75 320,120 L320,0 Z" fill="url(#headerGrad3)" />
+                  </svg>
+
+                  <div className="relative z-10 flex justify-between items-center mb-3.5 pointer-events-auto">
+                    <div className="flex items-center gap-2">
+                      <h1 className="text-2xl font-extrabold tracking-tight text-white drop-shadow-md">Messages</h1>
+                    </div>
+                    
+                    <div className="flex items-center gap-2.5">
+                      <button 
+                        onClick={() => setCurrentScreen("qr_scanner")}
+                        className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center border border-white/10 text-white transition-all cursor-pointer animate-pulse-subtle"
+                        title="Escanear QR"
+                      >
+                        <QrCode className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => setCurrentScreen("profile")}
+                        className="w-8 h-8 rounded-full border border-white/20 overflow-hidden transition-all cursor-pointer hover:scale-110 shadow-sm"
+                        title="Tu Perfil"
+                      >
+                        <img 
+                          src={registeredUser?.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80"} 
+                          alt="Profile" 
+                          className="w-full h-full object-cover" 
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="relative z-10 pointer-events-auto">
+                    <Search className="absolute left-4 top-2.5 w-4 h-4 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-white text-slate-800 placeholder-slate-400 text-xs pl-10 pr-4 py-2.5 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100 outline-none transition-all focus:ring-2 focus:ring-[#14b8a6]/20"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {currentScreen === "states" && (
+                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Estados Red On</h3>
+                  <p className="text-[10px] text-teal-100/85">Visualiza y responde a estados</p>
+                </div>
+              )}
+
+              {currentScreen === "channels" && (
+                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Canales Informativos</h3>
+                  <p className="text-[10px] text-teal-100/85">Sigue canales seguros y oficiales</p>
+                </div>
+              )}
+
+              {currentScreen === "rates" && (
+                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Tasas de Cambio</h3>
+                  <p className="text-[10px] text-teal-100/85">Calculadora de divisas oficial</p>
+                </div>
+              )}
+
+              {currentScreen === "business" && (
+                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Modo Emprendedor</h3>
+                  <p className="text-[10px] text-teal-100/85">Folletería digital interactiva</p>
+                </div>
+              )}
+
+              {currentScreen === "profile" && (
+                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Tu Perfil Seguro</h3>
+                  <p className="text-[10px] text-teal-100/85">Datos e información de sesión</p>
+                </div>
+              )}
+
+              {/* Main Tab Content Body */}
+              <div className={`flex-1 overflow-y-auto bg-white relative flex flex-col h-full ${
+                currentScreen === "chats" ? "pt-[170px]" : ""
+              }`}>
+                
+                {/* CHATS LIST */}
+                {currentScreen === "chats" && (
+                  <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5">
+                    {/* Recent Section Header */}
+                    <div className="flex justify-between items-center px-1 mb-1">
+                      <h2 className="text-sm font-extrabold text-slate-950 tracking-tight">Recent</h2>
+                      <button className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                        <span className="text-lg font-bold leading-none">•••</span>
+                      </button>
+                    </div>
+
+                    {filteredChats.map((chat) => {
+                      const isSwiped = swipedChatId === chat.id;
+                      let touchStartX = 0;
+                      let touchStartY = 0;
+                      let currentTranslate = 0;
+                      let isDragging = false;
+
+                      const onTouchStart = (e: React.TouchEvent) => {
+                        touchStartX = e.touches[0].clientX;
+                        touchStartY = e.touches[0].clientY;
+                        currentTranslate = isSwiped ? 80 : 0;
+                        isDragging = false;
+                      };
+
+                      const onTouchMove = (e: React.TouchEvent) => {
+                        const dx = e.touches[0].clientX - touchStartX;
+                        const dy = e.touches[0].clientY - touchStartY;
+                        if (!isDragging && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+                        if (Math.abs(dy) > Math.abs(dx)) return;
+                        isDragging = true;
+                        if (dx > 0) {
+                          const el = e.currentTarget as HTMLElement;
+                          currentTranslate = Math.max(0, Math.min(80, dx));
+                          el.style.transform = `translateX(${currentTranslate}px)`;
+                          el.style.transition = 'none';
+                        }
+                      };
+
+                      const onTouchEnd = (e: React.TouchEvent) => {
+                        const el = e.currentTarget as HTMLElement;
+                        el.style.transition = 'transform 0.2s ease';
+                        if (isDragging && currentTranslate >= 50) {
+                          el.style.transform = 'translateX(80px)';
+                          setSwipedChatId(chat.id);
+                        } else {
+                          el.style.transform = 'translateX(0px)';
+                          if (swipedChatId === chat.id) setSwipedChatId(null);
+                        }
+                        currentTranslate = 0;
+                        isDragging = false;
+                      };
+
+                      return (
+                        <div key={chat.id} className="relative overflow-hidden rounded-2xl">
+                          {/* Delete button behind */}
+                          <div className="absolute inset-0 flex items-center justify-end bg-rose-500 rounded-2xl pr-4">
+                            <button
+                              onClick={() => handleDeleteChat(chat.id)}
+                              className="text-white font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                              </svg>
+                              Eliminar
+                            </button>
+                          </div>
+
+                          {/* Foreground content */}
+                          <div
+                            onClick={() => {
+                              if (swipedChatId) {
+                                setSwipedChatId(null);
+                                return;
+                              }
+                              setSelectedChatId(chat.id);
+                              setCurrentScreen("chat_room");
+                              chat.unreadCount = 0;
+                            }}
+                            onTouchStart={onTouchStart}
+                            onTouchMove={onTouchMove}
+                            onTouchEnd={onTouchEnd}
+                            onMouseDown={(e) => {
+                              if (swipedChatId) {
+                                const startX = e.clientX;
+                                const onMouseMove = (ev: MouseEvent) => {
+                                  const dx = ev.clientX - startX;
+                                  if (dx > 20 || dx < -20) {
+                                    setSwipedChatId(null);
+                                  }
+                                };
+                                const onMouseUp = () => {
+                                  document.removeEventListener('mousemove', onMouseMove);
+                                  document.removeEventListener('mouseup', onMouseUp);
+                                };
+                                document.addEventListener('mousemove', onMouseMove);
+                                document.addEventListener('mouseup', onMouseUp);
+                              }
+                            }}
+                            className={`relative flex items-start gap-3.5 p-2.5 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer animate-fade-in bg-white z-10 ${
+                              isSwiped ? 'shadow-lg' : ''
+                            }`}
+                            style={isSwiped ? { transform: 'translateX(80px)' } : undefined}
+                          >
+                            <div className="relative shrink-0">
+                              <div className="p-[2px] rounded-full border-2 border-dashed border-rose-500/90 transition-transform hover:rotate-12 duration-500">
+                                <img src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" />
+                              </div>
+                              {chat.status === "online" && (
+                                <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white z-10"></span>
+                              )}
+                            </div>
+                            
+                            <div className="flex-1 min-w-0 pt-0.5">
+                              <div className="flex justify-between items-baseline mb-0.5">
+                                <h4 className="text-xs font-bold text-slate-950 truncate">{chat.name}</h4>
+                                <span className="text-[9px] text-slate-400 font-medium">{chat.lastMessageTime}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-1">
+                                <p className="text-[11px] text-slate-500 truncate max-w-[180px]">{chat.lastMessage}</p>
+                                
+                                {chat.unreadCount > 0 ? (
+                                  <span className="w-4 h-4 rounded-full bg-rose-500 text-white text-[8px] font-bold flex items-center justify-center shrink-0 shadow-sm animate-pulse-subtle">
+                                    {chat.unreadCount}
+                                  </span>
+                                ) : (
+                                  <CheckCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {filteredChats.length === 0 && (
+                      <div className="text-center py-12 text-slate-400 space-y-1">
+                        <p className="text-xs font-semibold">No se encontraron chats</p>
+                        <p className="text-[10px]">Prueba escribiendo otro nombre</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* STATES TAB */}
+                {currentScreen === "states" && (
+                  <StatesPanel onStartChat={handleStartChatFromState} />
+                )}
+
+                {/* CHANNELS TAB */}
+                {currentScreen === "channels" && (
+                  <ChannelsPanel />
+                )}
+
+                {/* RATES TAB */}
+                {currentScreen === "rates" && (
+                  <RatesPanel />
+                )}
+
+                {/* BUSINESS TAB */}
+                {currentScreen === "business" && (
+                  <BusinessPanel
+                    onStartBusinessChat={handleStartBusinessChat}
+                    flyers={flyers}
+                    onAddFlyer={handleAddNewFlyer}
+                    onIncrementView={handleIncrementView}
+                    onIncrementClick={handleIncrementClick}
+                    onEditingChange={setIsEditingMedia}
+                  />
+                )}
+
+                {/* PROFILE TAB */}
+                {currentScreen === "profile" && registeredUser && (
+                  <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 h-full relative">
+                    {/* Top User Profile Header */}
+                    <div className="bg-gradient-to-b from-[#0a4d52] to-[#10646a] text-white p-5 text-center relative shrink-0 shadow-md">
+                      <div className="absolute top-4 right-4 bg-white/10 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] font-bold tracking-widest text-teal-200">
+                        VERSIÓN PRO
+                      </div>
+                      <div className="relative inline-block mt-2">
+                        <img 
+                          src={registeredUser.avatar} 
+                          alt="Profile" 
+                          className="w-14 h-14 rounded-full mx-auto object-cover border-4 border-white/20 shadow-lg" 
+                        />
+                        <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                      </div>
+                      <h4 className="text-sm font-black mt-2 tracking-tight">{registeredUser.name}</h4>
+                      <p className="text-[10px] text-teal-200 font-mono mt-0.5">{registeredUser.phone}</p>
+                      <div className="bg-black/15 py-0.5 px-3 rounded-full inline-block mt-2 text-[9px] font-bold text-teal-100">
+                        {userId}
+                      </div>
+                    </div>
+
+                    {/* Scrollable Settings Panel */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3.5 pb-20 scrollbar-thin">
+                      
+                      <div className="text-[10px] font-black text-slate-400 tracking-wider uppercase px-1">
+                        Ajustes de RED ON
+                      </div>
+
+                      {/* Settings Cards list */}
+                      <div className="space-y-2.5">
+                        
+                        {/* 1. CUENTA */}
+                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                          <div className="p-3 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-xl bg-teal-500/10 flex items-center justify-center text-teal-600">
+                                <CircleUser className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="text-[11px] font-black text-slate-800">Cuenta</div>
+                                <div className="text-[9px] text-slate-400">Privacidad de número, cambio de ID</div>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => setActiveSettingsModal("cuenta")}
+                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-[#0a4d52] font-extrabold text-[9px] rounded-lg transition-colors cursor-pointer"
+                            >
+                              Cambiar
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 2. PRIVACIDAD Y SEGURIDAD */}
+                        <button
+                          onClick={() => setActiveSettingsModal("seguridad")}
+                          className="w-full text-left bg-white p-3 rounded-2xl border border-slate-100 shadow-sm hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-600">
+                              <Shield className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-[11px] font-black text-slate-800">Privacidad y Seguridad</div>
+                              <div className="text-[9px] text-slate-400">Doble check, bloqueos, verificación en 2 pasos</div>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                        </button>
+
+                        {/* 3. NOTIFICACIONES */}
+                        <button
+                          onClick={() => setActiveSettingsModal("notificaciones")}
+                          className="w-full text-left bg-white p-3 rounded-2xl border border-slate-100 shadow-sm hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-600">
+                              <Bell className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-[11px] font-black text-slate-800">Notificaciones</div>
+                              <div className="text-[9px] text-slate-400">Silenciar chats, globos en icono de app</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {muteChats && <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>}
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                          </div>
+                        </button>
+
+                        {/* 4. DATOS Y ALMACENAMIENTO */}
+                        <button
+                          onClick={() => setActiveSettingsModal("datos")}
+                          className="w-full text-left bg-white p-3 rounded-2xl border border-slate-100 shadow-sm hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600">
+                              <Database className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-[11px] font-black text-slate-800">Datos y Almacenamiento</div>
+                              <div className="text-[9px] text-slate-400">Uso de red móvil, autodescarga de fotos</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[8px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{mobileDataUsage}</span>
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                          </div>
+                        </button>
+
+                        {/* 5. FUENTES */}
+                        <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-8 h-8 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-600">
+                                <Type className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="text-[11px] font-black text-slate-800">Fuentes</div>
+                                <div className="text-[9px] text-slate-400">Personaliza el estilo de letra de la app</div>
+                              </div>
+                            </div>
+                            <span className="text-[8px] font-black text-slate-400 uppercase bg-slate-100 px-1.5 py-0.5 rounded">Desactivado</span>
+                          </div>
+                          
+                          <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-100/50">
+                            <span className="text-[10px] font-bold text-slate-600">A</span>
+                            <button
+                              onClick={() => setActiveSettingsModal("fuentes")}
+                              className="px-2.5 py-1 bg-violet-50 hover:bg-violet-100 text-violet-600 font-black text-[9px] rounded-lg transition-colors cursor-pointer"
+                            >
+                              {appFont} (Cambiar)
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 6. COPIA DE SEGURIDAD SECTION */}
+                        <div className="bg-white p-3.5 rounded-2xl border border-slate-100 shadow-sm space-y-3 text-left">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-sky-500/10 flex items-center justify-center text-sky-600">
+                              <Cloud className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <h5 className="text-[11px] font-black text-slate-800">Copia de seguridad</h5>
+                              <p className="text-[8px] text-slate-400 font-mono">Última copia: {backupDate} • {backupChatsCount} chats</p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 pt-1">
+                            {/* Guardar Copia */}
+                            <button
+                              disabled={isBackingUp || isRestoring}
+                              onClick={handleCloudBackup}
+                              className="w-full py-2.5 px-3 bg-[#0a4d52] hover:bg-[#10646a] text-white font-extrabold text-[9px] rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            >
+                              {isBackingUp ? (
+                                <>
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Guardando copia...
+                                </>
+                              ) : (
+                                "Guardar copia en la nube"
+                              )}
+                            </button>
+
+                            {/* Restaurar Copia */}
+                            <button
+                              disabled={isBackingUp || isRestoring}
+                              onClick={handleCloudRestore}
+                              className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[9px] rounded-xl border border-slate-200/50 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer disabled:opacity-50"
+                            >
+                              {isRestoring ? (
+                                <span className="flex items-center gap-1">
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-600" /> Restaurando chats...
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="text-slate-800 font-bold">Restaurar desde copia</span>
+                                  <span className="text-[7.5px] text-slate-400 font-normal">Reemplaza chats locales con la nube</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 7. AYUDA Y PREGUNTAS */}
+                        <button
+                          onClick={() => setActiveSettingsModal("ayuda")}
+                          className="w-full text-left bg-white p-3 rounded-2xl border border-slate-100 shadow-sm hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-600">
+                              <HelpCircle className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-[11px] font-black text-slate-800">Ayuda y Preguntas</div>
+                              <div className="text-[9px] text-slate-400">RED ON FAQ, soporte en directo</div>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                        </button>
+
+                        {/* 8. LEGAL */}
+                        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden p-3.5 space-y-3 text-left">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-slate-500/10 flex items-center justify-center text-slate-600">
+                              <FileText className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-[11px] font-black text-slate-800">Legal</div>
+                              <div className="text-[9px] text-slate-400 font-medium">Condiciones legales oficiales</div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 pt-1">
+                            <button
+                              onClick={() => setActiveSettingsModal("legal")}
+                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[8.5px] rounded-lg text-center transition-all cursor-pointer"
+                            >
+                              <div className="font-extrabold">Política de Privacidad</div>
+                              <div className="text-[7px] text-slate-400 font-normal mt-0.5">Cómo manejamos tus datos</div>
+                            </button>
+                            <button
+                              onClick={() => setActiveSettingsModal("legal")}
+                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[8.5px] rounded-lg text-center transition-all cursor-pointer"
+                            >
+                              <div className="font-extrabold">Términos de Servicio</div>
+                              <div className="text-[7px] text-slate-400 font-normal mt-0.5">Condiciones de uso de RED ON</div>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 9. LOGOUT */}
+                        <button
+                          onClick={async () => {
+                            setRegisteredUser(null);
+                            setCurrentScreen("welcome");
+                            if (user) {
+                              const { signOut } = await import("../services/auth");
+                              signOut();
+                            }
+                          }}
+                          className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-rose-100 cursor-pointer mt-4"
+                        >
+                          <LogOut className="w-4 h-4 stroke-[2.5]" /> Cerrar Sesión
+                        </button>
+
+                      </div>
+                    </div>
+
+                    {/* MODAL / DRAWER INTERACTIVE OVERLAYS */}
+                    {activeSettingsModal && (
+                      <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm z-30 flex flex-col justify-end animate-fade-in">
+                        <div className="bg-white rounded-t-3xl p-5 space-y-4 max-h-[85%] overflow-y-auto border-t border-slate-100 shadow-2xl text-left animate-slide-up">
+                          {/* Header of Modal */}
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <h4 className="text-[10px] font-black text-[#0a4d52] uppercase tracking-wider">
+                              {activeSettingsModal === "cuenta" && "Configuración de Cuenta"}
+                              {activeSettingsModal === "seguridad" && "Privacidad y Seguridad"}
+                              {activeSettingsModal === "notificaciones" && "Notificaciones"}
+                              {activeSettingsModal === "datos" && "Datos y Almacenamiento"}
+                              {activeSettingsModal === "fuentes" && "Tipografías de RED ON"}
+                              {activeSettingsModal === "ayuda" && "Ayuda & FAQ"}
+                              {activeSettingsModal === "legal" && "Acuerdos Legales"}
+                            </h4>
+                            <button
+                              onClick={() => setActiveSettingsModal(null)}
+                              className="px-2.5 py-1 bg-teal-500 hover:bg-teal-600 text-white font-extrabold text-[8px] rounded-lg cursor-pointer"
+                            >
+                              Listo
+                            </button>
+                          </div>
+
+                          {/* 1. CUENTA OVERLAY */}
+                          {activeSettingsModal === "cuenta" && (
+                            <div className="space-y-4 animate-fade-in">
+                              <div className="space-y-2">
+                                <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Cambiar ID de RED ON</label>
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    value={userId}
+                                    onChange={(e) => setUserId(e.target.value)}
+                                    placeholder="@id_de_usuario"
+                                    className="flex-1 px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-teal-500 font-mono"
+                                  />
+                                  <button
+                                    onClick={() => {
+                                      showToast("ID de usuario actualizado ✨");
+                                      setActiveSettingsModal(null);
+                                    }}
+                                    className="px-3.5 bg-[#0a4d52] text-white font-black text-[9px] rounded-xl hover:bg-teal-800 transition-colors cursor-pointer"
+                                  >
+                                    Guardar
+                                  </button>
+                                </div>
+                                <p className="text-[8px] text-slate-400 leading-normal">Este ID te identifica de forma única dentro de la red móvil de RED ON sin necesidad de exponer tu número de teléfono real.</p>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
+                                <div>
+                                  <div className="text-[10.5px] font-black text-slate-800">Privacidad de número</div>
+                                  <div className="text-[8px] text-slate-400">Ocultar número a desconocidos en chats de campaña</div>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={hideNumber} 
+                                    onChange={() => {
+                                      setHideNumber(!hideNumber);
+                                      showToast(hideNumber ? "Número visible para todos 👁️" : "Número configurado como Privado 🛡️");
+                                    }} 
+                                    className="sr-only peer" 
+                                  />
+                                  <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                </label>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 2. SEGURIDAD OVERLAY */}
+                          {activeSettingsModal === "seguridad" && (
+                            <div className="space-y-4 animate-fade-in">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="text-[10.5px] font-black text-slate-800">Doble check de lectura</div>
+                                  <div className="text-[8px] text-slate-400">Ver confirmación azul de lectura de mensajes</div>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={doubleCheck} 
+                                    onChange={() => {
+                                      setDoubleCheck(!doubleCheck);
+                                      showToast(`Doble check ${!doubleCheck ? "activado ✓✓" : "desactivado"}`);
+                                    }} 
+                                    className="sr-only peer" 
+                                  />
+                                  <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                </label>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
+                                <div>
+                                  <div className="text-[10.5px] font-black text-slate-800">Bloqueos</div>
+                                  <div className="text-[8px] text-slate-400">Restringir llamadas y mensajes directos</div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button 
+                                    onClick={() => {
+                                      if(blockedCount > 0) {
+                                        setBlockedCount(blockedCount - 1);
+                                        showToast("Desbloqueado");
+                                      }
+                                    }}
+                                    className="w-5.5 h-5.5 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-600 text-xs cursor-pointer"
+                                  >
+                                    -
+                                  </button>
+                                  <span className="text-[10px] font-mono font-black text-slate-800">{blockedCount}</span>
+                                  <button 
+                                    onClick={() => {
+                                      setBlockedCount(blockedCount + 1);
+                                      showToast("Contacto bloqueado");
+                                    }}
+                                    className="w-5.5 h-5.5 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-600 text-xs cursor-pointer"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-3 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[10.5px] font-black text-slate-800">Verificación en dos pasos</div>
+                                    <div className="text-[8px] text-slate-400">PIN extra para iniciar sesión en otros teléfonos</div>
+                                  </div>
+                                  <label className="relative inline-flex items-center cursor-pointer">
+                                    <input 
+                                      type="checkbox" 
+                                      checked={twoStepVerification} 
+                                      onChange={() => {
+                                        setTwoStepVerification(!twoStepVerification);
+                                        if(!twoStepVerification) setTwoStepPin("");
+                                        showToast(twoStepVerification ? "Verificación en 2 pasos desactivada 🔓" : "Configura tu código de seguridad");
+                                      }} 
+                                      className="sr-only peer" 
+                                    />
+                                    <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                  </label>
+                                </div>
+
+                                {twoStepVerification && (
+                                  <div className="space-y-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-100 animate-fade-in">
+                                    <label className="text-[8.5px] font-bold text-slate-500">PIN de Seguridad de RED ON (6 dígitos)</label>
+                                    <div className="flex gap-1.5">
+                                      <input
+                                        type="password"
+                                        maxLength={6}
+                                        value={twoStepPin}
+                                        onChange={(e) => {
+                                          const val = e.target.value.replace(/\D/g, "");
+                                          setTwoStepPin(val);
+                                        }}
+                                        placeholder="******"
+                                        className="flex-1 px-3 py-1 text-center text-xs tracking-widest font-mono border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
+                                      />
+                                      <button
+                                        onClick={() => {
+                                          if (twoStepPin.length < 6) {
+                                            showToast("⚠️ El PIN debe ser de 6 dígitos");
+                                          } else {
+                                            showToast("¡Verificación en dos pasos habilitada! 🔒");
+                                            setActiveSettingsModal(null);
+                                          }
+                                        }}
+                                        className="px-3 bg-indigo-600 text-white font-extrabold text-[8px] rounded-lg hover:bg-indigo-700 cursor-pointer"
+                                      >
+                                        Activar PIN
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 3. NOTIFICACIONES OVERLAY */}
+                          {activeSettingsModal === "notificaciones" && (
+                            <div className="space-y-4 animate-fade-in">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="text-[10.5px] font-black text-slate-800">Silenciar chats</div>
+                                  <div className="text-[8px] text-slate-400">Desactiva sonidos globales de mensajes</div>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={muteChats} 
+                                    onChange={() => {
+                                      setMuteChats(!muteChats);
+                                      showToast(muteChats ? "Alertas sonoras activadas" : "Todo el audio de chats silenciado 🔇");
+                                    }} 
+                                    className="sr-only peer" 
+                                  />
+                                  <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                </label>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
+                                <div>
+                                  <div className="text-[10.5px] font-black text-slate-800">Globos en icono de app</div>
+                                  <div className="text-[8px] text-slate-400">Mostrar contador rojo de no leídos</div>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={unreadBadges} 
+                                    onChange={() => {
+                                      setUnreadBadges(!unreadBadges);
+                                      showToast(unreadBadges ? "Contador desactivado" : "Contadores activos en el icono 🔴");
+                                    }} 
+                                    className="sr-only peer" 
+                                  />
+                                  <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                </label>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 4. DATOS OVERLAY */}
+                          {activeSettingsModal === "datos" && (
+                            <div className="space-y-4 animate-fade-in">
+                              <div className="space-y-2">
+                                <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Uso de red móvil</label>
+                                <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
+                                  {["Ahorro", "Estándar", "Ilimitado"].map((opt) => (
+                                    <button
+                                      key={opt}
+                                      onClick={() => {
+                                        setMobileDataUsage(opt);
+                                        showToast(`Consumo móvil configurado en ${opt}`);
+                                      }}
+                                      className={`py-1 text-[8px] font-black rounded-lg transition-all cursor-pointer ${
+                                        mobileDataUsage === opt 
+                                          ? "bg-white text-[#0a4d52] shadow-sm" 
+                                          : "text-slate-500 hover:text-slate-800"
+                                      }`}
+                                    >
+                                      {opt}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
+                                <div>
+                                  <div className="text-[10.5px] font-black text-slate-800">Autodescarga de fotos</div>
+                                  <div className="text-[8px] text-slate-400">Guardar multimedia con datos de celular</div>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={autoDownloadPhotos} 
+                                    onChange={() => {
+                                      setAutoDownloadPhotos(!autoDownloadPhotos);
+                                      showToast(autoDownloadPhotos ? "Multimedia manual" : "Autodescarga activada 📲");
+                                    }} 
+                                    className="sr-only peer" 
+                                  />
+                                  <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                </label>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 5. FUENTES OVERLAY */}
+                          {activeSettingsModal === "fuentes" && (
+                            <div className="space-y-4 animate-fade-in">
+                              <p className="text-[9px] text-slate-500 leading-normal font-medium">
+                                Personaliza el estilo de letra de toda la interfaz de la app. Selecciona una opción:
+                              </p>
+                              
+                              <div className="grid grid-cols-2 gap-2">
+                                {[
+                                  { id: "Clásico", name: "Clásico (Inter)", desc: "Predeterminado limpio y compacto" },
+                                  { id: "Mono", name: "Monoespacio (Mono)", desc: "Aspecto industrial y técnico" },
+                                  { id: "Elegante", name: "Elegante (Serif)", desc: "Sofisticado con remates clásicos" },
+                                  { id: "Moderno", name: "Moderno (Grotesk)", desc: "Negrita de alta intensidad" }
+                                ].map((f) => (
+                                  <button
+                                    key={f.id}
+                                    onClick={() => {
+                                      setAppFont(f.id as any);
+                                      showToast(`Estilo de letra: ${f.name} ✨`);
+                                    }}
+                                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between h-[75px] ${
+                                      appFont === f.id 
+                                        ? "border-teal-500 bg-teal-50/20 text-[#0a4d52]" 
+                                        : "border-slate-100 hover:bg-slate-50 text-slate-700"
+                                    }`}
+                                  >
+                                    <div className="text-[9.5px] font-black">{f.name}</div>
+                                    <div className="text-[7.5px] text-slate-400 font-medium leading-tight mt-1">{f.desc}</div>
+                                  </button>
+                                ))}
+                              </div>
+
+                              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-1">
+                                <div className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Previsualización:</div>
+                                <p className={`text-[11px] text-slate-800 ${
+                                  appFont === "Mono" ? "font-mono" : 
+                                  appFont === "Elegante" ? "font-serif" : 
+                                  appFont === "Moderno" ? "font-sans tracking-tight font-semibold" : 
+                                  "font-sans"
+                                }`}>
+                                  El estilo de letra se aplica a todos los chats, canales, tarifas y configuraciones en tiempo real.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 6. AYUDA OVERLAY */}
+                          {activeSettingsModal === "ayuda" && (
+                            <div className="space-y-4 animate-fade-in">
+                              <div className="bg-gradient-to-r from-teal-500 to-indigo-600 text-white p-3 rounded-2xl flex items-center justify-between shadow-md">
+                                <div className="text-left">
+                                  <div className="text-[10px] font-black">Soporte en directo 24/7</div>
+                                  <div className="text-[8px] text-teal-100">Resuelve dudas sobre tus catálogos</div>
+                                </div>
+                                <button
+                                  onClick={handleOpenSupportChat}
+                                  className="px-2.5 py-1.5 bg-white text-[#0a4d52] hover:bg-teal-50 transition-all font-black text-[8px] rounded-lg shadow-sm cursor-pointer"
+                                >
+                                  Chatear ahora
+                                </button>
+                              </div>
+
+                              <div className="space-y-2">
+                                <div className="text-[9.5px] font-black text-slate-400 uppercase tracking-wide">RED ON FAQ</div>
+                                
+                                <div className="space-y-1.5 text-[8.5px] text-slate-700 leading-relaxed">
+                                  <details className="bg-slate-50 rounded-xl border border-slate-100 p-2 cursor-pointer group text-left">
+                                    <summary className="font-bold text-slate-800 flex justify-between items-center outline-none">
+                                      <span>¿Qué es la difusión de flyers?</span>
+                                      <span className="text-[#0a4d52] font-mono group-open:rotate-45 transition-transform">+</span>
+                                    </summary>
+                                    <p className="mt-1 text-slate-500">Es el sistema que envía de manera programada tus diseños a todos los contactos e interesados en tus canales asignados sin costo.</p>
+                                  </details>
+
+                                  <details className="bg-slate-50 rounded-xl border border-slate-100 p-2 cursor-pointer group text-left">
+                                    <summary className="font-bold text-slate-800 flex justify-between items-center outline-none">
+                                      <span>¿Cómo asocio mi ID?</span>
+                                      <span className="text-[#0a4d52] font-mono group-open:rotate-45 transition-transform">+</span>
+                                    </summary>
+                                    <p className="mt-1 text-slate-500">Ve a Cuenta, escribe un identificador y haz clic en Guardar. Tu ID ocultará tu número de teléfono en los canales públicos.</p>
+                                  </details>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 7. LEGAL OVERLAY */}
+                          {activeSettingsModal === "legal" && (
+                            <div className="space-y-4 text-[8.5px] text-slate-600 leading-relaxed max-h-[300px] overflow-y-auto pr-1 animate-fade-in text-left scrollbar-thin">
+                              {/* PRIVACY POLICY */}
+                              <div>
+                                <h5 className="font-black text-slate-800 text-[10px] tracking-tight">Política de Privacidad</h5>
+                                <p className="text-slate-500 mt-1.5 leading-relaxed">
+                                  En <strong className="text-slate-700">RED ON</strong>, el control de tus datos personales es nuestra prioridad fundamental. Esta política describe cómo recopilamos, usamos, almacenamos y protegemos tu información cuando utilizas nuestra plataforma de mensajería, difusión de catálogos y servicios de emprendimiento.
+                                </p>
+                                <ul className="mt-2 space-y-1.5 list-none">
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">•</span>
+                                    <span><strong className="text-slate-700">Información que recopilamos:</strong> Nombre, número telefónico, URL de avatar, identificador único de RED ON, datos de uso de la aplicación (chats, flyers creados, estados vistos) e información del dispositivo para garantizar la seguridad de la sesión.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">•</span>
+                                    <span><strong className="text-slate-700">Uso de la información:</strong> Tus datos se utilizan exclusivamente para facilitar la comunicación entre usuarios, mostrar tu perfil dentro de la red, generar copias de seguridad en la nube y mejorar la experiencia general de la aplicación. No utilizamos tus conversaciones ni catálogos para entrenar modelos de inteligencia artificial ni para publicidad comportamental.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">•</span>
+                                    <span><strong className="text-slate-700">Almacenamiento y encriptación:</strong> Todos los mensajes y datos de perfil se transmiten mediante conexiones cifradas (TLS 1.3). Los mensajes se almacenan en servidores seguros con replicación geográfica. Puedes solicitar la eliminación total de tus datos en cualquier momento contactando al soporte oficial.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">•</span>
+                                    <span><strong className="text-slate-700">Compartición con terceros:</strong> RED ON no vende, alquila ni comparte tu información personal con terceros con fines comerciales. Podemos divulgar información cuando la ley lo exija o para proteger la integridad de la plataforma y la seguridad de nuestros usuarios.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">•</span>
+                                    <span><strong className="text-slate-700">Privacidad de número:</strong> La función de ocultación de número (ID de RED ON) reemplaza tu línea telefónica real por un identificador público, protegiendo tu privacidad frente a contactos desconocidos en difusiones comerciales y canales públicos.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">•</span>
+                                    <span><strong className="text-slate-700">Retención y eliminación:</strong> Conservamos tus datos mientras mantengas una cuenta activa. Al eliminar tu cuenta, todos los mensajes, flyers y datos asociados se borran de forma irreversible en un plazo máximo de 30 días hábiles.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">•</span>
+                                    <span><strong className="text-slate-700">Tus derechos:</strong> Puedes acceder, rectificar, cancelar u oponerte al tratamiento de tus datos personales en cualquier momento desde la sección de ajustes de cuenta o escribiendo a privacidad@redon.app.</span>
+                                  </li>
+                                </ul>
+                                <p className="text-slate-400 mt-2 text-[7.5px] italic">Última actualización: Julio 2026.</p>
+                              </div>
+
+                              {/* TERMS OF SERVICE */}
+                              <div className="border-t border-slate-100 pt-3.5">
+                                <h5 className="font-black text-slate-800 text-[10px] tracking-tight">Términos de Servicio</h5>
+                                <p className="text-slate-500 mt-1.5 leading-relaxed">
+                                  Al acceder o utilizar <strong className="text-slate-700">RED ON</strong> (la "Plataforma"), aceptas cumplir con estos Términos de Servicio. Si no estás de acuerdo con alguna parte de los términos, no podrás usar la Plataforma.
+                                </p>
+                                <ul className="mt-2 space-y-1.5 list-none">
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">1.</span>
+                                    <span><strong className="text-slate-700">Aceptación de los términos:</strong> Al registrarte y usar RED ON, confirmas que eres mayor de 13 años (o la edad de consentimiento digital en tu país) y que aceptas estar legalmente vinculado por estos términos.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">2.</span>
+                                    <span><strong className="text-slate-700">Uso permitido:</strong> La Plataforma está diseñada para comunicación personal, difusión de catálogos comerciales legítimos, intercambio de archivos multimedia y herramientas de emprendimiento. No está permitido: (a) enviar spam masivo no solicitado, (b) publicar contenido ilegal, violento, pornográfico o que infrinja derechos de autor, (c) realizar actividades fraudulentas o de suplantación de identidad, (d) intentar vulnerar la seguridad de otros usuarios o de los servidores.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">3.</span>
+                                    <span><strong className="text-slate-700">Contenido generado por el usuario:</strong> Eres el único responsable de los mensajes, flyers, estados y cualquier contenido que publiques en RED ON. Al publicar, otorgas a la Plataforma una licencia limitada para almacenar y mostrar dicho contenido dentro de la aplicación. Conservas todos los derechos de propiedad intelectual sobre tu contenido.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">4.</span>
+                                    <span><strong className="text-slate-700">Flyers y catálogos comerciales:</strong> Los emprendedores pueden crear y difundir flyers digitales. RED ON no garantiza resultados comerciales ni se hace responsable por transacciones realizadas fuera de la plataforma. Los flyers deben cumplir con las leyes de publicidad del país de origen del usuario.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">5.</span>
+                                    <span><strong className="text-slate-700">Moderación y suspensión:</strong> RED ON se reserva el derecho de revisar, eliminar o suspender cualquier cuenta o contenido que infrinja estos términos, sin previo aviso y sin responsabilidad. Las decisiones de moderación son definitivas y vinculantes.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">6.</span>
+                                    <span><strong className="text-slate-700">Copias de seguridad:</strong> La función de copia de seguridad en la nube se proporciona "tal cual". RED ON no se hace responsable por la pérdida de datos debido a errores del servicio, eliminación accidental o modificaciones realizadas por el usuario. Recomendamos mantener copias locales periódicas.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">7.</span>
+                                    <span><strong className="text-slate-700">Limitación de responsabilidad:</strong> RED ON no será responsable por daños indirectos, incidentales, especiales o consecuentes derivados del uso o la imposibilidad de uso de la Plataforma, incluyendo pérdida de datos, oportunidades comerciales o lucro cesante.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">8.</span>
+                                    <span><strong className="text-slate-700">Modificaciones:</strong> Nos reservamos el derecho de modificar estos términos en cualquier momento. Los cambios serán notificados dentro de la aplicación y entrarán en vigor 15 días después de su publicación. El uso continuado de RED ON después de ese período constituye la aceptación de los nuevos términos.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">9.</span>
+                                    <span><strong className="text-slate-700">Ley aplicable:</strong> Estos términos se rigen por las leyes de la República Bolivariana de Venezuela. Cualquier disputa será resuelta ante los tribunales competentes de Caracas, Venezuela.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-teal-600 mt-0.5 shrink-0">10.</span>
+                                    <span><strong className="text-slate-700">Contacto legal:</strong> Para consultas sobre estos términos, puedes escribir a legal@redon.app. Para soporte técnico general, utiliza la función "Soporte RED ON" disponible en la sección de Ayuda dentro de la aplicación.</span>
+                                  </li>
+                                </ul>
+                                <p className="text-slate-400 mt-2 text-[7.5px] italic">Última actualización: Julio 2026.</p>
+                              </div>
+                            </div>
+                          )}
+
+                          <button
+                            onClick={() => setActiveSettingsModal(null)}
+                            className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[9px] rounded-xl cursor-pointer text-center"
+                          >
+                            Cerrar Ajuste
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+                )}
+
+                {/* Floating action button with menu */}
+                {currentScreen === "chats" && (
+                  <div className="absolute right-4 bottom-16 z-30 flex flex-col items-end gap-2">
+                    {showActionMenu && (
+                      <>
+                        <div className="bg-white rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-slate-100 overflow-hidden">
+                          <button
+                            onClick={() => { setShowActionMenu(false); setCurrentScreen("add_contact_manual"); }}
+                            className="flex items-center gap-2.5 px-4 py-3 hover:bg-slate-50 transition-colors w-full text-left cursor-pointer"
+                          >
+                            <svg className="w-4 h-4 text-teal-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                              <circle cx="8.5" cy="7" r="4" />
+                              <line x1="20" y1="8" x2="20" y2="14" />
+                              <line x1="23" y1="11" x2="17" y2="11" />
+                            </svg>
+                            <span className="text-xs font-semibold text-slate-700">Agregar por teléfono</span>
+                          </button>
+                          <button
+                            onClick={() => { setShowActionMenu(false); setCurrentScreen("qr_scanner"); }}
+                            className="flex items-center gap-2.5 px-4 py-3 hover:bg-slate-50 transition-colors w-full text-left border-t border-slate-100 cursor-pointer"
+                          >
+                            <svg className="w-4 h-4 text-teal-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" />
+                              <path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+                              <rect x="7" y="7" width="5" height="5" /><rect x="14" y="7" width="5" height="5" />
+                              <rect x="7" y="14" width="5" height="5" /><rect x="14" y="14" width="5" height="5" />
+                            </svg>
+                            <span className="text-xs font-semibold text-slate-700">Escanear QR</span>
+                          </button>
+                          <button
+                            onClick={() => { setShowActionMenu(false); setCurrentScreen("my_qr"); }}
+                            className="flex items-center gap-2.5 px-4 py-3 hover:bg-slate-50 transition-colors w-full text-left border-t border-slate-100 cursor-pointer"
+                          >
+                            <QrCode className="w-4 h-4 text-teal-600" />
+                            <span className="text-xs font-semibold text-slate-700">Mi QR</span>
+                          </button>
+                        </div>
+                        <div className="fixed inset-0 z-[-1]" onClick={() => setShowActionMenu(false)} />
+                      </>
+                    )}
+                    <button
+                      onClick={() => setShowActionMenu(!showActionMenu)}
+                      className="w-12 h-12 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-full flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                      title="Agregar contacto"
+                    >
+                      <Plus className={`w-5 h-5 transition-transform ${showActionMenu ? "rotate-45" : ""}`} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* PERSISTENT BOTTOM TAB BAR */}
+              {!isEditingMedia && (
+                <div className="border-t border-slate-100 bg-white py-2 shrink-0 z-20">
+                  <div className="grid grid-cols-6 text-center px-1">
+                    
+                    {/* CHATS TAB */}
+                    <button 
+                      onClick={() => {
+                        setCurrentScreen("chats");
+                      }}
+                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
+                        currentScreen === "chats" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-xl transition-all ${
+                        currentScreen === "chats" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
+                      }`}>
+                        <MessageSquareMore className="w-4 h-4" />
+                      </div>
+                      <span className="text-[9px] font-bold tracking-tight">Chats</span>
+                    </button>
+                    
+                    {/* STATES TAB */}
+                    <button 
+                      onClick={() => {
+                        setCurrentScreen("states");
+                      }}
+                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
+                        currentScreen === "states" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-xl transition-all ${
+                        currentScreen === "states" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
+                      }`}>
+                        <CircleDotDashed className="w-4 h-4" />
+                      </div>
+                      <span className="text-[9px] font-medium tracking-tight">Estados</span>
+                    </button>
+
+                    {/* CHANNELS TAB */}
+                    <button 
+                      onClick={() => {
+                        setCurrentScreen("channels");
+                      }}
+                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
+                        currentScreen === "channels" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-xl transition-all relative ${
+                        currentScreen === "channels" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
+                      }`}>
+                        <Radio className="w-4 h-4" />
+                        <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-[#10646a] rounded-full"></span>
+                      </div>
+                      <span className="text-[9px] font-medium tracking-tight">Canales</span>
+                    </button>
+
+                    {/* RATES TAB */}
+                    <button 
+                      onClick={() => {
+                        setCurrentScreen("rates");
+                      }}
+                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
+                        currentScreen === "rates" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-xl transition-all ${
+                        currentScreen === "rates" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
+                      }`}>
+                        <TrendingUp className="w-4 h-4" />
+                      </div>
+                      <span className="text-[9px] font-medium tracking-tight">Tasas</span>
+                    </button>
+
+                    {/* BUSINESS TAB */}
+                    <button 
+                      onClick={() => {
+                        setCurrentScreen("business");
+                      }}
+                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
+                        currentScreen === "business" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-xl transition-all ${
+                        currentScreen === "business" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
+                      }`}>
+                        <Briefcase className="w-4 h-4" />
+                      </div>
+                      <span className="text-[9px] font-medium tracking-tight">Negocio</span>
+                    </button>
+
+                    {/* PROFILE TAB */}
+                    <button 
+                      onClick={() => {
+                        setCurrentScreen("profile");
+                      }}
+                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
+                        currentScreen === "profile" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
+                      }`}
+                    >
+                      <div className={`p-1.5 rounded-xl transition-all ${
+                        currentScreen === "profile" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
+                      }`}>
+                        <CircleUser className="w-4 h-4" />
+                      </div>
+                      <span className="text-[9px] font-medium tracking-tight">Perfil</span>
+                    </button>
+
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+          
+        </div>
+      )}
+
+    </div>
+  );
+}
