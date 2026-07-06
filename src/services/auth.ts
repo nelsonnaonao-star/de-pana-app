@@ -48,8 +48,8 @@ export async function login(identifier: string, password: string) {
       );
     }
     const { profile } = await res.json();
-    username = profile.username;
-    signInResult = await trySignIn(`${username}@redon.app`);
+    username = profile.username || profile.email?.replace(/@.*$/, '') || input;
+    signInResult = await trySignIn(profile.email || `${username}@redon.app`);
   }
 
   if (signInResult.error) {
