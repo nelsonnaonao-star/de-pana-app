@@ -29,6 +29,7 @@ async function main() {
 
   const staticOrigins = [
     'http://localhost:5173',
+    'http://localhost:5199',
     'http://localhost:5000',
     'http://localhost:3000',
     'capacitor://localhost',
