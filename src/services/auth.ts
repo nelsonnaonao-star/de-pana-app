@@ -32,23 +32,36 @@ export async function login(identifier: string, password: string) {
   let signInResult = await trySignIn(`${input}@redon.app`);
   let username = input;
 
-  // If direct login failed, look up profile via server (handles phone numbers)
+  // If direct login failed, look up profile in Supabase directly (handles phone numbers)
   if (signInResult.error) {
-    const res = await fetch(apiUrl("/api/auth/lookup-profile"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identifier: input }),
-    });
-    if (!res.ok) {
-      // If server fails, surface the original Supabase error
+    let profile: any = null;
+    const { data: byUsername } = await supabase
+      .from("profiles")
+      .select("username, email, name, phone_number")
+      .eq("username", input)
+      .maybeSingle();
+    if (byUsername) {
+      profile = byUsername;
+    } else {
+      const last7 = input.replace(/\D/g, "").slice(-7);
+      if (last7.length >= 4) {
+        const { data: allProfiles } = await supabase
+          .from("profiles")
+          .select("username, email, name, phone_number");
+        profile = (allProfiles || []).find((p) => {
+          const digits = (p.phone_number || "").replace(/\D/g, "");
+          return digits.slice(-7) === last7;
+        }) || null;
+      }
+    }
+    if (!profile) {
       throw new Error(
         signInResult.error.message.includes("Invalid login credentials")
           ? 'Contraseña incorrecta. Usa "Olvidé mi contraseña" para recuperarla.'
           : "Error al iniciar sesión: " + signInResult.error.message
       );
     }
-    const { profile } = await res.json();
-    username = profile.username || profile.email?.replace(/@.*$/, '') || input;
+    username = profile.username || profile.email?.replace(/@.*$/, "") || input;
     signInResult = await trySignIn(profile.email || `${username}@redon.app`);
   }
 
@@ -116,18 +129,19 @@ export async function register(
   if (cleanUsername.length < 2)
     throw new Error("El usuario debe tener al menos 2 caracteres");
 
-  const dupRes = await fetch(apiUrl("/api/auth/check-duplicate"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: cleanUsername, phone: cleanPhone }),
-  });
-  if (dupRes.ok) {
-    const { duplicate } = await dupRes.json();
-    if (duplicate === "username")
-      throw new Error("El usuario ya está registrado");
-    if (duplicate === "phone")
-      throw new Error("El teléfono ya está registrado");
-  }
+  const { data: existingUsername } = await supabase
+    .from("profiles")
+    .select("username")
+    .eq("username", cleanUsername)
+    .maybeSingle();
+  if (existingUsername) throw new Error("El usuario ya está registrado");
+
+  const { data: existingPhone } = await supabase
+    .from("profiles")
+    .select("phone_number")
+    .eq("phone_number", cleanPhone)
+    .maybeSingle();
+  if (existingPhone) throw new Error("El teléfono ya está registrado");
 
   const { data, error } = await supabase.auth.signUp({
     email: `${cleanUsername}@redon.app`,
@@ -150,23 +164,18 @@ export async function register(
     console.warn("[REGISTER] Auto-confirm failed:", e);
   }
 
-  const upsertRes = await fetch(apiUrl("/api/auth/upsert-profile"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      id: data.user.id,
-      name,
-      username: cleanUsername,
-      phone_number: cleanPhone,
-      avatar_url: "",
-      bio: "Disponible en RED ON",
-      ...(cleanEmail ? { real_email: cleanEmail } : {}),
-    }),
+  const { error: upsertError } = await supabase.from("profiles").upsert({
+    id: data.user.id,
+    name,
+    username: cleanUsername,
+    phone_number: cleanPhone,
+    avatar_url: "",
+    bio: "Disponible en RED ON",
+    ...(cleanEmail ? { real_email: cleanEmail } : {}),
   });
-  if (!upsertRes.ok) {
-    const err = await upsertRes.json();
-    if (!err.error?.includes("duplicate key"))
-      throw new Error(err.error || "Error al crear perfil");
+  if (upsertError && !upsertError.message?.includes("duplicate key")) {
+    console.error("[REGISTER] Upsert profile error:", upsertError);
+    throw new Error(upsertError.message || "Error al crear perfil");
   }
 
   let token = data.session?.access_token || "";
