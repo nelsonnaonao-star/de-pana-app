@@ -29,3 +29,9 @@ services:
         sync: false
       - key: FCM_WEBHOOK_SECRET
         sync: false
+      - key: VITE_SERVER_URL
+        value: https://de-pana-app.onrender.com
+      - key: CORS_ORIGIN
+        value: https://de-pana-app.onrender.com
+      - key: CLIENT_ORIGIN
+        value: https://de-pana-app.onrender.com

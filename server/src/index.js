@@ -34,8 +34,7 @@ async function main() {
     'http://localhost:3000',
     'capacitor://localhost',
     'file://',
-    'https://redon-server.onrender.com',
-    'https://redon-app.onrender.com',
+    'https://de-pana-app.onrender.com',
     process.env.CORS_ORIGIN || '',
   ].filter(Boolean);
 
@@ -144,10 +143,18 @@ async function main() {
   // Serve built frontend in production
   const distPath = path.join(ROOT_DIR, 'dist');
   app.use(express.static(distPath));
+
+  // JSON 404 for unmatched API/uploads routes
+  app.use('/api', (req, res) => {
+    res.status(404).json({ error: `Ruta API no encontrada: ${req.method} ${req.originalUrl}` });
+  });
+  app.use('/uploads', (req, res) => {
+    res.status(404).json({ error: `Archivo no encontrado: ${req.originalUrl}` });
+  });
+
+  // SPA catch-all for all other routes
   app.get('*', (req, res) => {
-    if (!req.path.startsWith('/api/') && !req.path.startsWith('/uploads/')) {
-      res.sendFile(path.join(distPath, 'index.html'));
-    }
+    res.sendFile(path.join(distPath, 'index.html'));
   });
 
   const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
