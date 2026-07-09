@@ -11,6 +11,7 @@ export interface Message {
   reactions?: { [key: string]: number }; // emoji -> count
   pollQuestion?: string;
   pollOptions?: { id: string; text: string; votes: number; votedUsers: string[] }[];
+  status?: "sent" | "delivered" | "read";
 }
 
 export interface Chat {
@@ -22,6 +23,7 @@ export interface Chat {
   lastMessageTime: string;
   unreadCount: number;
   messages: Message[];
+  partnerUserId?: string;
 }
 
 export interface ActiveCall {
@@ -37,4 +39,5 @@ export interface ActiveCall {
   activeBackground?: "none" | "office" | "beach" | "neon_cyber" | "abstract";
   isGroup: boolean;
   participants?: string[];
+  targetUserId?: string;
 }

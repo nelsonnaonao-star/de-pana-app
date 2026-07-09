@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
-  Check, AlertTriangle, Info, Search, Plus, MessageSquareMore, 
-  CircleDotDashed, Radio, TrendingUp, Briefcase, CircleUser, 
+  Check, AlertTriangle, Info, Search, Plus, 
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
-  Smartphone, EyeOff, UserCheck
+  Smartphone, EyeOff, UserCheck, CircleUser
 } from "lucide-react";
 import { Chat, Message, ActiveCall } from "../types";
 import WelcomeScreen from "./WelcomeScreen";
@@ -14,14 +13,22 @@ import QrScanner from "./QrScanner";
 import MyQrCode from "./MyQrCode";
 import AddContact from "./AddContact";
 import AddContactManual from "./AddContactManual";
+import SyncedContacts from "./SyncedContacts";
+import ContactsList from "./ContactsList";
 import BusinessPanel, { BusinessFlyer } from "./BusinessPanel";
 import RatesPanel from "./RatesPanel";
 import StatesPanel from "./StatesPanel";
 import ChannelsPanel from "./ChannelsPanel";
+import BottomTabBar from "./phone/BottomTabBar";
+import FabMenu from "./phone/FabMenu";
+import { supabase } from "../lib/supabase";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages } from "../services/messages";
+import { getMessages, clearMessages } from "../services/messages";
 import { createChat as createChatInSupabase } from "../services/chats";
 import { getMyFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
+import { WebRTCService } from "../services/webrtc";
+import { startCall as apiStartCall } from "../services/calls";
+import { sendFcmPush } from "../services/pushCapacitor";
 
 interface PhoneSimulatorProps {
   isCorrected?: boolean;
@@ -40,11 +47,11 @@ export default function PhoneSimulator({
   externalMessageTrigger = null,
   onClearExternalMessageTrigger = () => {}
 }: PhoneSimulatorProps) {
-  const { user, profile, chats: supabaseChats, refreshChats, refreshContacts } = useSupabase();
+  const { user, profile, contacts: appContacts, chats: supabaseChats, refreshChats, refreshContacts } = useSupabase();
 
   // Application Screen State
   const [currentScreen, setCurrentScreen] = useState<
-    "welcome" | "chats" | "chat_room" | "qr_scanner" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual"
+    "welcome" | "chats" | "chat_room" | "qr_scanner" | "synced_contacts" | "contacts" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual"
   >("chats");
 
   // Floating action menu
@@ -81,8 +88,18 @@ export default function PhoneSimulator({
   // Active Call Screen Overlay
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
 
+  // WebRTC streams for real calls
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const webrtcRef = useRef<WebRTCService | null>(null);
+
   // Swipe-to-delete state
   const [swipedChatId, setSwipedChatId] = useState<string | null>(null);
+
+  // Long-press context menu state
+  const [contextMenuChat, setContextMenuChat] = useState<Chat | null>(null);
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Search input filter
   const [searchQuery, setSearchQuery] = useState("");
@@ -296,11 +313,12 @@ export default function PhoneSimulator({
 
   // Load Supabase chats when available
   useEffect(() => {
-    if (supabaseChats.length > 0) {
+    if (supabaseChats.length > 0 && user) {
+      const chatsById = new Map(supabaseChats.map((sc: any) => [sc.id, sc]));
       const mapped = supabaseChats.map((sc: any) => ({
         id: sc.id,
         name: sc.name,
-        avatar: sc.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
+        avatar: sc.avatar || "",
         status: sc.is_online ? "online" : "offline",
         lastMessage: sc.last_message || "",
         lastMessageTime: sc.last_message_time
@@ -314,11 +332,29 @@ export default function PhoneSimulator({
             })()
           : "",
         unreadCount: sc.unread_count || 0,
+        partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
         messages: [],
       }));
-      setChats(mapped);
+      // Deduplicate: keep only the best chat per partner (prefer the one where profile_id is NOT the current user)
+      const seen = new Map<string, any>();
+      for (const chat of mapped) {
+        if (!chat.partnerUserId) continue;
+        const existing = seen.get(chat.partnerUserId);
+        if (!existing) {
+          seen.set(chat.partnerUserId, chat);
+        } else {
+          const existingSc = chatsById.get(existing.id);
+          const chatSc = chatsById.get(chat.id);
+          const existingIsDuplicate = existingSc?.profile_id === user.id;
+          const currentIsDuplicate = chatSc?.profile_id === user.id;
+          if (existingIsDuplicate && !currentIsDuplicate) {
+            seen.set(chat.partnerUserId, chat);
+          }
+        }
+      }
+      setChats(Array.from(seen.values()));
     }
-  }, [supabaseChats]);
+  }, [supabaseChats, user]);
 
   const handleCloudBackup = () => {
     setIsBackingUp(true);
@@ -346,22 +382,24 @@ export default function PhoneSimulator({
   };
 
   const handleOpenSupportChat = async () => {
-    const existing = chats.find(c => c.id === "soporte_redon");
-    if (!existing && user) {
+    const existing = chats.find(c =>
+      c.name.toLowerCase().includes("soporte") && c.name.toLowerCase().includes("red on")
+    );
+    if (existing) {
+      setSelectedChatId(existing.id);
+    } else if (user) {
       try {
         const newChat = await createChatInSupabase({
           name: "Soporte RED ON 🛡️",
-          avatar: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=120&q=80",
+          avatar: "",
           profile_id: user.id,
           admin_id: user.id,
         });
         await refreshChats();
+        if (newChat?.id) setSelectedChatId(newChat.id);
       } catch {}
     }
-    setSelectedChatId("soporte_redon");
     setCurrentScreen("chat_room");
-    setActiveSettingsModal(null);
-    showToast("Chat de soporte iniciado 💬");
   };
 
   useEffect(() => {
@@ -370,6 +408,87 @@ export default function PhoneSimulator({
       onClearExternalCallTrigger();
     }
   }, [externalCallTrigger, onClearExternalCallTrigger]);
+
+  // Realtime subscription for incoming calls from other users
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel(`calls-realtime-${user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'calls',
+        filter: `callee_id=eq.${user.id}`,
+      }, async (payload: any) => {
+        const call = payload.new;
+        if (call.status !== 'ongoing') return;
+        if (activeCall) return;
+        let callerName = "Desconocido";
+        let callerAvatar = "";
+        try {
+          const { data } = await supabase
+            .from("profiles")
+            .select("name, avatar, avatar_url")
+            .eq("id", call.caller_id)
+            .single();
+          if (data) {
+            callerName = data.name || "Desconocido";
+            callerAvatar = data.avatar || data.avatar_url || "";
+          }
+        } catch {}
+        setActiveCall({
+          id: call.id,
+          contactName: callerName,
+          contactAvatar: callerAvatar,
+          type: call.type || "audio",
+          status: "incoming",
+          durationSeconds: 0,
+          isMuted: false,
+          isVideoOff: false,
+          isGroup: false,
+          targetUserId: call.caller_id,
+        });
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, activeCall]);
+
+  useEffect(() => {
+    if (!user) return;
+    const handleIncomingCall = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
+      const chatId = d?.chatId || d?.roomId || '';
+      if (chatId && d?.callerId && !activeCall) {
+        setActiveCall({
+          id: d.callId || ('call_' + Date.now()),
+          contactName: d.callerName || 'Llamada entrante',
+          contactAvatar: d.callerAvatar || '',
+          type: d.callType || 'audio',
+          status: 'incoming',
+          durationSeconds: 0,
+          isMuted: false,
+          isVideoOff: false,
+          isGroup: false,
+          targetUserId: d.callerId,
+        });
+      }
+    };
+    const handleOpenChat = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
+      if (d?.chatId && d?.contactId) {
+        setSelectedChatId(d.chatId);
+        setCurrentScreen('chats');
+      }
+    };
+    window.addEventListener('incoming-call', handleIncomingCall);
+    window.addEventListener('open-chat', handleOpenChat);
+    return () => {
+      window.removeEventListener('incoming-call', handleIncomingCall);
+      window.removeEventListener('open-chat', handleOpenChat);
+    };
+  }, [user?.id, activeCall]);
 
   useEffect(() => {
     if (externalMessageTrigger) {
@@ -412,34 +531,91 @@ export default function PhoneSimulator({
     );
   };
 
-  const handleTriggerCallFromChat = (type: "audio" | "video") => {
-    if (!activeChat) return;
-    setActiveCall({
-      id: "call_" + Date.now(),
-      contactName: activeChat.name,
-      contactAvatar: activeChat.avatar,
-      type: type,
-      status: "outgoing",
-      durationSeconds: 0,
-      isMuted: false,
-      isVideoOff: false,
-      isGroup: activeChat.id === "grupo_redon"
-    });
+  const cleanupCall = useCallback(() => {
+    webrtcRef.current?.cleanup();
+    webrtcRef.current = null;
+    setLocalStream(null);
+    setRemoteStream(null);
+    setActiveCall(null);
+  }, []);
 
-    setTimeout(() => {
-      setActiveCall((prev) => (prev ? { ...prev, status: "connected" } : null));
-    }, 2000);
+  const handleTriggerCallFromChat = async (type: "audio" | "video") => {
+    if (!activeChat || !user) return;
+    const callId = "call_" + Date.now();
+
+    try {
+      const webrtc = new WebRTCService(callId, user.id);
+      webrtcRef.current = webrtc;
+
+      webrtc.onRemoteStream = (stream) => {
+        setRemoteStream(stream);
+        setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
+      };
+
+      webrtc.onConnectionStateChange = (state) => {
+        console.debug("[Call] ICE state:", state);
+      };
+
+      webrtc.onCallEnded = () => {
+        cleanupCall();
+      };
+
+      const local = await webrtc.startLocalStream(true, type === "video");
+      setLocalStream(local);
+
+      await webrtc.createPeerConnection();
+      await webrtc.subscribeToSignals();
+      await webrtc.createOffer();
+
+      const partnerId = activeChat.partnerUserId || "";
+      setActiveCall({
+        id: callId,
+        contactName: activeChat.name,
+        contactAvatar: activeChat.avatar,
+        type: type,
+        status: "outgoing",
+        durationSeconds: 0,
+        isMuted: false,
+        isVideoOff: false,
+        isGroup: activeChat.id === "grupo_redon",
+        targetUserId: partnerId
+      });
+
+      // Persist call in DB for callee to discover
+      if (partnerId) {
+        try {
+          await apiStartCall({
+            caller_id: user.id,
+            callee_id: partnerId,
+            type,
+            chat_id: activeChat.id,
+          });
+        } catch {}
+        // Backup FCM push (en caso de que el webhook tarde)
+        sendFcmPush(partnerId, profile?.name || 'RED ON', 'Llamada entrante...', {
+          type: 'call', chatId: activeChat.id, callerId: user.id,
+          callerName: profile?.name || 'RED ON', callType: type,
+        }).catch(() => {});
+      }
+
+      // ICE connection timeout: auto-cleanup after 30s
+      setTimeout(() => {
+        if (webrtcRef.current && activeCall?.status === "outgoing") {
+          console.warn("[Call] ICE timeout — no connection after 30s");
+          cleanupCall();
+        }
+      }, 30000);
+    } catch (err) {
+      console.error("[Call] Failed to start call:", err);
+      webrtcRef.current?.cleanup();
+      webrtcRef.current = null;
+      setLocalStream(null);
+    }
   };
 
   const handleContactAddedByQr = async (name: string, avatar: string) => {
     if (user) {
       try {
-        await createChatInSupabase({
-          name,
-          avatar,
-          profile_id: user.id,
-          admin_id: user.id,
-        });
         await refreshChats();
         await refreshContacts();
       } catch {}
@@ -448,12 +624,98 @@ export default function PhoneSimulator({
     showToast("Contacto agregado por QR ✅");
   };
 
+  const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }) => {
+    const displayName = profile.contactName || profile.name;
+    const existing = chats.find(c => c.name.toLowerCase() === displayName.toLowerCase());
+    if (existing) {
+      setSelectedChatId(existing.id);
+      setCurrentScreen("chat_room");
+    } else {
+      try {
+        const chat = await createChatInSupabase({
+          name: displayName,
+          avatar: profile.avatar_url || "",
+          profile_id: profile.id,
+          admin_id: user?.id || "",
+        });
+        await refreshChats();
+        if (chat?.id) {
+          setChats(prev => {
+            if (prev.some(c => c.id === chat.id)) return prev;
+            return [{
+              id: chat.id,
+              name: displayName,
+              avatar: profile.avatar_url || "",
+              status: "online" as const,
+              lastMessage: "",
+              lastMessageTime: "",
+              unreadCount: 0,
+              partnerUserId: profile.id,
+              messages: [],
+            }, ...prev];
+          });
+          setSelectedChatId(chat.id);
+        }
+      } catch {}
+      setCurrentScreen("chat_room");
+    }
+  };
+
   const handleDeleteChat = (chatId: string) => {
     setChats(prev => prev.filter(c => c.id !== chatId));
     setSwipedChatId(null);
+    setContextMenuChat(null);
+    setContextMenuPos(null);
     if (selectedChatId === chatId) {
       setSelectedChatId(null);
     }
+  };
+
+  const handleClearMessages = async (chat: Chat) => {
+    setChats(prev => prev.map(c =>
+      c.id === chat.id
+        ? { ...c, lastMessage: "", lastMessageTime: "", unreadCount: 0, messages: [] }
+        : c
+    ));
+    setContextMenuChat(null);
+    setContextMenuPos(null);
+    try {
+      const isLocalChat = chat.id.startsWith("chat_biz_") || chat.id.startsWith("chat_state_reply_") || chat.id.startsWith("chat_biz_");
+      if (!isLocalChat) {
+        await clearMessages(chat.id);
+        showToast("Mensajes eliminados");
+      } else {
+        showToast("Mensajes eliminados");
+      }
+    } catch (e) {
+      console.error("[CHAT] clearMessages error:", e);
+      showToast("Error al eliminar mensajes");
+    }
+  };
+
+  const handleLongPress = (chat: Chat, clientX: number, clientY: number) => {
+    setSwipedChatId(null);
+    setContextMenuChat(chat);
+    setContextMenuPos({ x: clientX, y: clientY });
+  };
+
+  const startLongPressTimer = (chat: Chat, clientX: number, clientY: number) => {
+    longPressTimer.current = setTimeout(() => {
+      handleLongPress(chat, clientX, clientY);
+      longPressTimer.current = null;
+    }, 500);
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const closeContextMenu = () => {
+    setContextMenuChat(null);
+    setContextMenuPos(null);
   };
 
   const filteredChats = chats.filter((c) =>
@@ -475,11 +737,48 @@ export default function PhoneSimulator({
       {activeCall && (
         <CallOverlay
           call={activeCall}
-          onAccept={() => setActiveCall((prev) => (prev ? { ...prev, status: "connected" } : null))}
-          onDecline={() => setActiveCall(null)}
+          localStream={localStream}
+          remoteStream={remoteStream}
+          onAccept={async () => {
+            // Incoming call accepted — set up WebRTC callee side
+            if (!user) return;
+            const callId = activeCall.id;
+            setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
+            try {
+              const webrtc = new WebRTCService(callId, user.id);
+              webrtcRef.current = webrtc;
+
+              webrtc.onRemoteStream = (stream) => {
+                setRemoteStream(stream);
+              };
+
+              webrtc.onConnectionStateChange = (state) => {
+                console.debug("[Call] ICE state:", state);
+              };
+
+              webrtc.onCallEnded = () => {
+                cleanupCall();
+              };
+
+              const local = await webrtc.startLocalStream(true, activeCall.type === "video");
+              setLocalStream(local);
+
+              await webrtc.createPeerConnection();
+              await webrtc.subscribeToSignals();
+            } catch (err) {
+              console.error("[Call] Failed to accept call:", err);
+              cleanupCall();
+            }
+          }}
+          onDecline={() => {
+            cleanupCall();
+          }}
           onToggleMute={() => setActiveCall((prev) => (prev ? { ...prev, isMuted: !prev.isMuted } : null))}
           onToggleVideo={() => setActiveCall((prev) => (prev ? { ...prev, isVideoOff: !prev.isVideoOff } : null))}
-          onEndCall={() => setActiveCall(null)}
+          onEndCall={async () => {
+            await webrtcRef.current?.endCall();
+            cleanupCall();
+          }}
         />
       )}
 
@@ -533,6 +832,32 @@ export default function PhoneSimulator({
               currentUserId={user?.id || ""}
               currentUserPhone={profile?.phone_number || registeredUser?.phone || ""}
               onBack={() => setCurrentScreen("chats")}
+            />
+          ) : currentScreen === "synced_contacts" ? (
+            <SyncedContacts
+              currentUserId={user?.id || ""}
+              onBack={() => setCurrentScreen("chats")}
+              onStartChat={handleStartChatFromSynced}
+            />
+          ) : currentScreen === "contacts" ? (
+            <ContactsList
+              contacts={appContacts}
+              onSelectContact={(contact) => {
+                const existing = chats.find(c => c.name.toLowerCase() === contact.name.toLowerCase());
+                if (existing) {
+                  setSelectedChatId(existing.id);
+                  setCurrentScreen("chat_room");
+                } else if (contact.contact_user_id) {
+                  handleStartChatFromSynced({
+                    id: contact.contact_user_id,
+                    name: contact.name,
+                    contactName: contact.name,
+                    avatar_url: contact.avatar || "",
+                    phone_number: contact.phone || "",
+                  });
+                }
+              }}
+              onAddContact={() => setCurrentScreen("add_contact_manual")}
             />
           ) : (
             // Tab screen (Chats, States, Channels, Rates, Business, Profile)
@@ -667,16 +992,19 @@ export default function PhoneSimulator({
                       let isDragging = false;
 
                       const onTouchStart = (e: React.TouchEvent) => {
+                        cancelLongPress();
                         touchStartX = e.touches[0].clientX;
                         touchStartY = e.touches[0].clientY;
                         currentTranslate = isSwiped ? 80 : 0;
                         isDragging = false;
+                        startLongPressTimer(chat, e.touches[0].clientX, e.touches[0].clientY);
                       };
 
                       const onTouchMove = (e: React.TouchEvent) => {
                         const dx = e.touches[0].clientX - touchStartX;
                         const dy = e.touches[0].clientY - touchStartY;
                         if (!isDragging && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+                        cancelLongPress();
                         if (Math.abs(dy) > Math.abs(dx)) return;
                         isDragging = true;
                         if (dx > 0) {
@@ -688,6 +1016,7 @@ export default function PhoneSimulator({
                       };
 
                       const onTouchEnd = (e: React.TouchEvent) => {
+                        cancelLongPress();
                         const el = e.currentTarget as HTMLElement;
                         el.style.transition = 'transform 0.2s ease';
                         if (isDragging && currentTranslate >= 50) {
@@ -720,6 +1049,7 @@ export default function PhoneSimulator({
                           {/* Foreground content */}
                           <div
                             onClick={() => {
+                              if (contextMenuChat) { closeContextMenu(); return; }
                               if (swipedChatId) {
                                 setSwipedChatId(null);
                                 return;
@@ -731,7 +1061,12 @@ export default function PhoneSimulator({
                             onTouchStart={onTouchStart}
                             onTouchMove={onTouchMove}
                             onTouchEnd={onTouchEnd}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              handleLongPress(chat, e.clientX, e.clientY);
+                            }}
                             onMouseDown={(e) => {
+                              if (contextMenuChat) { closeContextMenu(); return; }
                               if (swipedChatId) {
                                 const startX = e.clientX;
                                 const onMouseMove = (ev: MouseEvent) => {
@@ -755,7 +1090,15 @@ export default function PhoneSimulator({
                           >
                             <div className="relative shrink-0">
                               <div className="p-[2px] rounded-full border-2 border-dashed border-rose-500/90 transition-transform hover:rotate-12 duration-500">
-                                <img src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" />
+                                {chat.avatar ? (
+                                  <img src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" />
+                                ) : (
+                                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                                    <span className="text-white font-black text-sm">
+                                      {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                               {chat.status === "online" && (
                                 <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white z-10"></span>
@@ -791,6 +1134,44 @@ export default function PhoneSimulator({
                       </div>
                     )}
                   </div>
+                )}
+
+                {/* Context menu overlay */}
+                {contextMenuChat && contextMenuPos && (
+                  <>
+                    <div className="fixed inset-0 z-50" onClick={closeContextMenu} />
+                    <div
+                      className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1 min-w-[200px] animate-fade-in"
+                      style={{
+                        top: Math.min(contextMenuPos.y, window.innerHeight - 160),
+                        left: Math.min(contextMenuPos.x, window.innerWidth - 220),
+                      }}
+                    >
+                      <div className="px-3 py-2 border-b border-slate-100">
+                        <p className="text-[11px] font-bold text-slate-800 truncate">{contextMenuChat.name}</p>
+                      </div>
+                      <button
+                        onClick={() => handleClearMessages(contextMenuChat)}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <rect x="4" y="6" width="16" height="14" rx="1" />
+                        </svg>
+                        Borrar mensajes
+                      </button>
+                      <button
+                        onClick={() => handleDeleteChat(contextMenuChat.id)}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                        Eliminar chat
+                      </button>
+                    </div>
+                  </>
                 )}
 
                 {/* STATES TAB */}
@@ -1533,167 +1914,20 @@ export default function PhoneSimulator({
 
                 {/* Floating action button with menu */}
                 {currentScreen === "chats" && (
-                  <div className="absolute right-4 bottom-16 z-30 flex flex-col items-end gap-2">
-                    {showActionMenu && (
-                      <>
-                        <div className="bg-white rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] border border-slate-100 overflow-hidden">
-                          <button
-                            onClick={() => { setShowActionMenu(false); setCurrentScreen("add_contact_manual"); }}
-                            className="flex items-center gap-2.5 px-4 py-3 hover:bg-slate-50 transition-colors w-full text-left cursor-pointer"
-                          >
-                            <svg className="w-4 h-4 text-teal-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                              <circle cx="8.5" cy="7" r="4" />
-                              <line x1="20" y1="8" x2="20" y2="14" />
-                              <line x1="23" y1="11" x2="17" y2="11" />
-                            </svg>
-                            <span className="text-xs font-semibold text-slate-700">Agregar por teléfono</span>
-                          </button>
-                          <button
-                            onClick={() => { setShowActionMenu(false); setCurrentScreen("qr_scanner"); }}
-                            className="flex items-center gap-2.5 px-4 py-3 hover:bg-slate-50 transition-colors w-full text-left border-t border-slate-100 cursor-pointer"
-                          >
-                            <svg className="w-4 h-4 text-teal-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" />
-                              <path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-                              <rect x="7" y="7" width="5" height="5" /><rect x="14" y="7" width="5" height="5" />
-                              <rect x="7" y="14" width="5" height="5" /><rect x="14" y="14" width="5" height="5" />
-                            </svg>
-                            <span className="text-xs font-semibold text-slate-700">Escanear QR</span>
-                          </button>
-                          <button
-                            onClick={() => { setShowActionMenu(false); setCurrentScreen("my_qr"); }}
-                            className="flex items-center gap-2.5 px-4 py-3 hover:bg-slate-50 transition-colors w-full text-left border-t border-slate-100 cursor-pointer"
-                          >
-                            <QrCode className="w-4 h-4 text-teal-600" />
-                            <span className="text-xs font-semibold text-slate-700">Mi QR</span>
-                          </button>
-                        </div>
-                        <div className="fixed inset-0 z-[-1]" onClick={() => setShowActionMenu(false)} />
-                      </>
-                    )}
-                    <button
-                      onClick={() => setShowActionMenu(!showActionMenu)}
-                      className="w-12 h-12 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-full flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
-                      title="Agregar contacto"
-                    >
-                      <Plus className={`w-5 h-5 transition-transform ${showActionMenu ? "rotate-45" : ""}`} />
-                    </button>
-                  </div>
+                  <FabMenu
+                    showActionMenu={showActionMenu}
+                    setShowActionMenu={setShowActionMenu}
+                    setCurrentScreen={setCurrentScreen}
+                  />
                 )}
               </div>
 
               {/* PERSISTENT BOTTOM TAB BAR */}
-              {!isEditingMedia && (
-                <div className="border-t border-slate-100 bg-white py-2 shrink-0 z-20">
-                  <div className="grid grid-cols-6 text-center px-1">
-                    
-                    {/* CHATS TAB */}
-                    <button 
-                      onClick={() => {
-                        setCurrentScreen("chats");
-                      }}
-                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
-                        currentScreen === "chats" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
-                      }`}
-                    >
-                      <div className={`p-1.5 rounded-xl transition-all ${
-                        currentScreen === "chats" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
-                      }`}>
-                        <MessageSquareMore className="w-4 h-4" />
-                      </div>
-                      <span className="text-[9px] font-bold tracking-tight">Chats</span>
-                    </button>
-                    
-                    {/* STATES TAB */}
-                    <button 
-                      onClick={() => {
-                        setCurrentScreen("states");
-                      }}
-                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
-                        currentScreen === "states" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
-                      }`}
-                    >
-                      <div className={`p-1.5 rounded-xl transition-all ${
-                        currentScreen === "states" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
-                      }`}>
-                        <CircleDotDashed className="w-4 h-4" />
-                      </div>
-                      <span className="text-[9px] font-medium tracking-tight">Estados</span>
-                    </button>
-
-                    {/* CHANNELS TAB */}
-                    <button 
-                      onClick={() => {
-                        setCurrentScreen("channels");
-                      }}
-                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
-                        currentScreen === "channels" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
-                      }`}
-                    >
-                      <div className={`p-1.5 rounded-xl transition-all relative ${
-                        currentScreen === "channels" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
-                      }`}>
-                        <Radio className="w-4 h-4" />
-                        <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-[#10646a] rounded-full"></span>
-                      </div>
-                      <span className="text-[9px] font-medium tracking-tight">Canales</span>
-                    </button>
-
-                    {/* RATES TAB */}
-                    <button 
-                      onClick={() => {
-                        setCurrentScreen("rates");
-                      }}
-                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
-                        currentScreen === "rates" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
-                      }`}
-                    >
-                      <div className={`p-1.5 rounded-xl transition-all ${
-                        currentScreen === "rates" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
-                      }`}>
-                        <TrendingUp className="w-4 h-4" />
-                      </div>
-                      <span className="text-[9px] font-medium tracking-tight">Tasas</span>
-                    </button>
-
-                    {/* BUSINESS TAB */}
-                    <button 
-                      onClick={() => {
-                        setCurrentScreen("business");
-                      }}
-                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
-                        currentScreen === "business" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
-                      }`}
-                    >
-                      <div className={`p-1.5 rounded-xl transition-all ${
-                        currentScreen === "business" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
-                      }`}>
-                        <Briefcase className="w-4 h-4" />
-                      </div>
-                      <span className="text-[9px] font-medium tracking-tight">Negocio</span>
-                    </button>
-
-                    {/* PROFILE TAB */}
-                    <button 
-                      onClick={() => {
-                        setCurrentScreen("profile");
-                      }}
-                      className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
-                        currentScreen === "profile" ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
-                      }`}
-                    >
-                      <div className={`p-1.5 rounded-xl transition-all ${
-                        currentScreen === "profile" ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
-                      }`}>
-                        <CircleUser className="w-4 h-4" />
-                      </div>
-                      <span className="text-[9px] font-medium tracking-tight">Perfil</span>
-                    </button>
-
-                  </div>
-                </div>
-              )}
+              <BottomTabBar
+                currentScreen={currentScreen}
+                setCurrentScreen={setCurrentScreen}
+                isEditingMedia={isEditingMedia}
+              />
 
             </div>
           )}

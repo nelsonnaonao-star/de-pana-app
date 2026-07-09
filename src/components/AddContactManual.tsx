@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { apiUrl } from "../lib/api";
+import { searchUsers, addContact } from "../services/contacts";
 import {
   ArrowLeft, Phone, User, Check, Loader2, UserPlus, X, Smartphone, ExternalLink, Shield
 } from "lucide-react";
@@ -11,11 +11,13 @@ interface AddContactManualProps {
   onBack: () => void;
 }
 
-interface FoundProfile {
+interface DetectedUser {
   id: string;
   name: string;
   username?: string;
-  avatar_url?: string;
+  phone?: string;
+  avatar?: string;
+  bio?: string;
 }
 
 function getInitials(name: string): string {
@@ -27,9 +29,8 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
 
   const [phoneRaw, setPhoneRaw] = useState("");
   const [contactName, setContactName] = useState("");
-  const [checking, setChecking] = useState(false);
-  const [foundProfile, setFoundProfile] = useState<FoundProfile | null>(null);
-  const [notFound, setNotFound] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [detectedUser, setDetectedUser] = useState<DetectedUser | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -42,69 +43,50 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
 
   const cleanDigits = phoneRaw.replace(/\D/g, "").trim();
 
-  const doCheck = useCallback(async (digits: string) => {
-    if (digits.length < 7) {
-      setFoundProfile(null);
-      setNotFound(false);
-      setError("");
-      return;
-    }
-
-    const ownDigits = currentUserPhone.replace(/\D/g, "").trim();
-    if (ownDigits && (digits === ownDigits || digits.slice(-10) === ownDigits.slice(-10))) {
-      setError("No puedes agregarte a ti mismo como contacto");
-      setFoundProfile(null);
-      setNotFound(false);
-      return;
-    }
-
-    setChecking(true);
+  // Live search as user types (handlePhoneChange pattern from provided code)
+  const handlePhoneChange = useCallback(async (phone: string) => {
+    setPhoneRaw(phone);
     setError("");
-    setFoundProfile(null);
-    setNotFound(false);
+    setDetectedUser(null);
 
-    try {
-      const res = await fetch(apiUrl("/api/data/check-phone"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: digits }),
-      });
+    const digits = phone.replace(/\D/g, "").trim();
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setError(err.error || "Error al verificar número");
-        return;
-      }
-
-      const data = await res.json();
-      if (data.exists) {
-        setFoundProfile(data.profile);
-        if (!contactName) setContactName(data.profile.name);
-        setNotFound(false);
-      } else {
-        setFoundProfile(null);
-        setNotFound(true);
-      }
-    } catch (e: any) {
-      setError(e.message || "Error de conexión");
-    } finally {
-      setChecking(false);
+    // Self-check
+    const ownDigits = currentUserPhone.replace(/\D/g, "").trim();
+    if (ownDigits && digits.length >= 7 && (digits === ownDigits || digits.slice(-10) === ownDigits.slice(-10))) {
+      setError("No puedes agregarte a ti mismo como contacto");
+      return;
     }
-  }, [contactName, currentUserPhone]);
 
+    if (digits.length >= 7) {
+      setSearching(true);
+      try {
+        const users = await searchUsers(phone, currentUserId);
+        const phoneDigits = phone.replace(/\D/g, "");
+        const match = users.find((u: any) => (u.phone || "").replace(/\D/g, "").includes(phoneDigits));
+        if (match) {
+          setDetectedUser(match);
+          setContactName(match.name);
+        }
+      } catch {
+        // Silently fail on search
+      }
+      setSearching(false);
+    }
+  }, [currentUserId, currentUserPhone]);
+
+  // Debounce the phone input
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (cleanDigits.length >= 7) {
-      debounceRef.current = setTimeout(() => doCheck(cleanDigits), 500);
+    if (phoneRaw.replace(/\D/g, "").length >= 7) {
+      debounceRef.current = setTimeout(() => handlePhoneChange(phoneRaw), 400);
     } else {
-      setFoundProfile(null);
-      setNotFound(false);
-      if (error === "No puedes agregarte a ti mismo como contacto") setError("");
+      setDetectedUser(null);
     }
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [phoneRaw, doCheck, cleanDigits.length]);
+  }, [phoneRaw, handlePhoneChange]);
 
   async function handleSave() {
     if (!contactName.trim() || cleanDigits.length < 7) return;
@@ -113,29 +95,13 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
     setError("");
 
     try {
-      const body: any = {
-        user_id: currentUserId,
-        name: contactName.trim(),
-        avatar: "",
-      };
-
-      if (foundProfile) {
-        body.contact_user_id = foundProfile.id;
+      if (detectedUser) {
+        // Usuario existe en RED ON — crear contacto con contact_user_id
+        await addContact(currentUserId, detectedUser.id, contactName.trim(), detectedUser.avatar);
       } else {
-        body.phone = cleanDigits;
+        // Contacto externo — guardar solo con teléfono
+        await addContact(currentUserId, null, contactName.trim(), "", cleanDigits);
       }
-
-      const res = await fetch(apiUrl("/api/data/add-contact"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Error al guardar contacto");
-      }
-
       await refreshContacts();
       setSaved(true);
       setTimeout(() => onBack(), 1500);
@@ -186,13 +152,15 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
                   value={phoneRaw}
                   onChange={(e) => {
                     const raw = e.target.value.replace(/[^\d+]/g, "");
-                    if (raw.length <= 13) setPhoneRaw(raw);
-                    if (error) setError("");
+                    if (raw.length <= 13) {
+                      setPhoneRaw(raw);
+                      // Live search triggered via debounce effect
+                    }
                   }}
                   placeholder="04241305887"
                   className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-sm pl-10 pr-10 py-3.5 rounded-xl outline-none focus:border-teal-400/50 focus:ring-2 focus:ring-teal-500/10 transition-all"
                 />
-                {checking && (
+                {searching && (
                   <div className="absolute right-3 top-1/2 -translate-y-1/2">
                     <Loader2 className="w-4 h-4 animate-spin text-teal-500" />
                   </div>
@@ -241,7 +209,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
             </button>
           </div>
 
-          {foundProfile && !error && (
+          {detectedUser && !error && (
             <div className="bg-white rounded-2xl shadow-md p-5 space-y-3 animate-fade-in border border-emerald-200">
               <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full w-fit">
                 <Shield className="w-3 h-3" />
@@ -249,16 +217,16 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
               </div>
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shrink-0 shadow-md flex items-center justify-center">
-                  {foundProfile.avatar_url ? (
-                    <img src={foundProfile.avatar_url} alt="" className="w-full h-full object-cover" />
+                  {detectedUser.avatar ? (
+                    <img src={detectedUser.avatar} alt="" className="w-full h-full object-cover" />
                   ) : (
-                    <span className="text-white font-black text-lg">{getInitials(foundProfile.name)}</span>
+                    <span className="text-white font-black text-lg">{getInitials(detectedUser.name)}</span>
                   )}
                 </div>
                 <div className="min-w-0">
-                  <p className="text-base font-bold text-slate-800 truncate">{foundProfile.name}</p>
-                  {foundProfile.username && (
-                    <p className="text-[11px] text-teal-600 font-mono">@{foundProfile.username}</p>
+                  <p className="text-base font-bold text-slate-800 truncate">{detectedUser.name}</p>
+                  {detectedUser.username && (
+                    <p className="text-[11px] text-teal-600 font-mono">@{detectedUser.username}</p>
                   )}
                 </div>
               </div>
@@ -269,7 +237,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
             </div>
           )}
 
-          {notFound && !checking && cleanDigits.length >= 7 && !error && (
+          {!detectedUser && !searching && cleanDigits.length >= 7 && !error && (
             <div className="bg-white rounded-2xl shadow-sm p-5 text-center space-y-3 animate-fade-in">
               <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mx-auto">
                 <Smartphone className="w-6 h-6 text-slate-400" />

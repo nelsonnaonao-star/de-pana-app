@@ -1,6 +1,7 @@
 import { apiUrl } from "../lib/api";
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY || "";
+let registeredUserId: string | null = null;
 
 export async function registerPushNotifications(userId: string): Promise<boolean> {
   if (!("Notification" in window)) {
@@ -15,6 +16,9 @@ export async function registerPushNotifications(userId: string): Promise<boolean
     console.warn("[PUSH] VAPID public key not configured");
     return false;
   }
+  if (registeredUserId === userId) {
+    return true;
+  }
 
   try {
     const permission = await Notification.requestPermission();
@@ -23,9 +27,11 @@ export async function registerPushNotifications(userId: string): Promise<boolean
       return false;
     }
 
-    const registration = await navigator.serviceWorker.register("/push-sw.js", {
+    const existing = await navigator.serviceWorker.getRegistration("/push-sw.js");
+    const registration = existing || await navigator.serviceWorker.register("/push-sw.js", {
       scope: "/",
     });
+    registeredUserId = userId;
     console.log("[PUSH] Service worker registered");
 
     const subscription = await registration.pushManager.subscribe({

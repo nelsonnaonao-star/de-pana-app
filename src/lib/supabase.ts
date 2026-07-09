@@ -5,7 +5,12 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Supabase credentials missing. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env");
+  const msg = "Supabase credentials missing. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env";
+  console.error("[SUPABASE]", msg);
+  if (typeof document !== "undefined") {
+    document.body.innerHTML = `<div style="padding:40px;font-family:sans-serif;color:#b91c1c;background:#fef2f2;min-height:100vh"><h1>Error de configuraci\u00f3n</h1><p>${msg}</p></div>`;
+    throw new Error(msg);
+  }
 }
 
 const CapacitorStorageAdapter = {

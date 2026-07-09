@@ -232,8 +232,16 @@ router.post('/webhook', async (req, res) => {
           .limit(1);
         if (!error && participants && participants.length > 0) {
           receiverId = participants[0].profile_id;
-        } else if (error) {
-          console.error('[FCM-WEBHOOK] chat_participants error:', error.message);
+        } else {
+          // Fallback: look up the chat itself to find the other participant
+          const { data: chat } = await supabase
+            .from('chats')
+            .select('profile_id, admin_id')
+            .eq('id', chat_id)
+            .single();
+          if (chat) {
+            receiverId = chat.profile_id === sender_id ? chat.admin_id : chat.profile_id;
+          }
         }
       } catch (err) {
         console.error('[FCM-WEBHOOK] chat_participants exception:', err.message);

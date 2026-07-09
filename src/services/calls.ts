@@ -14,15 +14,27 @@ export type Call = {
 };
 
 export async function getCalls(userId: string): Promise<Call[]> {
-  const { data, error } = await supabase
-    .from("calls")
-    .select("*")
-    .or(`caller_id.eq.${userId},callee_id.eq.${userId}`)
-    .order("started_at", { ascending: false })
-    .limit(50);
+  const [sent, received] = await Promise.all([
+    supabase
+      .from("calls")
+      .select("*")
+      .eq("caller_id", userId)
+      .order("started_at", { ascending: false })
+      .limit(50),
+    supabase
+      .from("calls")
+      .select("*")
+      .eq("callee_id", userId)
+      .order("started_at", { ascending: false })
+      .limit(50),
+  ]);
 
-  if (error) throw error;
-  return data as Call[];
+  if (sent.error) console.error("[CALLS] sent error:", sent.error);
+  if (received.error) console.error("[CALLS] received error:", received.error);
+
+  const all = [...(sent.data || []), ...(received.data || [])];
+  all.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+  return all.slice(0, 50) as Call[];
 }
 
 export async function startCall(call: Partial<Call>): Promise<Call> {

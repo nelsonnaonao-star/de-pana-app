@@ -35,6 +35,7 @@ export default function AuthScreen() {
         setSuccess(true);
       }
     } catch (err: any) {
+      console.error("[AUTHSCREEN] Error capturado:", err);
       setError(err.message || "Error de autenticación");
     } finally {
       setLoading(false);

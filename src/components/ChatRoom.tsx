@@ -1,65 +1,19 @@
 import React, { useState, useRef, useEffect } from "react";
 import { 
   ArrowLeft, Phone, Video, Send, Smile, Paperclip, 
-  Mic, Play, Pause, FileUp, Music, Image, VideoIcon, 
-  BarChart2, X, Check, Volume2, HelpCircle, Palette,
+  Mic, Music, VideoIcon, 
+  BarChart2, X, Check, Palette,
   Film, MoreVertical 
 } from "lucide-react";
 import { Chat, Message } from "../types";
 import GifPicker from "./GifPicker";
+import MessageBubble from "./chat/MessageBubble";
+import ChatCustomizer from "./chat/ChatCustomizer";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage } from "../services/messages";
+import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, clearMessages } from "../services/messages";
 import { supabase } from "../lib/supabase";
-
-// 20 customizable background presets for the chat window
-const CHAT_BACKGROUNDS = [
-  { id: "default", name: "Clásico Red On 📱", value: "#f8fafc" },
-  { id: "stars", name: "Noche Estrellada 🌌", value: "url('https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "sand", name: "Arena del Desierto 🏜️", value: "linear-gradient(135deg, #fef3c7, #fde68a)" },
-  { id: "bamboo", name: "Bosque de Bambú 🎋", value: "url('https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "sunset", name: "Atardecer Cálido 🌅", value: "linear-gradient(to top, #ff7e5f, #feb47b)" },
-  { id: "foggy_forest", name: "Bosque de Niebla 🌲", value: "url('https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "neon", name: "Azul Neón 🌀", value: "linear-gradient(135deg, #0f172a, #1e3a8a, #0369a1)" },
-  { id: "pink", name: "Rosa Pastel 🌸", value: "linear-gradient(135deg, #fce7f3, #fbcfe8)" },
-  { id: "minimal_white", name: "Minimalista Blanco 🤍", value: "#ffffff" },
-  { id: "marble", name: "Mármol Elegante 🪨", value: "url('https://images.unsplash.com/photo-1533090161767-e6ffed986c88?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "rain", name: "Ciudad Lluvia 🌧️", value: "url('https://images.unsplash.com/photo-1428908728789-d2de25dbd4e2?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "dark_simple", name: "Sencillo Oscuro 🖤", value: "#0f172a" },
-  { id: "olive", name: "Verde Oliva 🍃", value: "linear-gradient(135deg, #ecfdf5, #d1fae5)" },
-  { id: "beach", name: "Playa Caribeña 🏖️", value: "url('https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "fire", name: "Fuego de Campamento 🔥", value: "linear-gradient(to top, #ed64a6, #f56565, #ed8936)" },
-  { id: "nebula", name: "Nebulosa Espacial 🛸", value: "url('https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "lofi", name: "Lofi Room ☕", value: "url('https://images.unsplash.com/photo-1518156677180-95a2893f3e9f?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "gold", name: "Oro Imperial 👑", value: "linear-gradient(135deg, #b45309, #d97706, #f59e0b)" },
-  { id: "retro", name: "Papel Retro 📜", value: "url('https://images.unsplash.com/photo-1517816743773-6e0fd518b4a6?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "cyber_neon", name: "Cyberpunk 👾", value: "linear-gradient(135deg, #4c1d95, #701a75, #4a044e)" }
-];
-
-// Custom bubble color options for the user (me)
-const BUBBLE_PRESETS_ME = [
-  { id: "teal_dark", name: "Clásico Red On 📱", css: "bg-gradient-to-br from-[#10646a] to-[#0a4d52] text-white rounded-br-none" },
-  { id: "blue", name: "Azul Real 💙", css: "bg-gradient-to-br from-blue-600 to-blue-800 text-white rounded-br-none" },
-  { id: "purple", name: "Púrpura Místico 💜", css: "bg-gradient-to-br from-purple-600 to-purple-800 text-white rounded-br-none" },
-  { id: "emerald", name: "Verde Esmeralda 💚", css: "bg-gradient-to-br from-emerald-600 to-emerald-800 text-white rounded-br-none" },
-  { id: "pink", name: "Rosa Vibrante 💗", css: "bg-gradient-to-br from-pink-500 to-pink-700 text-white rounded-br-none" },
-  { id: "orange", name: "Naranja Energía 🧡", css: "bg-gradient-to-br from-orange-500 to-orange-700 text-white rounded-br-none" },
-  { id: "red", name: "Fuego Carmesí ❤️", css: "bg-gradient-to-br from-red-600 to-red-800 text-white rounded-br-none" },
-  { id: "slate", name: "Negro Carbón 🖤", css: "bg-gradient-to-br from-slate-800 to-slate-950 text-white rounded-br-none" },
-  { id: "gold", name: "Oro Imperial 👑", css: "bg-gradient-to-br from-amber-500 to-amber-700 text-slate-950 font-semibold rounded-br-none" }
-];
-
-// Custom bubble color options for the contact (them)
-const BUBBLE_PRESETS_THEM = [
-  { id: "white", name: "Blanco Puro 🤍", css: "bg-white text-slate-800 rounded-bl-none border border-slate-100" },
-  { id: "slate_light", name: "Gris Moderno 🏐", css: "bg-slate-200 text-slate-900 rounded-bl-none border border-slate-300" },
-  { id: "emerald_dark", name: "Verde Esmeralda 💚", css: "bg-emerald-600 text-white rounded-bl-none" },
-  { id: "blue_vibrant", name: "Azul Intenso 💙", css: "bg-blue-600 text-white rounded-bl-none" },
-  { id: "purple_vibrant", name: "Violeta Eléctrico 💜", css: "bg-purple-600 text-white rounded-bl-none" },
-  { id: "rose_vibrant", name: "Rosa Chicle 💗", css: "bg-pink-500 text-white rounded-bl-none" },
-  { id: "amber_dark", name: "Oro Imperial 👑", css: "bg-amber-500 text-slate-950 font-semibold rounded-bl-none" },
-  { id: "red_vibrant", name: "Rojo Pasión ❤️", css: "bg-red-500 text-white rounded-bl-none" },
-  { id: "dark", name: "Oscuro Elegante 🖤", css: "bg-slate-900 text-slate-100 rounded-bl-none border border-slate-800" }
-];
+import { uploadChatMedia } from "../services/storage";
+import { CHAT_BACKGROUNDS } from "./chat/chatConstants";
 
 interface ChatRoomProps {
   chat: Chat;
@@ -83,6 +37,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [isPlayingAudio, setIsPlayingAudio] = useState<string | null>(null); // messageId
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [messages, setMessages] = useState<Message[]>(chat.messages || []);
+  const [renderLimit, setRenderLimit] = useState(50);
+  const visibleMessages = messages.slice(-renderLimit);
 
   // Fetch real messages from API on mount
   useEffect(() => {
@@ -97,6 +53,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             type: (m.type as Message["type"]) || "text",
             mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
             reactions: m.reactions,
+            status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
           }));
           setMessages(mapped);
         }
@@ -141,25 +98,57 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const recordingTimer = useRef<number | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Audio recording timer simulation
+  // Real MediaRecorder + timer
   useEffect(() => {
     if (recordingType) {
       setRecordingSeconds(0);
+      const startRec = async () => {
+        try {
+          const constraints: MediaStreamConstraints =
+            recordingType === "video"
+              ? { audio: true, video: { facingMode: "user", width: 360, height: 360 } }
+              : { audio: true };
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          mediaStreamRef.current = stream;
+          chunksRef.current = [];
+          const recorder = new MediaRecorder(stream, {
+            audioBitsPerSecond: 128000,
+            videoBitsPerSecond: 2500000,
+          });
+          recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunksRef.current.push(e.data);
+          };
+          recorder.start(1000);
+          mediaRecorderRef.current = recorder;
+        } catch (err) {
+          console.error("[CHAT] getUserMedia error:", err);
+          setRecordingType(null);
+        }
+      };
+      startRec();
       recordingTimer.current = window.setInterval(() => {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
-    } else {
-      if (recordingTimer.current) {
-        clearInterval(recordingTimer.current);
-      }
     }
     return () => {
       if (recordingTimer.current) clearInterval(recordingTimer.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(t => t.stop());
+        mediaStreamRef.current = null;
+      }
+      mediaRecorderRef.current = null;
     };
   }, [recordingType]);
 
@@ -178,6 +167,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     }, (payload: any) => {
       const newMsg = payload.new;
       if (newMsg.sender_id !== uid) {
+        // Mark our sent messages as delivered now that the other user received the message
+        setMessages(prev => prev.map(m =>
+          m.sender === "me" && m.status === "sent" ? { ...m, status: "delivered" as const } : m
+        ));
         const mapped: Message = {
           id: newMsg.id,
           sender: 'other',
@@ -189,6 +182,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         };
         setMessages(prev => [...prev, mapped]);
         markAsRead(chat.id, uid, uname).catch(() => {});
+      }
+    });
+    channel.on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'messages',
+      filter: `chat_id=eq.${chat.id}`,
+    }, (payload: any) => {
+      const updated = payload.new;
+      if (updated.sender_id === uid && updated.status === "read") {
+        setMessages(prev => prev.map(m =>
+          m.id === updated.id ? { ...m, status: "read" as const } : m
+        ));
       }
     });
     channel.subscribe();
@@ -250,7 +256,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       sender: "me",
       text: inputText,
       timestamp,
-      type: "text"
+      type: "text",
+      status: "sent"
     };
 
     // Optimistic add
@@ -265,22 +272,60 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     }
 
     try {
-      const saved = await apiSendMessage({
-        chat_id: chat.id,
-        text: inputText,
-        type: "text",
-        sender_id: uid,
-      });
-      setMessages(prev => prev.map((m) =>
-        m.id === tempId ? { ...m, id: saved.id } : m
-      ));
-    } catch {
-      alert("Error al enviar mensaje");
+      const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+      if (isLocalChat) {
+        // If it is a local-only chat, skip the insert to Supabase
+        setMessages(prev => prev.map((m) => m.id === tempId ? { ...m, id: `local_${Date.now()}` } : m));
+      } else {
+        const saved = await apiSendMessage({
+          chat_id: chat.id,
+          text: inputText,
+          type: "text",
+          sender_id: uid,
+        });
+        setMessages(prev => prev.map((m) =>
+          m.id === tempId ? { ...m, id: saved.id } : m
+        ));
+      }
+    } catch (e) {
+      console.error("[CHAT] Error al enviar mensaje:", e);
       setMessages(prev => prev.filter((m) => m.id !== tempId));
     }
   };
 
-  const handleSendSticker = async (url: string, type: "gif" | "sticker") => {
+  const handleSendSticker = async (value: string, type: "gif" | "sticker" | "emoji") => {
+    if (type === "emoji") {
+      const tempId = `temp_${Date.now()}`;
+      const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const newMsg: Message = {
+        id: tempId,
+        sender: "me",
+        timestamp,
+        type: "text",
+        text: value,
+        status: "sent"
+      };
+      setMessages(prev => [...prev, newMsg]);
+      onSendMessage(newMsg);
+      setShowGifPicker(false);
+      setShowAttachments(false);
+      try {
+        const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+        if (!isLocalChat) {
+          await apiSendMessage({
+            chat_id: chat.id,
+            type: "text",
+            text: value,
+            sender_id: uid,
+          });
+        }
+      } catch (e) {
+        console.error("[CHAT] Error al enviar emoji:", e);
+        setMessages(prev => prev.filter((m) => m.id !== tempId));
+      }
+      return;
+    }
+    const url = value;
     const tempId = `temp_${Date.now()}`;
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const newMsg: Message = {
@@ -289,7 +334,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       timestamp,
       type: "image",
       mediaUrl: url,
-      fileName: type === "gif" ? "GIF.gif" : "Sticker.png"
+      fileName: type === "gif" ? "GIF.gif" : "Sticker.png",
+      status: "sent"
     };
 
     setMessages(prev => [...prev, newMsg]);
@@ -298,52 +344,54 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     setShowAttachments(false);
 
     try {
-      const saved = await apiSendMessage({
-        chat_id: chat.id,
-        type: "image",
-        sender_id: uid,
-        sticker_url: type === "sticker" ? url : undefined,
-        gif_url: type === "gif" ? url : undefined,
-        image_url: url,
-      });
-      setMessages(prev => prev.map((m) =>
-        m.id === tempId ? { ...m, id: saved.id } : m
-      ));
-    } catch {
-      alert("Error al enviar sticker");
+      const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+      if (isLocalChat) {
+        setMessages(prev => prev.map((m) => m.id === tempId ? { ...m, id: `local_${Date.now()}` } : m));
+      } else {
+        const saved = await apiSendMessage({
+          chat_id: chat.id,
+          type: "image",
+          sender_id: uid,
+          sticker_url: type === "sticker" ? url : undefined,
+          gif_url: type === "gif" ? url : undefined,
+          image_url: url,
+        });
+        setMessages(prev => prev.map((m) =>
+          m.id === tempId ? { ...m, id: saved.id } : m
+        ));
+      }
+    } catch (e) {
+      console.error("[CHAT] Error al enviar sticker:", e);
       setMessages(prev => prev.filter((m) => m.id !== tempId));
     }
   };
 
-  const handleSendMusic = () => {
-    const newMsg: Message = {
-      id: "msg_" + Date.now(),
-      sender: "me",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      type: "audio",
-      mediaUrl: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
-      fileName: "Golden_Hour_Vibes.mp3",
-      fileSize: "5.2 MB",
-      duration: "4:01"
+  const triggerFilePick = (accept: string, type: Message["type"]) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const blob = new Blob([file], { type: file.type });
+      try {
+        const url = await uploadChatMedia(blob, "files");
+        const newMsg: Message = {
+          id: "msg_" + Date.now(),
+          sender: "me",
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          type,
+          mediaUrl: url,
+          fileName: file.name,
+          fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
+        };
+        setMessages(prev => [...prev, newMsg]);
+        onSendMessage(newMsg);
+      } catch (err) {
+        console.error("[CHAT] File upload error:", err);
+      }
     };
-    setMessages(prev => [...prev, newMsg]);
-    onSendMessage(newMsg);
-    setShowAttachments(false);
-  };
-
-  const handleSendVideo = () => {
-    const newMsg: Message = {
-      id: "msg_" + Date.now(),
-      sender: "me",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      type: "video",
-      mediaUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
-      fileName: "RedOn_Demo_Video.mp4",
-      fileSize: "12.4 MB"
-    };
-    setMessages(prev => [...prev, newMsg]);
-    onSendMessage(newMsg);
-    setShowAttachments(false);
+    input.click();
   };
 
   const handleCreatePoll = (e: React.FormEvent) => {
@@ -417,30 +465,61 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     }
   };
 
-  const handleFinishVoiceNote = () => {
-    if (!recordingType) return;
+  const handleFinishVoiceNote = async () => {
+    if (!recordingType || !mediaRecorderRef.current) return;
+    const recordingDone = new Promise<void>((resolve) => {
+      const r = mediaRecorderRef.current!;
+      if (r.state !== "inactive") {
+        r.onstop = () => resolve();
+        r.stop();
+      } else {
+        resolve();
+      }
+    });
+    await recordingDone;
+    const blob = new Blob(chunksRef.current, {
+      type: recordingType === "voice" ? "audio/webm" : "video/webm",
+    });
     const durStr = `${Math.floor(recordingSeconds / 60)}:${(recordingSeconds % 60).toString().padStart(2, "0")}`;
-    const newMsg: Message = {
-      id: "msg_" + Date.now(),
-      sender: "me",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      type: recordingType === "voice" ? "voice_note" : "video_note",
-      duration: durStr,
-      mediaUrl: recordingType === "voice" ? "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" : undefined
-    };
-    setMessages(prev => [...prev, newMsg]);
-    onSendMessage(newMsg);
+    try {
+      const url = await uploadChatMedia(blob, recordingType === "voice" ? "voice" : "video");
+      const newMsg: Message = {
+        id: "msg_" + Date.now(),
+        sender: "me",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        type: recordingType === "voice" ? "voice_note" : "video_note",
+        duration: durStr,
+        mediaUrl: url,
+      };
+      setMessages(prev => [...prev, newMsg]);
+      onSendMessage(newMsg);
+    } catch (err) {
+      console.error("[CHAT] Upload recording error:", err);
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(t => t.stop());
+      mediaStreamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
     setRecordingType(null);
   };
+
+  const bgPreset = CHAT_BACKGROUNDS.find(bg => bg.id === selectedBgId);
+  const rawBg = bgPreset?.value || "#f8fafc";
+  const isImageBg = rawBg.startsWith("url");
+  const containerBgStyle: React.CSSProperties = isImageBg
+    ? {
+        backgroundImage: rawBg.replace(/ center\/cover no-repeat$/, ''),
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      }
+    : { backgroundColor: rawBg };
 
   return (
     <div 
       className="flex-1 flex flex-col h-full overflow-hidden relative"
-      style={{ 
-        background: CHAT_BACKGROUNDS.find(bg => bg.id === selectedBgId)?.value || "#f8fafc",
-        backgroundSize: "cover",
-        backgroundPosition: "center"
-      }}
+      style={containerBgStyle}
     >
       {/* Subtle dark overlay for darker backgrounds to ensure text remains highly readable across the whole chat screen */}
       {selectedBgId !== "default" && selectedBgId !== "minimal_white" && selectedBgId !== "olive" && selectedBgId !== "pink" && (
@@ -448,11 +527,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       )}
 
       {/* HEADER BAR */}
-      <div className="relative text-white px-4 pt-5 pb-9 overflow-hidden shrink-0 z-10 bg-[#0a4d52]">
+      <div className="relative text-white px-4 pt-5 pb-9 shrink-0 z-10 bg-[#0a4d52]">
         {/* SVG Waves Background */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
         <svg
           viewBox="0 0 320 120"
-          className="absolute inset-0 w-full h-full z-0 pointer-events-none select-none"
+          className="w-full h-full"
           preserveAspectRatio="none"
         >
           <defs>
@@ -476,6 +556,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           <path d="M0,0 L0,100 C100,140 220,80 320,108 L320,0 Z" fill="url(#chatHeaderGrad2)" opacity="0.55" />
           <path d="M0,0 L0,88 C80,122 180,60 320,92 L320,0 Z" fill="url(#chatHeaderGrad3)" />
         </svg>
+        </div>
 
         <div className="relative z-10 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -483,7 +564,15 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               <ArrowLeft className="w-5 h-5 text-teal-100" />
             </button>
             <div className="relative">
-              <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" />
+              {chat.avatar ? (
+                <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" />
+              ) : (
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center border border-white/20">
+                  <span className="text-white font-bold text-xs">
+                    {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                  </span>
+                </div>
+              )}
               {chat.status === "online" && (
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#0a4d52]"></span>
               )}
@@ -497,20 +586,20 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           </div>
 
           {/* Call Trigger Buttons */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <button 
               onClick={() => onTriggerCall("audio")}
-              className="p-1.5 hover:bg-white/10 rounded-full transition-all text-teal-100 hover:text-white"
+              className="p-2 hover:bg-white/10 rounded-full transition-all text-teal-100 hover:text-white"
               title="Llamada de voz"
             >
-              <Phone className="w-4 h-4" />
+              <Phone className="w-5 h-5" />
             </button>
             <button 
               onClick={() => onTriggerCall("video")}
-              className="p-1.5 hover:bg-white/10 rounded-full transition-all text-teal-100 hover:text-white"
+              className="p-2 hover:bg-white/10 rounded-full transition-all text-teal-100 hover:text-white"
               title="Video llamada"
             >
-              <Video className="w-4 h-4" />
+              <Video className="w-5 h-5" />
             </button>
             {/* 3 dots menu */}
             <div className="relative">
@@ -526,8 +615,26 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               
               {showDropdown && (
                 <>
-                  <div className="fixed inset-0 z-30" onClick={() => setShowDropdown(false)} />
-                  <div className="absolute right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-40 min-w-[170px] animate-fade-in">
+                  <div className="fixed inset-0 z-[100]" onClick={() => setShowDropdown(false)} />
+                  <div className="fixed right-4 top-[72px] bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-[110] min-w-[170px] animate-fade-in">
+                    <button
+                      onClick={async () => {
+                        setShowDropdown(false);
+                        try {
+                          await clearMessages(chat.id);
+                          onBack();
+                        } catch (e) {
+                          console.error("[CHAT] clearMessages error:", e);
+                        }
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <rect x="4" y="6" width="16" height="14" rx="1" />
+                      </svg>
+                      Borrar mensajes
+                    </button>
                     <button
                       onClick={() => { setShowCustomizer(true); setShowDropdown(false); }}
                       className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
@@ -544,314 +651,52 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       </div>
 
       {/* CHAT CUSTOMIZER DRAWER */}
-      {showCustomizer && (
-        <div className="bg-slate-900 border-b border-slate-800 p-3 text-white space-y-3 z-20 shrink-0 max-h-[300px] overflow-y-auto shadow-lg animate-fade-in">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-            <span className="text-[10px] font-black uppercase tracking-wider text-teal-400 flex items-center gap-1">
-              <Palette className="w-3.5 h-3.5 text-teal-400 animate-pulse" /> Personalización del Chat
-            </span>
-            <button 
-              onClick={() => setShowCustomizer(false)}
-              className="text-slate-400 hover:text-white text-[10px] bg-slate-800 px-2 py-0.5 rounded cursor-pointer font-bold"
-            >
-              Cerrar
-            </button>
-          </div>
-
-          {/* Bubble style choices for me & them */}
-          <div className="grid grid-cols-2 gap-3 pt-1">
-            {/* COLOR ME */}
-            <div className="space-y-1.5 text-left">
-              <span className="text-[8px] font-extrabold text-teal-300 uppercase block">Mis Burbujas (Para Mí)</span>
-              <div className="grid grid-cols-3 gap-1">
-                {BUBBLE_PRESETS_ME.map((preset) => {
-                  const isSelected = bubbleColorMeId === preset.id;
-                  // Get simple color representation from css class
-                  const bgVal = preset.id === "teal_dark" ? "#0a4d52" :
-                                preset.id === "blue" ? "#2563eb" :
-                                preset.id === "purple" ? "#9333ea" :
-                                preset.id === "emerald" ? "#059669" :
-                                preset.id === "pink" ? "#ec4899" :
-                                preset.id === "orange" ? "#f97316" :
-                                preset.id === "red" ? "#dc2626" :
-                                preset.id === "slate" ? "#1e293b" : "#d97706";
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      title={preset.name}
-                      onClick={() => setBubbleColorMeId(preset.id)}
-                      className={`w-full h-7 rounded-lg border flex items-center justify-center transition-all cursor-pointer ${
-                        isSelected ? "border-white scale-110 shadow-md ring-2 ring-teal-500/50" : "border-white/10 hover:border-white/30"
-                      }`}
-                      style={{ backgroundColor: bgVal }}
-                    >
-                      {isSelected && <Check className="w-3.5 h-3.5 text-white stroke-[4]" />}
-                    </button>
-                  );
-                })}
-              </div>
-              <span className="text-[7px] text-slate-400 font-medium block truncate">
-                {BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId)?.name}
-              </span>
-            </div>
-
-            {/* COLOR THEM */}
-            <div className="space-y-1.5 text-left">
-              <span className="text-[8px] font-extrabold text-teal-300 uppercase block">Burbujas de {chat.name}</span>
-              <div className="grid grid-cols-3 gap-1">
-                {BUBBLE_PRESETS_THEM.map((preset) => {
-                  const isSelected = bubbleColorThemId === preset.id;
-                  const bgVal = preset.id === "white" ? "#ffffff" :
-                                preset.id === "slate_light" ? "#e2e8f0" :
-                                preset.id === "emerald_dark" ? "#059669" :
-                                preset.id === "blue_vibrant" ? "#2563eb" :
-                                preset.id === "purple_vibrant" ? "#7c3aed" :
-                                preset.id === "rose_vibrant" ? "#ec4899" :
-                                preset.id === "amber_dark" ? "#d97706" :
-                                preset.id === "red_vibrant" ? "#ef4444" : "#0f172a";
-                  const tickColor = preset.id === "white" || preset.id === "slate_light" || preset.id === "amber_dark" ? "text-slate-800" : "text-white";
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      title={preset.name}
-                      onClick={() => setBubbleColorThemId(preset.id)}
-                      className={`w-full h-7 rounded-lg border flex items-center justify-center transition-all cursor-pointer ${
-                        isSelected ? "border-teal-400 scale-110 shadow-md ring-2 ring-teal-500/50" : "border-white/10 hover:border-white/30"
-                      }`}
-                      style={{ backgroundColor: bgVal }}
-                    >
-                      {isSelected && <Check className={`w-3.5 h-3.5 ${tickColor} stroke-[4]`} />}
-                    </button>
-                  );
-                })}
-              </div>
-              <span className="text-[7px] text-slate-400 font-medium block truncate">
-                {BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId)?.name}
-              </span>
-            </div>
-          </div>
-
-          {/* Background selection - EXACTLY 20 BACKGROUNDS */}
-          <div className="space-y-1.5 text-left border-t border-slate-800 pt-2.5">
-            <span className="text-[8px] font-extrabold text-teal-300 uppercase block">20 Fondos para el Chat</span>
-            <div className="grid grid-cols-5 gap-1.5 max-h-[110px] overflow-y-auto p-0.5">
-              {CHAT_BACKGROUNDS.map((bg, idx) => {
-                const isSelected = selectedBgId === bg.id;
-                const previewStyle = bg.value.includes("url") 
-                  ? { background: bg.value, backgroundSize: "cover", backgroundPosition: "center" } 
-                  : { background: bg.value };
-                return (
-                  <button
-                    key={bg.id}
-                    type="button"
-                    title={bg.name}
-                    onClick={() => setSelectedBgId(bg.id)}
-                    className={`aspect-square rounded-lg border flex flex-col items-center justify-center relative overflow-hidden transition-all cursor-pointer ${
-                      isSelected ? "border-white scale-105 shadow-md ring-2 ring-teal-500/50" : "border-white/10 hover:border-white/30"
-                    }`}
-                    style={previewStyle}
-                  >
-                    <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[6px] text-white text-center py-0.5 leading-none truncate px-0.5">
-                      {idx + 1}. {bg.name.split(" ")[0]}
-                    </span>
-                    {isSelected && (
-                      <div className="w-4 h-4 rounded-full bg-[#14b8a6] flex items-center justify-center shadow-lg absolute">
-                        <Check className="w-2.5 h-2.5 text-white stroke-[4]" />
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+      <ChatCustomizer
+        showCustomizer={showCustomizer}
+        setShowCustomizer={setShowCustomizer}
+        selectedBgId={selectedBgId}
+        setSelectedBgId={setSelectedBgId}
+        bubbleColorMeId={bubbleColorMeId}
+        setBubbleColorMeId={setBubbleColorMeId}
+        bubbleColorThemId={bubbleColorThemId}
+        setBubbleColorThemId={setBubbleColorThemId}
+        chatName={chat.name}
+      />
 
       {/* MESSAGES LIST AREA */}
       <div 
         className="flex-1 p-4 overflow-y-auto space-y-3.5 relative transition-all duration-300 bg-transparent"
       >
         <div className="relative z-10 space-y-3.5">
-          {messages.map((msg) => {
-            const isMe = msg.sender === "me";
-            const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
-            const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
-
-            return (
-              <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
-                
-                {/* Message Bubble container */}
-                <div 
-                  className={`max-w-[85%] rounded-2xl px-3 py-2.5 shadow-sm text-xs relative cursor-pointer select-none transition-all duration-200 ${
-                    isMe ? activeMeBubble.css : activeThemBubble.css
-                  }`}
-                  onClick={() => setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id)}
-                >
-                {/* Text Messages */}
-                {msg.type === "text" && <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>}
-
-                {/* Sticker/Images */}
-                {msg.type === "image" && (
-                  <div className="space-y-1.5">
-                    <img src={msg.mediaUrl} alt="Sticker" className="rounded-xl w-full max-h-40 object-cover border border-slate-100/10" />
-                    {msg.fileName && <span className="text-[9px] opacity-75 block font-mono">{msg.fileName}</span>}
-                  </div>
-                )}
-
-                {/* Video Messages */}
-                {msg.type === "video" && (
-                  <div className="space-y-1.5 w-44">
-                    <div className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center border border-white/10">
-                      <video src={msg.mediaUrl} controls className="w-full h-full object-cover" />
-                    </div>
-                    <span className="text-[9px] font-mono opacity-85 block truncate">🎬 {msg.fileName} ({msg.fileSize})</span>
-                  </div>
-                )}
-
-                {/* Audio/Music Messages */}
-                {msg.type === "audio" && (
-                  <div className="flex items-center gap-2.5 p-1 bg-black/5 dark:bg-white/5 rounded-xl min-w-[180px]">
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setIsPlayingAudio(isPlayingAudio === msg.id ? null : msg.id);
-                      }}
-                      className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white shrink-0 hover:bg-white/30"
-                    >
-                      {isPlayingAudio === msg.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-                    </button>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[10px] font-semibold truncate text-slate-100">{msg.fileName}</p>
-                      <span className="text-[9px] opacity-70 block font-mono">{msg.fileSize} • {msg.duration}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Voice notes */}
-                {msg.type === "voice_note" && (
-                  <div className="flex items-center gap-2 w-44">
-                    <Mic className="w-4 h-4 shrink-0" />
-                    <div className="flex-1 flex items-center gap-1.5">
-                      <div className="flex-1 h-3 flex items-center gap-0.5">
-                        <span className="h-2 w-1 bg-white/40 rounded-full animate-pulse"></span>
-                        <span className="h-3 w-1 bg-white/60 rounded-full"></span>
-                        <span className="h-1.5 w-1 bg-white/40 rounded-full"></span>
-                        <span className="h-2.5 w-1 bg-white/60 rounded-full"></span>
-                        <span className="h-3 w-1 bg-white/65 rounded-full"></span>
-                      </div>
-                      <span className="text-[9px] font-mono whitespace-nowrap">{msg.duration || "0:12"}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Video Note (Circular design matching WhatsApp video notes) */}
-                {msg.type === "video_note" && (
-                  <div className="space-y-1.5 flex flex-col items-center">
-                    <div className="w-24 h-24 rounded-full border-4 border-[#14b8a6] overflow-hidden bg-teal-950 flex items-center justify-center relative shadow-inner">
-                      <div className="absolute inset-0 bg-gradient-to-tr from-teal-500/20 to-transparent"></div>
-                      <VideoIcon className="w-8 h-8 text-white/85 animate-pulse" />
-                    </div>
-                    <span className="text-[9px] font-bold tracking-tight opacity-90">📹 Nota de Video ({msg.duration || "0:08"})</span>
-                  </div>
-                )}
-
-                {/* Polls */}
-                {msg.type === "poll" && (
-                  <div className="space-y-3 min-w-[200px] text-slate-800 p-1 bg-white rounded-xl">
-                    <div className="flex items-start gap-1.5 border-b border-slate-100 pb-1.5">
-                      <BarChart2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
-                      <h4 className="text-[11px] font-bold text-slate-900 leading-snug">{msg.pollQuestion}</h4>
-                    </div>
-                    <div className="space-y-1.5">
-                      {msg.pollOptions?.map((opt) => {
-                        const hasVoted = opt.votedUsers.includes("me");
-                        return (
-                          <button
-                            key={opt.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleVote(msg.id, opt.id);
-                            }}
-                            className={`w-full text-left p-2 rounded-lg border text-[10px] transition-all relative overflow-hidden flex items-center justify-between ${
-                              hasVoted 
-                                ? "border-[#14b8a6] bg-teal-50/50" 
-                                : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
-                            }`}
-                          >
-                            <span className="relative z-10 font-semibold">{opt.text}</span>
-                            <span className="relative z-10 font-mono font-bold bg-[#10646a]/10 text-[#10646a] px-1.5 py-0.5 rounded-full">
-                              {opt.votes} v
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <span className="text-[9px] text-slate-400 block text-right">Encuesta interactiva</span>
-                  </div>
-                )}
-
-                {/* Timestamp & double check */}
-                <div className="flex items-center justify-end gap-1 mt-1 text-[8px] opacity-70">
-                  <span>{msg.timestamp}</span>
-                  {isMe && <span className="text-cyan-300">✓✓</span>}
-                </div>
-              </div>
-
-              {/* Message Reactions display bar */}
-              {msg.reactions && Object.keys(msg.reactions).length > 0 && (
-                <div className={`flex gap-1 mt-[-6px] z-10 ${isMe ? "mr-2" : "ml-2"}`}>
-                  {Object.entries(msg.reactions).map(([emo, count]) => (
-                    <span 
-                      key={emo} 
-                      className="bg-white px-1.5 py-0.5 rounded-full text-[9px] border border-slate-100 shadow-sm flex items-center gap-0.5 font-bold text-slate-600"
-                    >
-                      {emo} <span className="text-[8px] text-slate-400">{count}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Interactive Popup reaction menu when clicked */}
-              {activeReactionMenu === msg.id && (
-                <div className={`absolute z-30 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-200/80 shadow-xl flex gap-2 items-center -top-8 ${
-                  isMe ? "right-2" : "left-2"
-                }`}>
-                  {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
-                    <button
-                      key={emo}
-                      onClick={() => handleAddReaction(msg.id, emo)}
-                      className="text-sm hover:scale-125 transition-transform"
-                    >
-                      {emo}
-                    </button>
-                  ))}
-                  <div className="w-[1px] h-3 bg-slate-200"></div>
-                  {/* Share/Forward Simulation button */}
-                  <button 
-                    onClick={() => {
-                      alert(`¡Mensaje reenviado exitosamente!`);
-                      setActiveReactionMenu(null);
-                    }}
-                    className="text-[9px] font-bold text-teal-600 hover:underline px-1"
-                  >
-                    Reenviar
-                  </button>
-                  {/* Delete button (only for own messages) */}
-                  {isMe && (
-                    <button
-                      onClick={() => handleDeleteMessage(msg.id)}
-                      className="text-[9px] font-bold text-rose-500 hover:underline px-1"
-                    >
-                      Eliminar
-                    </button>
-                  )}
-                </div>
-              )}
+          {messages.length > renderLimit && (
+            <div className="flex justify-center pb-2">
+              <button
+                onClick={() => setRenderLimit((prev) => prev + 50)}
+                className="text-[10px] font-bold text-teal-400 hover:text-teal-300 bg-black/30 px-4 py-1.5 rounded-full transition-all"
+              >
+                Cargar mensajes anteriores
+              </button>
             </div>
-          );
-        })}
+          )}
+          {visibleMessages.map((msg) => {
+            const isMe = msg.sender === "me";
+            return (
+              <MessageBubble
+                key={msg.id}
+                msg={msg}
+                isMe={isMe}
+                activeReactionMenu={activeReactionMenu}
+                setActiveReactionMenu={setActiveReactionMenu}
+                isPlayingAudio={isPlayingAudio}
+                setIsPlayingAudio={setIsPlayingAudio}
+                handleVote={handleVote}
+                handleAddReaction={handleAddReaction}
+                handleDeleteMessage={handleDeleteMessage}
+                bubbleColorMeId={bubbleColorMeId}
+                bubbleColorThemId={bubbleColorThemId}
+              />
+            );
+          })}
         </div>
         <div ref={messagesEndRef} />
       </div>
@@ -870,7 +715,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           </button>
 
           <button 
-            onClick={handleSendVideo}
+            onClick={() => { setShowAttachments(false); triggerFilePick("video/*", "video"); }}
             className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
           >
             <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center text-rose-600 group-hover:scale-110 transition-transform shadow-sm">
@@ -880,7 +725,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           </button>
 
           <button 
-            onClick={handleSendMusic}
+            onClick={() => { setShowAttachments(false); triggerFilePick("audio/*", "audio"); }}
             className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
           >
             <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center text-cyan-600 group-hover:scale-110 transition-transform shadow-sm">

@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase";
 import { apiUrl } from "../lib/api";
+import toast from "react-hot-toast";
 
 export type Profile = {
   id: string;
@@ -21,92 +22,100 @@ export type Profile = {
   updated_at: string;
 };
 
+async function trySignIn(email: string, password: string) {
+  const result = await supabase.auth.signInWithPassword({ email, password });
+  if (result.error) console.debug("[AUTH] signIn fail:", email, result.error.message);
+  return result;
+}
+
 export async function login(identifier: string, password: string) {
   const input = identifier.toLowerCase().trim().replace(/^@/, "");
+  const cleanPhone = input.replace(/[\s+()\-]/g, "");
 
-  async function trySignIn(email: string) {
-    return supabase.auth.signInWithPassword({ email, password });
+  console.debug("[LOGIN] Buscando perfil para:", input);
+
+  const { data: profiles, error: searchErr } = await supabase
+    .from("profiles")
+    .select("id, username, phone_number, name, avatar_url, bio")
+    .or(`username.eq.${input},phone_number.eq.${cleanPhone}`)
+    .limit(1);
+
+  if (searchErr) {
+    console.error("[LOGIN] Error búsqueda:", searchErr);
+    throw new Error("Error al buscar usuario");
   }
 
-  // Try direct Supabase login first (assumes username)
-  let signInResult = await trySignIn(`${input}@redon.app`);
-  let username = input;
+  let profile = profiles?.[0] || null;
 
-  // If direct login failed, look up profile in Supabase directly (handles phone numbers)
-  if (signInResult.error) {
-    let profile: any = null;
-    const { data: byUsername } = await supabase
+  if (!profile && cleanPhone.length >= 4) {
+    console.debug("[LOGIN] Fallback ILIKE para:", cleanPhone);
+    const { data: all } = await supabase
       .from("profiles")
-      .select("username, email, name, phone_number")
-      .eq("username", input)
-      .maybeSingle();
-    if (byUsername) {
-      profile = byUsername;
-    } else {
-      const last7 = input.replace(/\D/g, "").slice(-7);
-      if (last7.length >= 4) {
-        const { data: allProfiles } = await supabase
-          .from("profiles")
-          .select("username, email, name, phone_number");
-        profile = (allProfiles || []).find((p) => {
-          const digits = (p.phone_number || "").replace(/\D/g, "");
-          return digits.slice(-7) === last7;
-        }) || null;
-      }
-    }
-    if (!profile) {
-      throw new Error(
-        signInResult.error.message.includes("Invalid login credentials")
-          ? 'Contraseña incorrecta. Usa "Olvidé mi contraseña" para recuperarla.'
-          : "Error al iniciar sesión: " + signInResult.error.message
-      );
-    }
-    username = profile.username || profile.email?.replace(/@.*$/, "") || input;
-    signInResult = await trySignIn(profile.email || `${username}@redon.app`);
+      .select("id, username, phone_number, name, avatar_url, bio")
+      .ilike("phone_number", `%${cleanPhone}%`)
+      .limit(20);
+    profile = all?.find((p) => p.phone_number && p.phone_number.replace(/[\s+()\-]/g, "").includes(cleanPhone)) || null;
   }
 
-  if (signInResult.error) {
-    if (signInResult.error.message.includes("Invalid login credentials")) {
-      throw new Error(
-        'Contraseña incorrecta. Usa "Olvidé mi contraseña" para recuperarla.'
-      );
+  if (!profile) {
+    throw new Error("Usuario o teléfono no encontrado. Verifica tus datos.");
+  }
+
+  console.debug("[LOGIN] Perfil encontrado:", profile.username);
+
+  const { data, error } = await trySignIn(`${profile.username}@redon.app`, password);
+
+  if (error) {
+    if (error.message.includes("Invalid login credentials")) {
+      throw new Error('Contraseña incorrecta. Usa "Olvidé mi contraseña" para recuperarla.');
     }
-    if (
-      signInResult.error.message.toLowerCase().includes("confirm") ||
-      signInResult.error.message.toLowerCase().includes("email not confirmed")
-    ) {
+
+    if (error.message.toLowerCase().includes("confirm") || error.message.toLowerCase().includes("email not confirmed")) {
+      console.debug("[LOGIN] Auto-confirm necesario");
       try {
         await fetch(apiUrl("/api/auth/auto-confirm"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: signInResult.data?.user?.id }),
+          body: JSON.stringify({ userId: profile.id }),
         });
       } catch (e) {
-        console.warn("[LOGIN] Auto-confirm failed:", e);
+        console.warn("[LOGIN] Auto-confirm falló:", e);
       }
-      const retry = await trySignIn(`${username}@redon.app`);
+
+      const retry = await trySignIn(`${profile.username}@redon.app`, password);
       if (retry.error) {
         if (retry.error.message.includes("Invalid login credentials"))
-          throw new Error(
-            'Contraseña incorrecta. Usa "Olvidé mi contraseña" para recuperarla.'
-          );
+          throw new Error('Contraseña incorrecta. Usa "Olvidé mi contraseña" para recuperarla.');
         throw new Error("Error de autenticación: " + retry.error.message);
       }
+
+      toast.success("Sesión iniciada");
       return {
         token: retry.data.session.access_token,
-        user: { id: retry.data.user.id },
+        user: {
+          id: retry.data.user.id,
+          name: profile.name,
+          username: profile.username,
+          phone: profile.phone_number,
+          avatar: profile.avatar_url || "",
+          bio: profile.bio || "",
+        },
       };
     }
-    throw new Error(
-      "Error al iniciar sesión: " +
-        signInResult.error.message +
-        ". Si el problema persiste, regístrate de nuevo."
-    );
+
+    throw new Error("Error al iniciar sesión: " + error.message + ". Si el problema persiste, regístrate de nuevo.");
   }
 
   return {
-    token: signInResult.data.session.access_token,
-    user: { id: signInResult.data.user.id },
+    token: data.session.access_token,
+    user: {
+      id: data.user.id,
+      name: profile.name,
+      username: profile.username,
+      phone: profile.phone_number,
+      avatar: profile.avatar_url || "",
+      bio: profile.bio || "",
+    },
   };
 }
 
@@ -122,26 +131,17 @@ export async function register(
   const cleanEmail = realEmail?.trim().toLowerCase() || "";
 
   if (!/^[a-z0-9_.-]+$/.test(cleanUsername)) {
-    throw new Error(
-      "El usuario solo puede contener letras, números, guiones bajos (_), puntos (.) y guiones (-). Sin espacios ni @."
-    );
+    throw new Error("El usuario solo puede contener letras, números, guiones bajos (_), puntos (.) y guiones (-). Sin espacios ni @.");
   }
-  if (cleanUsername.length < 2)
-    throw new Error("El usuario debe tener al menos 2 caracteres");
+  if (cleanUsername.length < 2) throw new Error("El usuario debe tener al menos 2 caracteres");
 
-  const { data: existingUsername } = await supabase
+  const existing = await supabase
     .from("profiles")
-    .select("username")
-    .eq("username", cleanUsername)
+    .select("id")
+    .or(`username.eq.${cleanUsername},phone_number.eq.${cleanPhone}`)
     .maybeSingle();
-  if (existingUsername) throw new Error("El usuario ya está registrado");
 
-  const { data: existingPhone } = await supabase
-    .from("profiles")
-    .select("phone_number")
-    .eq("phone_number", cleanPhone)
-    .maybeSingle();
-  if (existingPhone) throw new Error("El teléfono ya está registrado");
+  if (existing.data) throw new Error("El usuario o teléfono ya está registrado");
 
   const { data, error } = await supabase.auth.signUp({
     email: `${cleanUsername}@redon.app`,
@@ -149,7 +149,7 @@ export async function register(
   });
 
   if (error) {
-    console.error("[REGISTER] Supabase signUp error:", error.status, error.message, error);
+    console.error("[REGISTER] signUp error:", error);
     throw new Error(error.message);
   }
   if (!data.user) throw new Error("Error al crear usuario");
@@ -161,7 +161,7 @@ export async function register(
       body: JSON.stringify({ userId: data.user.id }),
     });
   } catch (e) {
-    console.warn("[REGISTER] Auto-confirm failed:", e);
+    console.warn("[REGISTER] Auto-confirm falló:", e);
   }
 
   const { error: upsertError } = await supabase.from("profiles").upsert({
@@ -173,46 +173,19 @@ export async function register(
     bio: "Disponible en RED ON",
     ...(cleanEmail ? { real_email: cleanEmail } : {}),
   });
+
   if (upsertError && !upsertError.message?.includes("duplicate key")) {
-    console.error("[REGISTER] Upsert profile error:", upsertError);
+    console.error("[REGISTER] Upsert error:", upsertError);
     throw new Error(upsertError.message || "Error al crear perfil");
   }
 
   let token = data.session?.access_token || "";
   if (!token) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const signInRes = await supabase.auth.signInWithPassword({
-          email: `${cleanUsername}@redon.app`,
-          password,
-        });
-        if (signInRes.data.session) {
-          token = signInRes.data.session.access_token;
-          break;
-        }
-      } catch (e: any) {
-        if (
-          e?.message?.toLowerCase().includes("confirm") ||
-          e?.message?.toLowerCase().includes("email not confirmed")
-        ) {
-          await fetch(apiUrl("/api/auth/auto-confirm"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId: data.user.id }),
-          }).catch(() => {});
-          await new Promise((r) => setTimeout(r, 800));
-          continue;
-        }
-        if (e?.message?.includes("Invalid login credentials")) {
-          await new Promise((r) => setTimeout(r, 1000));
-          continue;
-        }
-        console.warn("[REGISTER] Sign in attempt", attempt, "failed:", e);
-        if (attempt < 2) await new Promise((r) => setTimeout(r, 1000));
-      }
-    }
+    const signInRes = await trySignIn(`${cleanUsername}@redon.app`, password);
+    if (signInRes.data.session) token = signInRes.data.session.access_token;
   }
 
+  toast.success("Cuenta creada exitosamente");
   return {
     token,
     user: {
@@ -241,31 +214,22 @@ export async function resetPassword(identifier: string) {
 
     if (profile) {
       userFound = true;
-      if (profile.real_email) {
-        email = profile.real_email;
-      } else {
-        email = `${profile.username}@redon.app`;
-      }
+      email = profile.real_email ? profile.real_email : `${profile.username}@redon.app`;
     }
-  } catch {
-    // If lookup fails, try the raw input as email
-  }
+  } catch {}
 
-  if (!userFound) {
-    throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
-  }
+  if (!userFound) throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
 
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: `${window.location.origin}/reset-password`,
   });
 
   if (error) {
-    if (error.message.includes("Email not found")) {
-      throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
-    }
+    if (error.message.includes("Email not found")) throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
     throw new Error("Error al enviar el correo de recuperación: " + error.message);
   }
 
+  toast.success("Correo de recuperación enviado");
   return { email };
 }
 

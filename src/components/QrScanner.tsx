@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { apiUrl } from "../lib/api";
 import { Check, UserPlus, X, Loader2 } from "lucide-react";
 import jsQR from "jsqr";
 import { Camera } from "@capacitor/camera";
+import { supabase } from "../lib/supabase";
+import { createChat } from "../services/chats";
+import { addContact } from "../services/contacts";
+import { useSupabase } from "../contexts/SupabaseContext";
 
 interface QrScannerProps {
   userName: string;
@@ -18,21 +21,31 @@ interface FoundProfile {
   name: string;
   username?: string;
   phone_number?: string;
-  avatar?: string;
   avatar_url?: string;
   bio?: string;
 }
 
 export default function QrScanner({ userName, userPhone, onBack, onContactAdded }: QrScannerProps) {
+  const { user } = useSupabase();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanLoopRef = useRef<number>(0);
+  const scanCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [status, setStatus] = useState<ScanStatus>("scanning");
   const [foundProfile, setFoundProfile] = useState<FoundProfile | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [cameraError, setCameraError] = useState(false);
+
+  const getCurrentUserId = useCallback(async (): Promise<string | null> => {
+    try {
+      const { data: { user: u } } = await supabase.auth.getUser();
+      return u?.id || null;
+    } catch {
+      return user?.id || null;
+    }
+  }, [user]);
 
   const stopCamera = useCallback(() => {
     if (scanLoopRef.current) cancelAnimationFrame(scanLoopRef.current);
@@ -58,14 +71,14 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
         }
 
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
         });
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          await videoRef.current.play();
+          try { await videoRef.current.play(); } catch (e) {}
           scanLoop();
         }
       } catch (e: any) {
@@ -88,17 +101,21 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
     }
 
     function scanLoop() {
+      if (cancelled) return;
       const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < 2) {
+      if (!video || video.readyState < video.HAVE_ENOUGH_DATA) {
         scanLoopRef.current = requestAnimationFrame(scanLoop);
         return;
       }
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      if (!ctx) return;
 
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      if (!scanCanvasRef.current) scanCanvasRef.current = document.createElement("canvas");
+      const canvas = scanCanvasRef.current;
+      const scale = 0.5;
+      canvas.width = video.videoWidth * scale;
+      canvas.height = video.videoHeight * scale;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) { scanLoopRef.current = requestAnimationFrame(scanLoop); return; }
+
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const code = jsQR(imageData.data, imageData.width, imageData.height, {
@@ -117,6 +134,7 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
 
     return () => {
       cancelled = true;
+      if (scanLoopRef.current) cancelAnimationFrame(scanLoopRef.current);
       stopCamera();
     };
   }, []);
@@ -126,6 +144,7 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
 
     try {
       let userId = "";
+      let groupCode = "";
 
       if (trimmed.startsWith("redon://user/")) {
         userId = trimmed.replace("redon://user/", "").split("?")[0];
@@ -135,8 +154,9 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
         setTimeout(() => setStatus("scanning"), 2000);
         return;
       } else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
-        userId = trimmed;
+        userId = trimmed.toLowerCase();
       } else if (trimmed.length >= 4 && trimmed.length <= 8) {
+        groupCode = trimmed.toUpperCase();
         setErrorMsg("Código de grupo no implementado aún");
         setStatus("error");
         setTimeout(() => setStatus("scanning"), 2000);
@@ -148,19 +168,21 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
         return;
       }
 
-      const res = await fetch(apiUrl("/api/data/lookup-profile"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
-      });
-      if (!res.ok) {
+      // Lookup profile directamente desde Supabase
+      stopCamera();
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("id, name, username, phone_number, avatar_url, bio")
+        .eq("id", userId)
+        .single();
+
+      if (profileError || !profile) {
         setErrorMsg("Usuario no encontrado");
         setStatus("error");
         setTimeout(() => setStatus("scanning"), 2000);
         return;
       }
-      const profile: FoundProfile = await res.json();
-      stopCamera();
+
       setFoundProfile(profile);
       setStatus("found");
     } catch (e) {
@@ -181,35 +203,29 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
         return;
       }
 
-      await fetch(apiUrl("/api/data/create-chat"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: foundProfile.name,
-          avatar: foundProfile.avatar || foundProfile.avatar_url || "",
-          username: foundProfile.username || "",
-          phone: foundProfile.phone_number || "",
-          bio: foundProfile.bio || "",
-          profile_id: foundProfile.id,
-          admin_id: currentUserId,
-        }),
-      });
+      // Insertar en tabla contacts
+      await addContact(
+        currentUserId,
+        foundProfile.id,
+        foundProfile.name,
+        foundProfile.avatar_url || "",
+        foundProfile.phone_number || ""
+      );
 
-      await fetch(apiUrl("/api/data/add-contact"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: currentUserId,
-          contact_user_id: foundProfile.id,
-          name: foundProfile.name,
-          avatar: foundProfile.avatar || foundProfile.avatar_url || "",
-          bio: foundProfile.bio || "",
-        }),
+      // Crear chat
+      await createChat({
+        name: foundProfile.name,
+        avatar: foundProfile.avatar_url || "",
+        username: foundProfile.username || "",
+        phone: foundProfile.phone_number || "",
+        bio: foundProfile.bio || "",
+        profile_id: foundProfile.id,
+        admin_id: currentUserId,
       });
 
       onContactAdded(
         foundProfile.name,
-        foundProfile.avatar || foundProfile.avatar_url || ""
+        foundProfile.avatar_url || ""
       );
     } catch (e) {
       console.error("Add contact error:", e);
@@ -287,9 +303,9 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
           <div className="bg-white rounded-2xl p-5 w-full max-w-xs shadow-2xl animate-fade-in space-y-4">
             <div className="flex flex-col items-center text-center gap-2">
               <div className="w-14 h-14 rounded-full bg-teal-100 flex items-center justify-center overflow-hidden">
-                {foundProfile.avatar || foundProfile.avatar_url ? (
+                {foundProfile.avatar_url ? (
                   <img
-                    src={foundProfile.avatar || foundProfile.avatar_url}
+                    src={foundProfile.avatar_url}
                     alt=""
                     className="w-full h-full object-cover"
                   />
@@ -326,14 +342,4 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
       )}
     </div>
   );
-}
-
-async function getCurrentUserId(): Promise<string | null> {
-  try {
-    const { supabase } = await import("../lib/supabase");
-    const { data: { user } } = await supabase.auth.getUser();
-    return user?.id || null;
-  } catch {
-    return null;
-  }
 }

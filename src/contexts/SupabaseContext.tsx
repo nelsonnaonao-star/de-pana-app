@@ -1,11 +1,12 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { supabase } from "../lib/supabase";
 import { Profile, signOut as authSignOut } from "../services/auth";
-import { Chat } from "../services/chats";
-import { Contact } from "../services/contacts";
-import { Call } from "../services/calls";
-import { getAllUserData, getProfileFromServer, getChatsFromServer, getContactsFromServer, getCallsFromServer } from "../services/server-api";
+import { Chat, getChats } from "../services/chats";
+import { Contact, getContacts } from "../services/contacts";
+import { Call, getCalls } from "../services/calls";
 import { registerPushNotifications, unregisterPushNotifications } from "../services/pushNotifications";
+import { setupCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
+import toast from "react-hot-toast";
 
 interface SupabaseContextType {
   user: any | null;
@@ -31,6 +32,8 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const [calls, setCalls] = useState<Call[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const loadedUserId = useRef<string | null>(null);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       console.log("[SUPABASE] Session on mount:", session ? "EXISTS" : "NULL", "Error:", error);
@@ -43,10 +46,12 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user || null);
-      if (session?.user) {
-        loadUserData(session.user.id);
-      } else if (event !== "SIGNED_UP") {
+      const userId = session?.user?.id;
+      if (userId && userId !== loadedUserId.current) {
+        setUser(session.user);
+        loadUserData(userId);
+      } else if (!userId && event !== "SIGNED_UP") {
+        setUser(null);
         setProfile(null);
         setChats([]);
         setContacts([]);
@@ -59,61 +64,63 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function loadUserData(userId: string) {
+    loadedUserId.current = userId;
     try {
-      const data = await getAllUserData(userId);
-      setProfile(data.profile);
-      setChats(data.chats);
-      setContacts(data.contacts);
-      setCalls(data.calls);
-    } catch (err) {
-      console.warn("loadUserData: /all endpoint failed, trying individual endpoints:", err);
-      try {
-        const [prof, ch, cont, cl] = await Promise.all([
-          getProfileFromServer(userId).catch(() => null),
-          getChatsFromServer(userId).catch(() => []),
-          getContactsFromServer(userId).catch(() => []),
-          getCallsFromServer(userId).catch(() => []),
-        ]);
-        setProfile(prof);
-        setChats(ch);
-        setContacts(cont);
-        setCalls(cl);
-      } catch (e) {
-        console.error("loadUserData: individual endpoints also failed:", e);
+      const [profilesResult, chatsResult, contactsResult, callsResult] = await Promise.allSettled([
+        supabase.from("profiles").select("*").eq("id", userId).single(),
+        getChats(userId),
+        getContacts(userId),
+        getCalls(userId),
+      ]);
+
+      if (profilesResult.status === "fulfilled" && profilesResult.value.error) {
+        console.warn("[SUPABASE] Profile fetch error:", profilesResult.value.error);
       }
+      setProfile(profilesResult.status === "fulfilled" ? (profilesResult.value.data as Profile) || null : null);
+      setChats(chatsResult.status === "fulfilled" ? chatsResult.value || [] : []);
+      setContacts(contactsResult.status === "fulfilled" ? contactsResult.value || [] : []);
+      setCalls(callsResult.status === "fulfilled" ? callsResult.value || [] : []);
+    } catch (err) {
+      console.error("[SUPABASE] loadUserData error:", err);
     } finally {
       setLoading(false);
     }
 
     registerPushNotifications(userId).catch(() => {});
+    setupCapacitorPush(userId).catch(() => {});
   }
 
   const refreshProfile = async () => {
     if (!user) return;
-    const prof = await getProfileFromServer(user.id);
-    setProfile(prof);
+    const { data } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+    setProfile(data as Profile);
   };
 
   const refreshChats = async () => {
     if (!user) return;
-    const ch = await getChatsFromServer(user.id);
+    const ch = await getChats(user.id);
     setChats(ch);
   };
 
   const refreshContacts = async () => {
     if (!user) return;
-    const cont = await getContactsFromServer(user.id);
+    const cont = await getContacts(user.id);
     setContacts(cont);
   };
 
   const refreshCalls = async () => {
     if (!user) return;
-    const cl = await getCallsFromServer(user.id);
+    const cl = await getCalls(user.id);
     setCalls(cl);
   };
 
   const logout = async () => {
     await unregisterPushNotifications();
+    await unregisterCapacitorPush();
     await authSignOut();
     setUser(null);
     setProfile(null);

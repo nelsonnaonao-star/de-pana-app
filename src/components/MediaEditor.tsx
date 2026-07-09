@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
-  Sparkles, ImageIcon, Video, Scissors, RefreshCw, Layers, 
-  Check, Play, Pause, Music, Volume2, Type, Tag, Palette, 
-  Sliders, ChevronRight, Share2, Award, Zap, Phone, Download, 
-  Eye, Heart, Upload, X, Lock, Unlock, Smile, Compass, AlertCircle
+  Sparkles, ImageIcon, Video, Music, Volume2, 
+  Check, Play, Pause, Phone, X, Award, Zap
 } from "lucide-react";
 import { BusinessFlyer } from "./BusinessPanel";
+import { STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED, PRESET_MUSIC, ANIMATION_PRESETS, STICKER_TEMPLATES_PRO } from "./editor/editorConstants";
+import EditorTabPanels from "./editor/EditorTabPanels";
 
 interface MediaEditorProps {
   onPublishFlyer: (flyer: BusinessFlyer) => void;
@@ -16,54 +16,6 @@ interface MediaEditorProps {
   initialMediaType?: "image" | "video";
 }
 
-const STATIC_PRESET_IMAGES = [
-  { url: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=400&q=80", label: "Zapatos Deportivos 👟" },
-  { url: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=400&q=80", label: "Auriculares Pro 🎧" },
-  { url: "https://images.unsplash.com/photo-1485968579580-b6d095142e6e?auto=format&fit=crop&w=400&q=80", label: "Hamburguesa Gourmet 🍔" },
-  { url: "https://images.unsplash.com/photo-1511556532299-8f662fc26c06?auto=format&fit=crop&w=400&q=80", label: "Prendas de Moda 👗" }
-];
-
-const PRESET_FILTERS_EXPANDED = [
-  { id: "normal", name: "Original 💎", css: "", desc: "Sin alteraciones" },
-  { id: "caribe", name: "Caribe Vívido 🌴", css: "saturate-150 contrast-110 brightness-105", desc: "Saturación tropical alta" },
-  { id: "retro", name: "Retro VHS 📼", css: "sepia saturate-115 contrast-90 hue-rotate-15", desc: "Aspecto análogo cálido" },
-  { id: "cine", name: "Cine de Oro 🎬", css: "contrast-130 brightness-95 saturate-120", desc: "Contraste dramático de película" },
-  { id: "polar", name: "Fresco Polar ❄️", css: "hue-rotate-180 saturate-120 contrast-105", desc: "Tonos fríos cian" },
-  { id: "bw", name: "B&N Editorial 🖤", css: "grayscale contrast-130 brightness-100", desc: "Monocromático de alta costura" },
-  { id: "sunset", name: "Atardecer Cálido 🌅", css: "sepia-30 saturate-135 hue-rotate-340 brightness-105", desc: "Brillo dorado nostálgico" },
-  { id: "cyber", name: "Cyberpunk Neon 👾", css: "hue-rotate-290 saturate-200 brightness-110 contrast-125", desc: "Psicodélico futurista" },
-  { id: "dream", name: "Ensueño Glow ✨", css: "brightness-110 contrast-95 saturate-125 blur-[0.5px]", desc: "Atmósfera suave y mágica" },
-  { id: "drama", name: "Drama Intenso 🎭", css: "contrast-160 brightness-90 saturate-75", desc: "Sombras profundas editoriales" },
-  { id: "forest", name: "Místico Bosque 🌲", css: "hue-rotate-90 saturate-110 brightness-95", desc: "Tonos verdosos orgánicos" }
-];
-
-const STICKER_TEMPLATES_PRO = [
-  { id: "oferta", text: "🔥 ¡SÚPER OFERTA!", bg: "bg-red-600 text-white border-2 border-white font-black animate-bounce" },
-  { id: "nuevo", text: "⚡ NUEVO MODELO", bg: "bg-teal-500 text-white border-2 border-white font-black" },
-  { id: "top", text: "★ TOP VENTAS ★", bg: "bg-amber-400 text-slate-950 border-2 border-slate-950 font-black animate-pulse" },
-  { id: "delivery", text: "ENVÍO GRATUITO 🚚", bg: "bg-indigo-600 text-white border-2 border-white font-black" },
-  { id: "vip", text: "💎 DESCUENTO VIP", bg: "bg-purple-600 text-white border-2 border-white font-black" },
-  { id: "last", text: "⏳ ÚLTIMOS CUPOS", bg: "bg-orange-500 text-white border-2 border-white font-black" },
-  { id: "quality", text: "🛡️ GARANTIZADO 100%", bg: "bg-blue-600 text-white border-2 border-white font-black" },
-  { id: "promo", text: "🎁 COMPRA & GANA", bg: "bg-pink-600 text-white border-2 border-white font-black" }
-];
-
-const PRESET_MUSIC = [
-  { id: "none", name: "Sin Música", url: "" },
-  { id: "lofi", name: "Lofi Calm Beats ☕", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" },
-  { id: "pop", name: "Chill Pop Emprendedor 🚀", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" },
-  { id: "synth", name: "Synthwave Sunset 🌆", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" }
-];
-
-const ANIMATION_PRESETS = [
-  { id: "none", name: "Estático", class: "" },
-  { id: "bounce", name: "Rebote Divertido 🦘", class: "animate-bounce" },
-  { id: "pulse", name: "Latido Suave 💓", class: "animate-pulse" },
-  { id: "typing", name: "Máquina de escribir ⌨️", class: "animate-typing" },
-  { id: "zoom", name: "Efecto Pop 🔎", class: "animate-zoom-in-out" },
-  { id: "shake", name: "Vibración Alerta ⚠️", class: "animate-vibrate" },
-  { id: "slide", name: "Entrada Deslizante ➔", class: "animate-slide-right" }
-];
 
 export default function MediaEditor({ 
   onPublishFlyer, 
@@ -561,473 +513,43 @@ export default function MediaEditor({
       </div>
 
       {/* 4. SUBTAB DETAIL CONTROLS SCROLL CONTENT */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-[#0c1617]/90">
-        
-        {/* ======================================= */}
-        {/* TAB 1: 10+ FILTROS EXPANDIDOS (PRESETS) */}
-        {/* ======================================= */}
-        {editorTab === "presets" && (
-          <div className="space-y-3 animate-fade-in">
-            <div className="flex items-center justify-between">
-              <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">
-                1. Elige una Imagen Base o Sube la Tuya
-              </span>
-              
-              {/* Custom Upload input */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="bg-[#14b8a6] hover:bg-[#1bc3bd] text-white text-[8px] font-black px-2 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer shadow-sm"
-              >
-                <Upload className="w-3 h-3" /> Subir de mi Celular
-              </button>
-              <input 
-                type="file"
-                ref={fileInputRef}
-                accept="image/*"
-                onChange={handleImageFileChange}
-                className="hidden"
-              />
-            </div>
-
-            {/* Quick preset background image cards */}
-            {!uploadedImage && (
-              <div className="grid grid-cols-4 gap-1.5">
-                {STATIC_PRESET_IMAGES.map((img, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setActivePresetIdx(idx)}
-                    className={`aspect-video rounded-lg overflow-hidden border transition-all cursor-pointer relative ${
-                      activePresetIdx === idx ? "border-teal-400 scale-102" : "border-white/5 opacity-70 hover:opacity-100"
-                    }`}
-                  >
-                    <img src={img.url} alt="Option" className="w-full h-full object-cover" />
-                    <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[5px] text-white text-center truncate py-0.5">
-                      {img.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {uploadedImage && (
-              <div className="bg-emerald-950/40 p-2 rounded-xl border border-emerald-500/20 flex items-center justify-between">
-                <span className="text-[8px] text-emerald-300 font-bold flex items-center gap-1">
-                  <Check className="w-3 h-3 stroke-[3]" /> Imagen propia cargada con éxito
-                </span>
-                <button
-                  onClick={() => setUploadedImage(null)}
-                  className="text-[7.5px] font-mono text-rose-400 hover:text-rose-300 underline cursor-pointer"
-                >
-                  Restaurar predeterminados
-                </button>
-              </div>
-            )}
-
-            <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider block pt-1">
-              2. Elige un Filtro Profesional de un Toque (11 variantes)
-            </span>
-
-            {/* Visual scroll bar of filters */}
-            <div className="grid grid-cols-2 gap-1.5">
-              {PRESET_FILTERS_EXPANDED.map((filt) => {
-                const isSelected = selectedFilterId === filt.id;
-                return (
-                  <button
-                    key={filt.id}
-                    onClick={() => setSelectedFilterId(filt.id)}
-                    className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
-                      isSelected 
-                        ? "bg-teal-950/60 border-[#14b8a6] shadow-sm text-white" 
-                        : "bg-black/20 border-white/5 text-slate-300 hover:bg-black/35 hover:border-white/10"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span className="text-[9.5px] font-bold leading-none truncate">
-                        {filt.name}
-                      </span>
-                      {isSelected && (
-                        <div className="w-2.5 h-2.5 bg-[#14b8a6] rounded-full flex items-center justify-center">
-                          <Check className="w-1.5 h-1.5 text-white stroke-[4]" />
-                        </div>
-                      )}
-                    </div>
-                    <span className="text-[6.5px] text-slate-400 font-medium truncate mt-1">
-                      {filt.desc}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ======================================= */}
-        {/* TAB 2: MANUAL ADJUSTMENT SLIDERS CONFIG */}
-        {/* ======================================= */}
-        {editorTab === "sliders" && (
-          <div className="space-y-3.5 animate-fade-in text-left">
-            <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
-              <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">
-                Desliza para calibrar porcentajes en vivo
-              </span>
-              <button
-                onClick={handleResetAdjustments}
-                className="text-[7.5px] font-extrabold text-rose-400 hover:text-rose-300 flex items-center gap-0.5 transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-3 h-3 animate-spin" /> Resetear Valores
-              </button>
-            </div>
-
-            {/* Sliders Container Grid */}
-            <div className="space-y-3">
-              {/* BRILLO */}
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-[8px] font-bold">
-                  <span className="text-slate-300">Brillo (Luminosidad)</span>
-                  <span className="font-mono text-teal-400 bg-teal-950/60 px-1.5 rounded">{adjustments.brightness}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="50"
-                  max="200"
-                  step="2"
-                  value={adjustments.brightness}
-                  onChange={(e) => setAdjustments(prev => ({ ...prev, brightness: Number(e.target.value) }))}
-                  className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800"
-                />
-              </div>
-
-              {/* CONTRASTE */}
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-[8px] font-bold">
-                  <span className="text-slate-300">Contraste (Profundidad)</span>
-                  <span className="font-mono text-teal-400 bg-teal-950/60 px-1.5 rounded">{adjustments.contrast}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="50"
-                  max="200"
-                  step="2"
-                  value={adjustments.contrast}
-                  onChange={(e) => setAdjustments(prev => ({ ...prev, contrast: Number(e.target.value) }))}
-                  className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800"
-                />
-              </div>
-
-              {/* SATURACIÓN */}
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-[8px] font-bold">
-                  <span className="text-slate-300">Saturación (Intensidad de Color)</span>
-                  <span className="font-mono text-teal-400 bg-teal-950/60 px-1.5 rounded">{adjustments.saturation}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="200"
-                  step="2"
-                  value={adjustments.saturation}
-                  onChange={(e) => setAdjustments(prev => ({ ...prev, saturation: Number(e.target.value) }))}
-                  className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800"
-                />
-              </div>
-
-              {/* DESENFOQUE */}
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-[8px] font-bold">
-                  <span className="text-slate-300">Desenfoque (Estilo Bokeh)</span>
-                  <span className="font-mono text-teal-400 bg-teal-950/60 px-1.5 rounded">{adjustments.blur} px</span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="8"
-                  step="1"
-                  value={adjustments.blur}
-                  onChange={(e) => setAdjustments(prev => ({ ...prev, blur: Number(e.target.value) }))}
-                  className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800"
-                />
-              </div>
-
-              {/* TONO (HUE COLOR) */}
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-[8px] font-bold">
-                  <span className="text-slate-300">Filtro de Color / Tono (Giro Hue)</span>
-                  <span className="font-mono text-teal-400 bg-teal-950/60 px-1.5 rounded">{adjustments.hue}° de color</span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="360"
-                  step="5"
-                  value={adjustments.hue}
-                  onChange={(e) => setAdjustments(prev => ({ ...prev, hue: Number(e.target.value) }))}
-                  className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800"
-                />
-              </div>
-
-              {/* NITIDEZ SIMULATION */}
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-[8px] font-bold">
-                  <span className="text-slate-300">Nitidez Digital (Sharpening Pro)</span>
-                  <span className="font-mono text-teal-400 bg-teal-950/60 px-1.5 rounded">{adjustments.sharpness}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                  value={adjustments.sharpness}
-                  onChange={(e) => setAdjustments(prev => ({ ...prev, sharpness: Number(e.target.value) }))}
-                  className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ======================================= */}
-        {/* TAB 3: TEXT DESIGNS & ANIMATION PRESETS */}
-        {/* ======================================= */}
-        {editorTab === "text" && (
-          <div className="space-y-3 animate-fade-in text-left">
-            <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">
-              Contenido de Textos
-            </span>
-
-            {/* Content fields */}
-            <div className="space-y-2 bg-black/20 p-2.5 rounded-xl border border-white/5">
-              <div className="space-y-1">
-                <span className="text-[7px] text-slate-400 font-bold uppercase">Título Slogan</span>
-                <input
-                  type="text"
-                  value={bannerTitle}
-                  onChange={(e) => setBannerTitle(e.target.value)}
-                  maxLength={18}
-                  className="w-full bg-slate-950 border border-white/10 text-[9px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-bold"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <span className="text-[7px] text-slate-400 font-bold uppercase">Producto / Detalle Comercial</span>
-                <input
-                  type="text"
-                  value={bannerProduct}
-                  onChange={(e) => setBannerProduct(e.target.value)}
-                  maxLength={32}
-                  className="w-full bg-slate-950 border border-white/10 text-[9px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-medium"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <span className="text-[7px] text-slate-400 font-bold uppercase">Precio Oficial</span>
-                  <input
-                    type="text"
-                    value={bannerPrice}
-                    onChange={(e) => setBannerPrice(e.target.value)}
-                    maxLength={10}
-                    className="w-full bg-slate-950 border border-white/10 text-[9px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-mono text-emerald-400 font-bold"
-                  />
-                </div>
-
-                {/* Sizing controller */}
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center text-[7px] text-slate-400 font-bold uppercase">
-                    <span>Escala Texto</span>
-                    <span className="font-mono text-teal-400">{textSizePercent}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="80"
-                    max="120"
-                    step="5"
-                    value={textSizePercent}
-                    onChange={(e) => setTextSizePercent(Number(e.target.value))}
-                    className="w-full accent-teal-500 cursor-pointer mt-1"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider block pt-1">
-              Animación del Título Comercial
-            </span>
-
-            {/* Preset Animations lists */}
-            <div className="grid grid-cols-2 gap-1.5">
-              {ANIMATION_PRESETS.map((anim) => {
-                const isSelected = textAnimation === anim.id;
-                return (
-                  <button
-                    key={anim.id}
-                    type="button"
-                    onClick={() => setTextAnimation(anim.id)}
-                    className={`py-2 px-2.5 rounded-xl text-left border text-[8.5px] font-bold transition-all cursor-pointer ${
-                      isSelected 
-                        ? "bg-teal-950/60 border-[#14b8a6] text-white" 
-                        : "bg-black/20 border-white/5 text-slate-400 hover:bg-black/35"
-                    }`}
-                  >
-                    {anim.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ======================================= */}
-        {/* TAB 4: STICKERS & LABELS PRO            */}
-        {/* ======================================= */}
-        {editorTab === "stickers" && (
-          <div className="space-y-3 animate-fade-in text-left">
-            <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">
-              Adhiere un Sticker de Impacto Comercial
-            </span>
-
-            <div className="grid grid-cols-2 gap-2">
-              {STICKER_TEMPLATES_PRO.map((st, idx) => {
-                const isSelected = selectedStickerIdx === idx;
-                return (
-                  <button
-                    key={st.id}
-                    type="button"
-                    onClick={() => setSelectedStickerIdx(isSelected ? -1 : idx)}
-                    className={`p-3 rounded-2xl border text-center transition-all cursor-pointer relative overflow-hidden flex flex-col justify-center items-center ${
-                      isSelected 
-                        ? "bg-teal-950/60 border-[#14b8a6] text-white scale-102" 
-                        : "bg-black/20 border-white/5 text-slate-300 hover:bg-black/35 hover:border-white/10"
-                    }`}
-                  >
-                    <span className={`text-[8px] px-2 py-1.5 rounded-full ${st.bg} scale-95`}>
-                      {st.text}
-                    </span>
-                    <span className="text-[6.5px] text-slate-400 font-mono mt-2">
-                      {isSelected ? "Activo (Toca de nuevo para quitar)" : "Tocar para insertar"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ================================================= */}
-        {/* TAB 5: WATERMARK ACTIVATION VIP SUBSCRIPTION CODE */}
-        {/* ================================================= */}
-        {editorTab === "premium" && (
-          <div className="space-y-3.5 animate-fade-in text-left">
-            <div className="bg-gradient-to-r from-teal-950/80 to-[#10646a]/60 rounded-2xl p-3 border border-teal-500/10 space-y-2 shadow-md">
-              <div className="flex items-center gap-1.5 text-teal-300">
-                <Award className="w-4.5 h-4.5 text-yellow-400 animate-bounce" />
-                <h5 className="text-[10px] font-black uppercase">Membresía Red On VIP</h5>
-              </div>
-              <p className="text-[8.5px] text-slate-300 leading-relaxed font-medium">
-                Al pagar una pequeña mensualidad a Red On, se te asignará un código secreto para remover de inmediato el sello de marca de agua de todos tus flyers y videos, dándole un acabado Premium 100% propio a tus ofertas de comercio.
-              </p>
-            </div>
-
-            {/* Display current status */}
-            <div className="bg-black/20 p-3 rounded-xl border border-white/5 flex items-center justify-between">
-              <span className="text-[8px] font-bold text-slate-300 uppercase">Estado Actual:</span>
-              <span className={`text-[8px] font-black px-2.5 py-1 rounded-full uppercase ${
-                isPremiumUnlocked 
-                  ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" 
-                  : "bg-rose-500/20 text-rose-400 border border-rose-500/30"
-              }`}>
-                {isPremiumUnlocked ? "👑 Socio Premium Activo" : "❌ Sello de Garantía Activo"}
-              </span>
-            </div>
-
-            {/* Form to enter activation key */}
-            <form onSubmit={handleValidatePremiumCode} className="space-y-2">
-              <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">
-                Ingresa Código de Activación Mensual
-              </span>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej: REDON2026"
-                  value={activationCodeInput}
-                  onChange={(e) => setActivationCodeInput(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-white/10 text-[9.5px] px-3.5 py-2.5 rounded-xl outline-none focus:border-teal-500 text-center font-mono font-bold tracking-widest text-teal-300 placeholder-slate-600"
-                />
-                <button
-                  type="submit"
-                  className="bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-extrabold text-[9px] px-4 rounded-xl transition-all cursor-pointer shadow-sm shrink-0"
-                >
-                  Verificar
-                </button>
-              </div>
-            </form>
-
-            {/* Activation Feedback status messages */}
-            {codeFeedback.message && (
-              <div className={`p-2.5 rounded-lg text-[8px] font-bold border ${
-                codeFeedback.status === "success" 
-                  ? "bg-emerald-950/40 border-emerald-500/30 text-emerald-400" 
-                  : "bg-rose-950/40 border-rose-500/30 text-rose-400"
-              }`}>
-                {codeFeedback.message}
-              </div>
-            )}
-
-            {/* Unlock Hints list */}
-            <div className="bg-slate-900/40 border border-white/5 rounded-xl p-2.5 space-y-1">
-              <span className="text-[7.5px] font-black text-slate-400 block uppercase">Códigos de Prueba de Nelson (Simulador):</span>
-              <ul className="text-[7px] text-slate-500 space-y-0.5 list-disc pl-3">
-                <li><span className="font-mono text-teal-400 font-bold select-all">REDON2026</span> - Remueve la marca de agua y celebra</li>
-                <li><span className="font-mono text-teal-400 font-bold select-all">NELSON_EMPRENDE</span> - Membresía VIP del Administrador</li>
-              </ul>
-            </div>
-          </div>
-        )}
-
-        {/* ADDITIONAL AUDIO AND TRANSITION BAR (IF VIDEO MODE ACTIVE) */}
-        {editorMode === "video" && (
-          <div className="bg-black/30 p-2.5 rounded-xl border border-white/5 space-y-2 text-left pt-2.5 mt-2">
-            <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider flex items-center gap-1 leading-none">
-              <Music className="w-3 h-3 text-[#14b8a6]" /> Banda Sonora & Transiciones de Video
-            </span>
-
-            <div className="grid grid-cols-2 gap-2">
-              {/* Music selector */}
-              <div className="space-y-1">
-                <span className="text-[7px] text-slate-400 font-bold uppercase">Música Integrada</span>
-                <select
-                  value={selectedMusicId}
-                  onChange={(e) => {
-                    setSelectedMusicId(e.target.value);
-                    setIsVideoPlaying(false);
-                  }}
-                  className="w-full bg-slate-950 text-white border border-white/10 text-[8px] p-1.5 rounded-lg outline-none cursor-pointer"
-                >
-                  {PRESET_MUSIC.map(mus => (
-                    <option key={mus.id} value={mus.id}>{mus.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Transition Style */}
-              <div className="space-y-1">
-                <span className="text-[7px] text-slate-400 font-bold uppercase">Tipo Transición</span>
-                <select
-                  value={transitionStyle}
-                  onChange={(e) => setTransitionStyle(e.target.value as any)}
-                  className="w-full bg-slate-950 text-white border border-white/10 text-[8px] p-1.5 rounded-lg outline-none cursor-pointer"
-                >
-                  <option value="fade">Disolvencia Fluida 🌊</option>
-                  <option value="zoom">Zoom Cinemático 🔎</option>
-                  <option value="slide">Barrido Rápido ➔</option>
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
-
-      </div>
+      <EditorTabPanels
+        editorTab={editorTab}
+        editorMode={editorMode}
+        fileInputRef={fileInputRef}
+        handleImageFileChange={handleImageFileChange}
+        uploadedImage={uploadedImage}
+        setUploadedImage={setUploadedImage}
+        activePresetIdx={activePresetIdx}
+        setActivePresetIdx={setActivePresetIdx}
+        selectedFilterId={selectedFilterId}
+        setSelectedFilterId={setSelectedFilterId}
+        adjustments={adjustments}
+        setAdjustments={setAdjustments}
+        handleResetAdjustments={handleResetAdjustments}
+        bannerTitle={bannerTitle}
+        setBannerTitle={setBannerTitle}
+        bannerProduct={bannerProduct}
+        setBannerProduct={setBannerProduct}
+        bannerPrice={bannerPrice}
+        setBannerPrice={setBannerPrice}
+        textAnimation={textAnimation}
+        setTextAnimation={setTextAnimation}
+        textSizePercent={textSizePercent}
+        setTextSizePercent={setTextSizePercent}
+        selectedStickerIdx={selectedStickerIdx}
+        setSelectedStickerIdx={setSelectedStickerIdx}
+        isPremiumUnlocked={isPremiumUnlocked}
+        activationCodeInput={activationCodeInput}
+        setActivationCodeInput={setActivationCodeInput}
+        codeFeedback={codeFeedback}
+        handleValidatePremiumCode={handleValidatePremiumCode}
+        selectedMusicId={selectedMusicId}
+        setSelectedMusicId={setSelectedMusicId}
+        transitionStyle={transitionStyle}
+        setTransitionStyle={setTransitionStyle}
+        setIsVideoPlaying={setIsVideoPlaying}
+      />
 
       {/* 5. BIG ACTION BAR BUTTON AT BOTTOM */}
       <div className="p-3 bg-[#051e20] border-t border-teal-950/40 shrink-0 flex items-center gap-2">
