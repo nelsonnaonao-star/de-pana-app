@@ -157,6 +157,11 @@ async function main() {
     res.sendFile(path.join(distPath, 'index.html'));
   });
 
+  // Health check endpoint for Render
+  app.get('/api/health', (_req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
   const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
   app.listen(PORT, () => {
     const url = process.env.APP_URL || `http://localhost:${PORT}`;

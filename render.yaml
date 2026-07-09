@@ -4,6 +4,8 @@ services:
     env: node
     buildCommand: npm run build
     startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
@@ -27,10 +29,18 @@ services:
         sync: false
       - key: METERED_API_KEY
         sync: false
+      - key: METERED_SUBDOMAIN
+        sync: false
       - key: FCM_WEBHOOK_SECRET
         sync: false
+      - key: TURN_URL
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_PASSWORD
+        sync: false
       - key: VITE_SERVER_URL
-        value: https://de-pana-app.onrender.com
+        value: https://redon-server.onrender.com
       - key: CORS_ORIGIN
         value: https://de-pana-app.onrender.com
       - key: CLIENT_ORIGIN
