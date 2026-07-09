@@ -5,13 +5,21 @@ const router = express.Router();
 const METERED_API_KEY = process.env.METERED_API_KEY || '';
 const METERED_SUBDOMAIN = process.env.METERED_SUBDOMAIN || 'onchat';
 
+// Helper to obscure API key in logs (show last 4 chars only)
+const obscureApiKey = (apiKey) => {
+  if (!apiKey) return '';
+  if (apiKey.length <= 4) return '*'.repeat(apiKey.length);
+  return '*'.repeat(apiKey.length - 4) + apiKey.slice(-4);
+};
+
 router.post('/credentials', async (req, res) => {
   // Try Metered.ca REST API for dynamic TURN credentials (GET request)
   if (METERED_API_KEY) {
+    const url = `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`;
+    const obscuredUrl = `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${obscureApiKey(METERED_API_KEY)}`;
+    
     try {
-      const response = await fetch(
-        `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`
-      );
+      const response = await fetch(url);
       if (response.ok) {
         const iceServers = await response.json();
         if (Array.isArray(iceServers) && iceServers.length > 0) {
@@ -23,7 +31,7 @@ router.post('/credentials', async (req, res) => {
         console.error('[TURN] Metered API HTTP error:', {
           status: response.status,
           statusText: response.statusText,
-          url: `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`,
+          url: obscuredUrl,
           responseBody: errorText
         });
       }
@@ -32,7 +40,7 @@ router.post('/credentials', async (req, res) => {
       console.error('[TURN] Metered API request error:', {
         message: err.message,
         stack: err.stack,
-        url: `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`
+        url: obscuredUrl
       });
     }
   }
