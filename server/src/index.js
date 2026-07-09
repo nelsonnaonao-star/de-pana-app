@@ -70,7 +70,10 @@ async function main() {
     legacyHeaders: false,
     message: { error: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.' },
   });
-  app.use('/api/', globalLimiter);
+  app.use('/api/', (req, res, next) => {
+    if (req.path === '/fcm/webhook') return next();
+    globalLimiter(req, res, next);
+  });
 
   const smsLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -152,14 +155,14 @@ async function main() {
     res.status(404).json({ error: `Archivo no encontrado: ${req.originalUrl}` });
   });
 
+  // Health check endpoint for Render (must be BEFORE catch-all)
+  app.get('/api/health', (_req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
   // SPA catch-all for all other routes
   app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
-  });
-
-  // Health check endpoint for Render
-  app.get('/api/health', (_req, res) => {
-    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
   const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;

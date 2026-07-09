@@ -196,8 +196,8 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
 async function sendBackupPush(receiverId: string, senderName: string, text: string, chatId: string, senderId: string) {
   try {
     const serverUrl = import.meta.env.VITE_SERVER_URL;
-    if (!serverUrl) return;
-    await fetch(`${serverUrl}/api/fcm/send`, {
+    if (!serverUrl) { console.warn('[PUSH] VITE_SERVER_URL not set'); return; }
+    const res = await fetch(`${serverUrl}/api/fcm/send`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -207,7 +207,11 @@ async function sendBackupPush(receiverId: string, senderName: string, text: stri
         data: { type: "message", chatId, contactId: senderId },
       }),
     });
-  } catch {}
+    if (!res.ok) console.warn('[PUSH] backup send failed:', res.status, await res.text().catch(() => ''));
+    else console.log('[PUSH] backup send OK');
+  } catch (err) {
+    console.warn('[PUSH] backup send error:', err);
+  }
 }
 
 export async function markAsRead(chatId: string, userId: string, userName: string) {

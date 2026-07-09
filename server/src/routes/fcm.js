@@ -9,6 +9,7 @@ const router = express.Router();
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+if (!supabase) console.warn('⚠️  FCM: SUPABASE_SERVICE_KEY not set — push tokens will NOT be persisted');
 
 const vapidPublicKey = process.env.VITE_FIREBASE_VAPID_KEY || '';
 const vapidPrivateKey = process.env.FIREBASE_PRIVATE_VAPID_KEY || '';
@@ -39,9 +40,20 @@ if (serviceAccount && getApps().length === 0) {
     }
 }
 
+let firebaseMessaging = null;
 function initFirebaseAdmin() {
-  if (getApps().length === 0) return null;
-  return { messaging: getMessaging };
+  if (firebaseMessaging) return firebaseMessaging;
+  if (getApps().length === 0) {
+    console.warn('[FCM] Firebase Admin not initialized — check FIREBASE_SERVICE_ACCOUNT env var');
+    return null;
+  }
+  try {
+    firebaseMessaging = { messaging: () => getMessaging() };
+    return firebaseMessaging;
+  } catch (e) {
+    console.error('[FCM] Failed to get Messaging instance:', e.message);
+    return null;
+  }
 }
 
 if (vapidPublicKey && vapidPrivateKey) {
@@ -68,17 +80,20 @@ router.post('/register', async (req, res) => {
   }
   const tokenStr = typeof token === 'object' ? JSON.stringify(token) : token;
 
-  if (supabase) {
-    const { error } = await supabase
-      .from('push_tokens')
-      .upsert(
-        { profile_id, token: tokenStr, device: device || 'android-fcm' },
-        { onConflict: 'profile_id,token' }
-      );
-    if (error) {
-      console.warn('[FCM] Register error:', error.message);
-      return res.status(500).json({ error: error.message });
-    }
+  if (!supabase) {
+    console.warn('[FCM] Token registration skipped — SUPABASE_SERVICE_KEY not configured');
+    return res.status(500).json({ error: 'Server not configured for push notifications (missing SUPABASE_SERVICE_KEY)' });
+  }
+
+  const { error } = await supabase
+    .from('push_tokens')
+    .upsert(
+      { profile_id, token: tokenStr, device: device || 'android-fcm' },
+      { onConflict: 'profile_id,token' }
+    );
+  if (error) {
+    console.warn('[FCM] Register error:', error.message);
+    return res.status(500).json({ error: error.message });
   }
 
   res.json({ ok: true });
@@ -206,8 +221,13 @@ router.post('/webhook', async (req, res) => {
   console.log('[FCM-WEBHOOK] type:', type, 'table:', table, 'has record:', !!record);
 
   if (type !== 'INSERT' || !record) {
-    console.warn('[FCM-WEBHOOK] Invalid payload shape — ignoring');
+    console.warn('[FCM-WEBHOOK] Invalid payload shape — ignoring', JSON.stringify(req.body).substring(0, 200));
     return res.status(200).json({ ok: true, ignored: 'invalid shape' });
+  }
+
+  if (!supabase) {
+    console.error('[FCM-WEBHOOK] Cannot process — SUPABASE_SERVICE_KEY not configured');
+    return res.status(200).json({ ok: false, error: 'SUPABASE_SERVICE_KEY not configured' });
   }
 
   if (table === 'messages') {
@@ -373,99 +393,101 @@ router.post('/webhook', async (req, res) => {
             console.error('[FCM-WEBHOOK] FCM send error:', err.message, err.code || '');
             results.errors++;
           }
-        } else {
-          results.errors++;
-        }
-      } else {
-        try {
-          const subscription = JSON.parse(t.token);
-          await webpush.sendNotification(subscription, JSON.stringify({
-            title: senderName, body: notifBody,
-            data: { chatId: chat_id, type: 'message', contactId: sender_id },
-            icon: '/icon.png', badge: '/badge.png',
-          }));
-          results.web++;
-        } catch (err) {
-          console.error('[FCM-WEBHOOK] Web push error:', err.message);
-          results.errors++;
-        }
-      }
-    }
-
-    const elapsed = Date.now() - startTime;
-    console.log('[FCM-WEBHOOK] messages done in', elapsed, 'ms — results:', JSON.stringify(results));
-    return res.json({ ok: true, ...results });
-
-  } else if (table === 'calls') {
-    // ── Calls path ────────────────────────────────────────────────
-    const { chat_id, caller_id, callee_id, call_type } = record;
-    console.log('[FCM-WEBHOOK] calls record -> chat_id:', chat_id, 'caller_id:', caller_id, 'callee_id:', callee_id);
-
-    if (!chat_id || !caller_id || !callee_id) {
-      console.warn('[FCM-WEBHOOK] missing chat_id, caller_id, or callee_id — skipping');
-      return res.status(200).json({ ok: true, skipped: 'missing ids' });
-    }
-
-    // Get caller's name and avatar
-    let callerName = 'RED ON';
-    let callerAvatar = '';
-    if (supabase) {
-      try {
-        const { data: profile, error } = await supabase
-          .from('profiles')
-          .select('name, avatar_url')
-          .eq('id', caller_id)
-          .single();
-        if (!error && profile) {
-          callerName = profile.name || 'RED ON';
-          callerAvatar = profile.avatar_url || '';
-        }
-      } catch (err) {
-        console.warn('[FCM-WEBHOOK] caller profile exception:', err.message);
-      }
-    }
-
-    // Get callee's push tokens
-    const tokens = await getTokens(callee_id);
-    if (!tokens.length) {
-      console.warn('[FCM-WEBHOOK] no push tokens for callee — skipping');
-      return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for callee' });
-    }
-
-    const results = { web: 0, android: 0, errors: 0 };
-
-    for (const t of tokens) {
-      if (t.device === 'android-fcm' || t.device === 'android') {
-        const admin = await initFirebaseAdmin();
-        if (admin) {
-          try {
-            await admin.messaging().send({
-              token: t.token,
-              notification: { title: callerName, body: 'Llamada entrante' },
-              data: {
-                title: callerName, body: 'Llamada entrante',
-                badge: '1', notificationCount: '1',
-                chatId: chat_id, type: 'call',
-                callerId: caller_id, callerName,
-                callType: call_type || 'audio',
-              },
-              android: {
-                priority: 'high', ttl: 86400000,
-                notification: {
-                  channel_id: 'redon-calls', tag: 'call-' + chat_id,
-                  click_action: 'ANSWER_CALL', notification_count: 1,
-                  visibility: 'public', sound: 'ringtone',
-                },
-              },
-            });
-            results.android++;
-          } catch (err) {
-            console.error('[FCM-WEBHOOK] FCM call push error:', err.message, err.code || '');
+          } else {
+            console.warn('[FCM-WEBHOOK] Firebase Admin not initialized — cannot send Android push');
             results.errors++;
           }
         } else {
-          results.errors++;
+          try {
+            const subscription = JSON.parse(t.token);
+            await webpush.sendNotification(subscription, JSON.stringify({
+              title: senderName, body: notifBody,
+              data: { chatId: chat_id, type: 'message', contactId: sender_id },
+              icon: '/icon.png', badge: '/badge.png',
+            }));
+            results.web++;
+          } catch (err) {
+            console.error('[FCM-WEBHOOK] Web push error:', err.message);
+            results.errors++;
+          }
         }
+      }
+
+      const elapsed = Date.now() - startTime;
+      console.log('[FCM-WEBHOOK] messages done in', elapsed, 'ms — results:', JSON.stringify(results));
+      return res.json({ ok: true, ...results });
+
+    } else if (table === 'calls') {
+      // ── Calls path ────────────────────────────────────────────────
+      const { chat_id, caller_id, callee_id, call_type } = record;
+      console.log('[FCM-WEBHOOK] calls record -> chat_id:', chat_id, 'caller_id:', caller_id, 'callee_id:', callee_id);
+
+      if (!chat_id || !caller_id || !callee_id) {
+        console.warn('[FCM-WEBHOOK] missing chat_id, caller_id, or callee_id — skipping');
+        return res.status(200).json({ ok: true, skipped: 'missing ids' });
+      }
+
+      // Get caller's name and avatar
+      let callerName = 'RED ON';
+      let callerAvatar = '';
+      if (supabase) {
+        try {
+          const { data: profile, error } = await supabase
+            .from('profiles')
+            .select('name, avatar_url')
+            .eq('id', caller_id)
+            .single();
+          if (!error && profile) {
+            callerName = profile.name || 'RED ON';
+            callerAvatar = profile.avatar_url || '';
+          }
+        } catch (err) {
+          console.warn('[FCM-WEBHOOK] caller profile exception:', err.message);
+        }
+      }
+
+      // Get callee's push tokens
+      const tokens = await getTokens(callee_id);
+      if (!tokens.length) {
+        console.warn('[FCM-WEBHOOK] no push tokens for callee — skipping');
+        return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for callee' });
+      }
+
+      const results = { web: 0, android: 0, errors: 0 };
+
+      for (const t of tokens) {
+        if (t.device === 'android-fcm' || t.device === 'android') {
+          const admin = await initFirebaseAdmin();
+          if (admin) {
+            try {
+              await admin.messaging().send({
+                token: t.token,
+                notification: { title: callerName, body: 'Llamada entrante' },
+                data: {
+                  title: callerName, body: 'Llamada entrante',
+                  badge: '1', notificationCount: '1',
+                  chatId: chat_id, type: 'call',
+                  callerId: caller_id, callerName,
+                  callType: call_type || 'audio',
+                },
+                android: {
+                  priority: 'high', ttl: 86400000,
+                  notification: {
+                    channel_id: 'redon-calls', tag: 'call-' + chat_id,
+                    click_action: 'ANSWER_CALL', notification_count: 1,
+                    visibility: 'public', sound: 'ringtone',
+                  },
+                },
+              });
+              results.android++;
+            } catch (err) {
+              console.error('[FCM-WEBHOOK] FCM call push error:', err.message, err.code || '');
+              results.errors++;
+            }
+          } else {
+            console.warn('[FCM-WEBHOOK] Firebase Admin not initialized — cannot send Android push');
+            results.errors++;
+          }
       } else {
         try {
           const subscription = JSON.parse(t.token);

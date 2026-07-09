@@ -590,12 +590,12 @@ export default function PhoneSimulator({
             type,
             chat_id: activeChat.id,
           });
-        } catch {}
+        } catch (e) { console.warn('[Call] apiStartCall error:', e); }
         // Backup FCM push (en caso de que el webhook tarde)
         sendFcmPush(partnerId, profile?.name || 'RED ON', 'Llamada entrante...', {
           type: 'call', chatId: activeChat.id, callerId: user.id,
           callerName: profile?.name || 'RED ON', callType: type,
-        }).catch(() => {});
+        });
       }
 
       // ICE connection timeout: auto-cleanup after 30s

@@ -53,8 +53,29 @@ public class MainActivity extends BridgeActivity {
             } catch (Exception e) {
                 Log.e(TAG, "Failed to trigger JS event", e);
             }
-        } else if ("OPEN_CHAT".equals(action) || (chatId != null && "message".equals(type))) {
+        } else if ("OPEN_CHAT".equals(action) || "OPEN_APP".equals(action) || (chatId != null && "message".equals(type))) {
             if (chatId != null) {
+                try {
+                    bridge.triggerWindowJSEvent("open-chat", chatId);
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to trigger open-chat JS event", e);
+                }
+            }
+        } else if ("android.intent.action.MAIN".equals(action) && chatId != null) {
+            // Fallback: FCM data extras might be attached to the launcher intent
+            if ("call".equals(type) && callerId != null) {
+                String callerName = intent.getStringExtra("callerName");
+                String callType = intent.getStringExtra("callType");
+                try {
+                    String json = "{\"callerId\":\"" + callerId +
+                        "\",\"callerName\":\"" + (callerName != null ? callerName : "") +
+                        "\",\"callType\":\"" + (callType != null ? callType : "audio") +
+                        "\",\"chatId\":\"" + chatId + "\"}";
+                    bridge.triggerWindowJSEvent("incoming-call", json);
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to trigger JS event", e);
+                }
+            } else {
                 try {
                     bridge.triggerWindowJSEvent("open-chat", chatId);
                 } catch (Exception e) {
