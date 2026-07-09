@@ -17,9 +17,23 @@ router.post('/credentials', async (req, res) => {
         if (Array.isArray(iceServers) && iceServers.length > 0) {
           return res.json({ iceServers });
         }
+      } else {
+        // Log detailed error when HTTP response is not ok
+        const errorText = await response.text();
+        console.error('[TURN] Metered API HTTP error:', {
+          status: response.status,
+          statusText: response.statusText,
+          url: `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`,
+          responseBody: errorText
+        });
       }
     } catch (err) {
-      console.warn('[TURN] Metered API error:', err);
+      // Log network or other errors
+      console.error('[TURN] Metered API request error:', {
+        message: err.message,
+        stack: err.stack,
+        url: `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${METERED_API_KEY}`
+      });
     }
   }
 
