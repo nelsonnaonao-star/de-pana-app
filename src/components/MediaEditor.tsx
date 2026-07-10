@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Sparkles, ImageIcon, Video, Music, Volume2, 
-  Check, Play, Pause, Phone, X, Award, Zap
+  Check, Play, Pause, Phone, X, Award, Zap,
+  Compass, Sliders, Type, Tag
 } from "lucide-react";
 import { BusinessFlyer } from "./BusinessPanel";
 import { STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED, PRESET_MUSIC, ANIMATION_PRESETS, STICKER_TEMPLATES_PRO } from "./editor/editorConstants";

@@ -33,6 +33,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const loadedUserId = useRef<string | null>(null);
+  const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
@@ -88,6 +89,39 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
     registerPushNotifications(userId).catch(() => {});
     setupCapacitorPush(userId).catch(() => {});
+
+    // Clean up any existing presence channel for this user before creating a new one
+    if (presenceChannelRef.current) {
+      supabase.removeChannel(presenceChannelRef.current);
+      presenceChannelRef.current = null;
+    }
+
+    // Set online status and track presence
+    supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {
+      if (presenceChannelRef.current) return; // already set up by another call
+      const channel = supabase.channel(`presence-global-${userId}`, {
+        config: { broadcast: { ack: false, self: false } },
+      });
+      channel.on("presence", { event: "sync" }, () => {
+        const state = channel.presenceState();
+        const isOnline = Object.keys(state).length > 0;
+        if (!isOnline) {
+          supabase.from("profiles").update({ status: "offline" }).eq("id", userId);
+        }
+      });
+      channel.on("presence", { event: "join" }, () => {
+        supabase.from("profiles").update({ status: "online" }).eq("id", userId);
+      });
+      channel.on("presence", { event: "leave" }, () => {
+        supabase.from("profiles").update({ status: "offline" }).eq("id", userId);
+      });
+      channel.subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await channel.track({ user_id: userId, online_at: new Date().toISOString() });
+        }
+      });
+      presenceChannelRef.current = channel;
+    });
   }
 
   const refreshProfile = async () => {
@@ -119,6 +153,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    presenceChannelRef.current?.untrack();
+    presenceChannelRef.current?.unsubscribe();
+    if (user) {
+      await supabase.from("profiles").update({ status: "offline" }).eq("id", user.id);
+    }
     await unregisterPushNotifications();
     await unregisterCapacitorPush();
     await authSignOut();

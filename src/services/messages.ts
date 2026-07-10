@@ -7,7 +7,7 @@ export type Message = {
   sender_id: string;
   receiver_id?: string;
   text?: string;
-  type: "text" | "image" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll";
+  type: "text" | "image" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   status: "sent" | "delivered" | "read";
   created_at: string;
   read_at?: string;
@@ -43,6 +43,8 @@ export type Message = {
   is_ephemeral: boolean;
   ephemeral_expires_at?: string;
   poll_id?: string;
+  poll_question?: string;
+  poll_options?: { id: string; text: string; votes: number; votedUsers: string[] }[];
   is_deleted: boolean;
 };
 
@@ -89,11 +91,15 @@ function toMessage(row: any): Message {
     is_ephemeral: row.is_ephemeral || false,
     ephemeral_expires_at: row.ephemeral_expires_at || undefined,
     poll_id: row.poll_id || undefined,
+    poll_question: row.poll_question || undefined,
+    poll_options: row.poll_options || undefined,
     is_deleted: row.is_deleted || false,
   };
 }
 
 export async function getMessages(chatId: string): Promise<Message[]> {
+  console.log('[MESSAGES] ═══════ getMessages() EJECUTADO ═══════');
+  console.log('[MESSAGES] chatId:', chatId);
   const { data, error } = await supabase
     .from("messages")
     .select("*")
@@ -105,7 +111,11 @@ export async function getMessages(chatId: string): Promise<Message[]> {
     console.error("[MESSAGES] get error:", error);
     throw error;
   }
-  return (data || []).map(toMessage);
+  console.log('[MESSAGES] raw rows count:', data?.length || 0);
+  console.log('[MESSAGES] raw rows:', JSON.stringify(data));
+  const mapped = (data || []).map(toMessage);
+  console.log('[MESSAGES] mapped count:', mapped.length);
+  return mapped;
 }
 
 export async function sendMessage(message: Partial<Message>): Promise<Message> {
@@ -118,7 +128,7 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
     status: "sent",
     created_at: new Date().toISOString(),
     edited: false,
-    forwarded: false,
+    forwarded: !!message.forwarded,
     has_image: !!message.image_url,
     image_url: message.image_url || null,
     image_alt: message.image_alt || null,
@@ -132,7 +142,10 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
     document_name: message.document_name || null,
     document_size: message.document_size || null,
     document_type: message.document_type || null,
-    has_location: false,
+    has_location: !!message.latitude,
+    latitude: message.latitude || null,
+    longitude: message.longitude || null,
+    location_name: message.location_name || null,
     reply_to_id: message.reply_to_id || null,
     reply_to_text: message.reply_to_text || null,
     reply_to_sender: message.reply_to_sender || null,
@@ -143,6 +156,8 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
     is_ephemeral: false,
     reactions: {},
     read_by: [],
+    poll_question: message.poll_question || null,
+    poll_options: message.poll_options || null,
   };
 
   const { data, error } = await supabase
@@ -174,18 +189,34 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
   try {
     const { data: chat } = await supabase
       .from("chats")
-      .select("profile_id, admin_id")
+      .select("profile_id, admin_id, is_group")
       .eq("id", message.chat_id)
       .single();
     if (chat) {
-      const receiverId = chat.profile_id === message.sender_id ? chat.admin_id : chat.profile_id;
-      if (receiverId) {
-        const { data: senderProfile } = await supabase
-          .from("profiles")
-          .select("name")
-          .eq("id", message.sender_id)
-          .single();
-        sendBackupPush(receiverId, senderProfile?.name || "RED ON", message.text || "Nuevo mensaje", message.chat_id, message.sender_id);
+      const { data: senderProfile } = await supabase
+        .from("profiles")
+        .select("name")
+        .eq("id", message.sender_id)
+        .single();
+
+      if (chat.is_group) {
+        // Group chat: broadcast to all participants except sender
+        const { data: participants } = await supabase
+          .from("chat_participants")
+          .select("profile_id")
+          .eq("chat_id", message.chat_id)
+          .neq("profile_id", message.sender_id);
+        if (participants) {
+          for (const p of participants) {
+            sendBackupPush(p.profile_id, senderProfile?.name || "RED ON", message.text || "Nuevo mensaje", message.chat_id, message.sender_id);
+          }
+        }
+      } else {
+        // 1:1 chat: send to the other participant
+        const receiverId = chat.profile_id === message.sender_id ? chat.admin_id : chat.profile_id;
+        if (receiverId) {
+          sendBackupPush(receiverId, senderProfile?.name || "RED ON", message.text || "Nuevo mensaje", message.chat_id, message.sender_id);
+        }
       }
     }
   } catch {}

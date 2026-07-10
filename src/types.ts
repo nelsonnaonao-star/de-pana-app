@@ -3,7 +3,7 @@ export interface Message {
   sender: "me" | "other";
   text?: string;
   timestamp: string;
-  type: "text" | "image" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll";
+  type: "text" | "image" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   mediaUrl?: string;
   fileName?: string;
   fileSize?: string;
@@ -11,7 +11,14 @@ export interface Message {
   reactions?: { [key: string]: number }; // emoji -> count
   pollQuestion?: string;
   pollOptions?: { id: string; text: string; votes: number; votedUsers: string[] }[];
+  latitude?: number;
+  longitude?: number;
+  locationName?: string;
   status?: "sent" | "delivered" | "read";
+  forwarded?: boolean;
+  replyToId?: string;
+  replyToText?: string;
+  replyToSender?: string;
 }
 
 export interface Chat {
@@ -24,6 +31,7 @@ export interface Chat {
   unreadCount: number;
   messages: Message[];
   partnerUserId?: string;
+  isGroup?: boolean;
 }
 
 export interface ActiveCall {

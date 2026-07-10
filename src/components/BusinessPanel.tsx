@@ -3,10 +3,11 @@ import {
   Plus, Search, Sparkles, Volume2, VolumeX, MessageSquare, 
   MapPin, Eye, MousePointerClick, Image as ImageIcon, Music, 
   Check, Play, Pause, RefreshCw, BarChart3, Star, Tag, Compass,
-  Layers, ChevronRight, Share2, HelpCircle, AlertCircle
+  Layers, ChevronRight, Share2, HelpCircle, AlertCircle, Upload, X
 } from "lucide-react";
 import { Chat, Message } from "../types";
 import MediaEditor from "./MediaEditor";
+import { uploadChatMedia } from "../services/storage";
 
 export interface BusinessFlyer {
   id: string;
@@ -121,6 +122,8 @@ export default function BusinessPanel({
   const [upLoc, setUpLoc] = useState("");
   const [upFlyerUrl, setUpFlyerUrl] = useState(FLYER_SAMPLES[0]);
   const [upMusicId, setUpMusicId] = useState("none");
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Form states for template generator
   const [genName, setGenName] = useState("");
@@ -566,7 +569,7 @@ export default function BusinessPanel({
                     />
                   </div>
 
-                  {/* Select Flyer Image from Samples */}
+                  {/* Select Flyer Image from Samples or Upload */}
                   <div className="space-y-1.5">
                     <label className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">
                       Selecciona una Imagen de Flyer
@@ -585,6 +588,54 @@ export default function BusinessPanel({
                         </button>
                       ))}
                     </div>
+
+                    {/* Upload custom image */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setUploadingImage(true);
+                        try {
+                          const url = await uploadChatMedia(file, "flyers");
+                          setUpFlyerUrl(url);
+                        } catch (err) {
+                          console.error("Error uploading flyer image:", err);
+                        }
+                        setUploadingImage(false);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingImage}
+                      className="w-full mt-2 flex items-center justify-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-bold py-2.5 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {uploadingImage ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Upload className="w-3.5 h-3.5" />
+                      )}
+                      {uploadingImage ? "Subiendo imagen..." : "Subir tu propia imagen"}
+                    </button>
+                    {upFlyerUrl && !FLYER_SAMPLES.includes(upFlyerUrl) && (
+                      <div className="relative mt-2 rounded-xl overflow-hidden border-2 border-[#14b8a6]">
+                        <img src={upFlyerUrl} alt="Tu imagen" className="w-full h-28 object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setUpFlyerUrl(FLYER_SAMPLES[0])}
+                          className="absolute top-1 right-1 bg-black/60 hover:bg-black/80 rounded-full p-0.5 transition-colors cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5 text-white" />
+                        </button>
+                        <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[7px] font-bold px-1.5 py-0.5 rounded">
+                          TU IMAGEN
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Select Flyer Background Music */}

@@ -1,5 +1,14 @@
 import { supabase } from "../lib/supabase";
 
+type SignalPayload = {
+  type: "offer" | "answer" | "ice-candidate" | "call-ended";
+  sdp?: string;
+  candidate?: string;
+  sdpMid?: string;
+  sdpMLineIndex?: number;
+  from: string;
+};
+
 let cachedIceServers: RTCConfiguration["iceServers"] | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
@@ -175,7 +184,7 @@ export class WebRTCService {
 
     this.subscribedPromise = new Promise((resolve) => {
       this.channel = supabase.channel(`call-signal:${this.callId}`, {
-        config: { broadcast: { ack: false, selfEligible: false } },
+        config: { broadcast: { ack: false, self: false } },
       });
 
       this.channel.on("broadcast", { event: "signal" }, async (payload) => {

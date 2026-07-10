@@ -1,5 +1,5 @@
 import React from "react";
-import { Mic, Play, Pause, VideoIcon, BarChart2 } from "lucide-react";
+import { Mic, Play, Pause, VideoIcon, BarChart2, Forward, MapPin } from "lucide-react";
 import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
 
@@ -13,6 +13,8 @@ interface MessageBubbleProps {
   handleVote: (messageId: string, optionId: string) => void;
   handleAddReaction: (messageId: string, emoji: string) => void;
   handleDeleteMessage: (messageId: string) => void;
+  handleForwardMessage: (msg: Message) => void;
+  handleReplyMessage: (msg: Message) => void;
   bubbleColorMeId: string;
   bubbleColorThemId: string;
 }
@@ -20,7 +22,7 @@ interface MessageBubbleProps {
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
   isPlayingAudio, setIsPlayingAudio,
-  handleVote, handleAddReaction, handleDeleteMessage,
+  handleVote, handleAddReaction, handleDeleteMessage, handleForwardMessage, handleReplyMessage,
   bubbleColorMeId, bubbleColorThemId,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
@@ -67,7 +69,8 @@ export default React.memo(function MessageBubble({
               <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-sm hover:scale-125 transition-transform">{emo}</button>
             ))}
             <div className="w-[1px] h-3 bg-slate-200"></div>
-            <button onClick={() => setActiveReactionMenu(null)} className="text-[9px] font-bold text-teal-600 hover:underline px-1">Reenviar</button>
+            <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="text-[9px] font-bold text-blue-600 hover:underline px-1">Responder</button>
+            <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="text-[9px] font-bold text-teal-600 hover:underline px-1">Reenviar</button>
             {isMe && <button onClick={() => handleDeleteMessage(msg.id)} className="text-[9px] font-bold text-rose-500 hover:underline px-1">Eliminar</button>}
           </div>
         )}
@@ -83,6 +86,18 @@ export default React.memo(function MessageBubble({
         }`}
         onClick={() => setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id)}
       >
+        {msg.forwarded && (
+          <div className="flex items-center gap-1 mb-1">
+            <Forward className="w-3 h-3 text-slate-400" />
+            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Reenviado</span>
+          </div>
+        )}
+        {msg.replyToId && (
+          <div className={`mb-1.5 pl-2 border-l-2 ${isMe ? "border-teal-300" : "border-teal-500"} bg-black/5 dark:bg-white/5 rounded-r-md py-1 px-2`}>
+            <p className="text-[9px] font-bold opacity-70">{msg.replyToSender || "Desconocido"}</p>
+            <p className="text-[10px] opacity-60 truncate">{msg.replyToText}</p>
+          </div>
+        )}
         {msg.type === "text" && <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>}
 
         {msg.type === "video" && (
@@ -156,6 +171,26 @@ export default React.memo(function MessageBubble({
               <VideoIcon className="w-8 h-8 text-white/85 animate-pulse" />
             </div>
             <span className="text-[9px] font-bold tracking-tight opacity-90">📹 Nota de Video ({msg.duration || "0:08"})</span>
+          </div>
+        )}
+
+        {msg.type === "location" && (
+          <div className="space-y-1.5 min-w-[180px]">
+            <div
+              className="w-full h-28 rounded-xl overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 flex flex-col items-center justify-center cursor-pointer hover:opacity-85 transition-opacity border border-slate-200"
+              onClick={() => {
+                const url = `https://www.openstreetmap.org/?mlat=${msg.latitude}&mlon=${msg.longitude}&zoom=15`;
+                window.open(url, "_blank");
+              }}
+            >
+              <MapPin className="w-7 h-7 text-rose-500 mb-1" />
+              <span className="text-[9px] font-bold text-slate-600">Ver ubicación</span>
+              <span className="text-[8px] text-slate-400">{msg.latitude?.toFixed(4)}, {msg.longitude?.toFixed(4)}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <MapPin className="w-3 h-3 text-rose-500 shrink-0" />
+              <span className="text-[9px] font-medium text-slate-600 truncate">{msg.locationName}</span>
+            </div>
           </div>
         )}
 
@@ -238,6 +273,16 @@ export default React.memo(function MessageBubble({
           <button
             onClick={() => {
               setActiveReactionMenu(null);
+              handleReplyMessage(msg);
+            }}
+            className="text-[9px] font-bold text-blue-600 hover:underline px-1"
+          >
+            Responder
+          </button>
+          <button
+            onClick={() => {
+              setActiveReactionMenu(null);
+              handleForwardMessage(msg);
             }}
             className="text-[9px] font-bold text-teal-600 hover:underline px-1"
           >

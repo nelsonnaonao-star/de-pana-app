@@ -9,7 +9,7 @@ interface RateItem {
   id: string;
   name: string;
   symbol: string;
-  value: number; // in VES
+  value: number;
   change: string;
   isUp: boolean;
   source: string;
@@ -18,23 +18,23 @@ interface RateItem {
 
 const FALLBACK_RATES: RateItem[] = [
   {
-    id: "usd_paralelo",
-    name: "Dólar Paralelo",
+    id: "usd_bcv",
+    name: "Dólar BCV (Oficial)",
     symbol: "$",
-    value: 667.05,
+    value: 709.69,
     change: "+0.00%",
     isUp: true,
-    source: "Mercado Paralelo",
+    source: "Banco Central de Venezuela",
     time: "Cargando...",
   },
   {
-    id: "eur_paralelo",
-    name: "Euro Paralelo",
+    id: "eur_bcv",
+    name: "Euro BCV (Oficial)",
     symbol: "€",
-    value: 763.19,
+    value: 811.45,
     change: "+0.00%",
     isUp: true,
-    source: "Mercado Paralelo",
+    source: "Banco Central de Venezuela",
     time: "Cargando...",
   },
 ];
@@ -44,7 +44,7 @@ export default function RatesPanel() {
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
-  const [amount, setAmount] = useState<string>("100");
+  const [amount, setAmount] = useState<string>("");
   const [selectedRateId, setSelectedRateId] = useState<string>("usd_bcv");
 
   const activeRate = rates.find(r => r.id === selectedRateId) || rates[0] || null;
@@ -60,8 +60,33 @@ export default function RatesPanel() {
       const res = await fetch(apiUrl("/api/rates/dollar"));
       if (res.ok) {
         const data = await res.json();
-        setRates([
-          {
+        const newRates: RateItem[] = [];
+
+        // BCV official rates (primary)
+        if (data.bcv) {
+          newRates.push({
+            id: "usd_bcv",
+            name: data.bcv.usd.name,
+            symbol: data.bcv.usd.symbol,
+            value: data.bcv.usd.value,
+            change: data.bcv.usd.change,
+            isUp: data.bcv.usd.isUp,
+            source: data.bcv.usd.source,
+            time: data.bcv.usd.time,
+          });
+          newRates.push({
+            id: "eur_bcv",
+            name: data.bcv.eur.name,
+            symbol: data.bcv.eur.symbol,
+            value: data.bcv.eur.value,
+            change: data.bcv.eur.change,
+            isUp: data.bcv.eur.isUp,
+            source: data.bcv.eur.source,
+            time: data.bcv.eur.time,
+          });
+        } else {
+          // Fallback to top-level usd/eur if BCV not available
+          newRates.push({
             id: "usd_bcv",
             name: data.usd.name,
             symbol: data.usd.symbol,
@@ -70,8 +95,8 @@ export default function RatesPanel() {
             isUp: data.usd.isUp,
             source: data.usd.source,
             time: data.usd.time,
-          },
-          {
+          });
+          newRates.push({
             id: "eur_bcv",
             name: data.eur.name,
             symbol: data.eur.symbol,
@@ -80,8 +105,34 @@ export default function RatesPanel() {
             isUp: data.eur.isUp,
             source: data.eur.source,
             time: data.eur.time,
-          },
-        ]);
+          });
+        }
+
+        // Paralelo rates (secondary)
+        if (data.paralelo) {
+          newRates.push({
+            id: "usd_paralelo",
+            name: data.paralelo.usd.name,
+            symbol: data.paralelo.usd.symbol,
+            value: data.paralelo.usd.value,
+            change: data.paralelo.usd.change,
+            isUp: data.paralelo.usd.isUp,
+            source: data.paralelo.usd.source,
+            time: data.paralelo.usd.time,
+          });
+          newRates.push({
+            id: "eur_paralelo",
+            name: data.paralelo.eur.name,
+            symbol: data.paralelo.eur.symbol,
+            value: data.paralelo.eur.value,
+            change: data.paralelo.eur.change,
+            isUp: data.paralelo.eur.isUp,
+            source: data.paralelo.eur.source,
+            time: data.paralelo.eur.time,
+          });
+        }
+
+        setRates(newRates);
         setLastUpdated(data.updatedAt);
       }
     } catch (e) {
@@ -111,7 +162,7 @@ export default function RatesPanel() {
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[7px] bg-teal-500/20 text-teal-200 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border border-teal-400/20">
-              Paralelo
+              {rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV")) ? "BCV" : "Paralelo"}
             </span>
             <button
               onClick={fetchRates}
@@ -125,7 +176,9 @@ export default function RatesPanel() {
         </div>
         <div className="flex items-center justify-between mt-1">
           <p className="text-[7px] text-teal-100/70 font-mono">
-            Mercado Paralelo — tasa en tiempo real
+            {rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV"))
+              ? "BCV — tasa oficial del Banco Central de Venezuela"
+              : "Mercado Paralelo — tasa en tiempo real"}
           </p>
           {lastUpdated && (
             <span className="text-[6px] text-teal-300/40 font-mono">
@@ -196,10 +249,30 @@ export default function RatesPanel() {
                       {rate.change}
                     </span>
                   </div>
+                  <div className={`text-[5px] font-mono mt-0.5 ${
+                    isSelected ? "text-white/50" : "text-slate-400"
+                  }`}>
+                    {rate.source}
+                  </div>
                 </button>
               );
             })}
           </div>
+
+          {/* Source indicator */}
+          {rates.some(r => r.id.includes("paralelo")) && (
+            <div className="flex items-center justify-center gap-1 pt-1">
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV"))
+                  ? "bg-teal-500" : "bg-amber-500"
+              }`} />
+              <span className="text-[7px] text-slate-400 font-mono">
+                {rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV"))
+                  ? "Tasa BCV oficial — Fuente: Banco Central de Venezuela"
+                  : "Tasa del mercado paralelo"}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* CALCULATOR */}
@@ -230,9 +303,20 @@ export default function RatesPanel() {
               <span className="text-[7px] font-mono font-semibold text-teal-300/80 uppercase">
                 Resultado en Bs.
               </span>
-              <span className="text-xl font-extrabold font-mono tracking-tight text-teal-400">
-                {(result || 0).toLocaleString([], { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
-              </span>
+              <div className="flex items-center gap-2">
+                {amount !== "" && (
+                  <button
+                    onClick={() => setAmount("")}
+                    className="text-[8px] font-black text-teal-300/60 hover:text-teal-200 bg-white/5 hover:bg-white/10 px-2 py-0.5 rounded-lg transition-all cursor-pointer"
+                    title="Limpiar"
+                  >
+                    Limpiar
+                  </button>
+                )}
+                <span className="text-xl font-extrabold font-mono tracking-tight text-teal-400">
+                  {(result || 0).toLocaleString([], { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs.
+                </span>
+              </div>
             </div>
           </div>
 
@@ -242,7 +326,7 @@ export default function RatesPanel() {
         <div className="bg-slate-50/80 rounded-2xl p-2.5 border border-slate-200/30 flex gap-2 items-start">
           <ShieldAlert className="w-3 h-3 text-teal-600 shrink-0 mt-0.5" />
           <p className="text-[7px] text-slate-500 leading-relaxed font-medium">
-            Tasas del mercado paralelo venezolano actualizadas periódicamente. Usa la calculadora para convertir entre divisas y bolívares.
+            Tasas del mercado venezolano actualizadas periódicamente. Usa la calculadora para convertir entre divisas y bolívares.
           </p>
         </div>
 

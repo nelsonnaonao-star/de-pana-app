@@ -1,9 +1,10 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { App as CapacitorApp } from '@capacitor/app';
 import { 
   ArrowLeft, Phone, Video, Send, Smile, Paperclip, 
   Mic, Music, VideoIcon, 
   BarChart2, X, Check, Palette,
-  Film, MoreVertical 
+  Film, MoreVertical, Camera, Image, File, Search, ChevronUp, ChevronDown, MapPin
 } from "lucide-react";
 import { Chat, Message } from "../types";
 import GifPicker from "./GifPicker";
@@ -20,11 +21,13 @@ interface ChatRoomProps {
   onBack: () => void;
   onSendMessage: (msg: Message) => void;
   onTriggerCall: (type: "audio" | "video") => void;
+  onForwardMessage?: (msg: Message) => void;
   currentUserId?: string;
   currentUserName?: string;
+  refetchTrigger?: number;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, currentUserId, currentUserName }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, currentUserId, currentUserName, refetchTrigger }: ChatRoomProps) {
   const { user, profile } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -38,11 +41,56 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [messages, setMessages] = useState<Message[]>(chat.messages || []);
   const [renderLimit, setRenderLimit] = useState(50);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [searchIndex, setSearchIndex] = useState(0);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const visibleMessages = messages.slice(-renderLimit);
+  const filteredMessages = searchQuery.trim()
+    ? visibleMessages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
+    : visibleMessages;
 
   // Fetch real messages from API on mount
   useEffect(() => {
+    console.log('[CHAT] useEffect [chat.id, uid] — chat.id:', chat.id, 'uid:', uid);
     if (chat.id) {
+      getMessages(chat.id).then(apiMessages => {
+        console.log('[CHAT] getMessages result count:', apiMessages?.length);
+        if (apiMessages && apiMessages.length > 0) {
+          const mapped = apiMessages.map(m => ({
+            id: m.id,
+            sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
+            text: m.text,
+            timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+            type: (m.type as Message["type"]) || "text",
+            mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
+            reactions: m.reactions,
+            status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
+            forwarded: m.forwarded || false,
+            replyToId: m.reply_to_id,
+            replyToText: m.reply_to_text,
+            replyToSender: m.reply_to_sender,
+            pollQuestion: m.poll_question,
+            pollOptions: m.poll_options,
+            latitude: m.latitude,
+            longitude: m.longitude,
+            locationName: m.location_name,
+          }));
+          setMessages(mapped);
+          console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
+        } else {
+          console.log('[CHAT] ⚠️ getMessages returned 0 messages');
+        }
+      }).catch((err) => {
+        console.error('[CHAT] ❌ getMessages error:', err);
+      });
+    }
+  }, [chat.id, uid]);
+
+  // Refetch messages when refetchTrigger changes (e.g., new FCM push received in foreground)
+  useEffect(() => {
+    if (chat.id && refetchTrigger && refetchTrigger > 0) {
       getMessages(chat.id).then(apiMessages => {
         if (apiMessages && apiMessages.length > 0) {
           const mapped = apiMessages.map(m => ({
@@ -54,11 +102,50 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
             reactions: m.reactions,
             status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
+            forwarded: m.forwarded || false,
+            replyToId: m.reply_to_id,
+            replyToText: m.reply_to_text,
+            replyToSender: m.reply_to_sender,
+            pollQuestion: m.poll_question,
+            pollOptions: m.poll_options,
+            latitude: m.latitude,
+            longitude: m.longitude,
+            locationName: m.location_name,
           }));
           setMessages(mapped);
         }
       }).catch(() => {});
     }
+  }, [chat.id, uid, refetchTrigger]);
+
+  // Refetch messages when app comes back to foreground (covers background race condition)
+  useEffect(() => {
+    const handler = CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive && chat.id) {
+        getMessages(chat.id).then(apiMessages => {
+          if (apiMessages && apiMessages.length > 0) {
+            const mapped = apiMessages.map(m => ({
+              id: m.id,
+              sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
+              text: m.text,
+              timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+              type: (m.type as Message["type"]) || "text",
+              mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
+              reactions: m.reactions,
+              status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
+              forwarded: m.forwarded || false,
+              replyToId: m.reply_to_id,
+              replyToText: m.reply_to_text,
+              replyToSender: m.reply_to_sender,
+              pollQuestion: m.poll_question,
+              pollOptions: m.poll_options,
+            }));
+            setMessages(mapped);
+          }
+        }).catch(() => {});
+      }
+    });
+    return () => { handler.then(h => h.remove()); };
   }, [chat.id, uid]);
 
   // Live Chat Style states with localStorage caching
@@ -165,8 +252,18 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       table: 'messages',
       filter: `chat_id=eq.${chat.id}`,
     }, (payload: any) => {
+      console.log('[REALTIME] ═══════ INSERT RECIBIDO ═══════');
+      console.log('[REALTIME] chat.id:', chat.id, 'filter: chat_id=eq.' + chat.id);
+      console.log('[REALTIME] payload.new:', JSON.stringify(payload.new));
+      console.log('[REALTIME] payload.eventType:', payload.eventType);
       const newMsg = payload.new;
+      if (newMsg.is_deleted) {
+        console.log('[REALTIME] ❌ mensaje marcado como borrado, ignorando');
+        return;
+      }
+      console.log('[REALTIME] sender_id:', newMsg.sender_id, 'uid:', uid, 'son iguales?:', newMsg.sender_id === uid);
       if (newMsg.sender_id !== uid) {
+        console.log('[REALTIME] ✅ mensaje de OTRO, agregando al estado');
         // Mark our sent messages as delivered now that the other user received the message
         setMessages(prev => prev.map(m =>
           m.sender === "me" && m.status === "sent" ? { ...m, status: "delivered" as const } : m
@@ -191,13 +288,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       filter: `chat_id=eq.${chat.id}`,
     }, (payload: any) => {
       const updated = payload.new;
+      if (updated.is_deleted) {
+        setMessages(prev => prev.filter(m => m.id !== updated.id));
+        return;
+      }
       if (updated.sender_id === uid && updated.status === "read") {
         setMessages(prev => prev.map(m =>
           m.id === updated.id ? { ...m, status: "read" as const } : m
         ));
       }
     });
-    channel.subscribe();
+    channel.subscribe((status: string) => {
+      console.log('[REALTIME] channel subscribe status:', status, 'for chat.id:', chat.id);
+    });
     messagesChannelRef.current = channel;
 
     return () => {
@@ -247,6 +350,58 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     });
   };
 
+  const handleReplyMessage = (msg: Message) => {
+    setReplyTo(msg);
+  };
+
+  const handleSendLocation = async () => {
+    if (!navigator.geolocation) {
+      console.warn("[CHAT] Geolocation not available");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const tempId = `temp_${Date.now()}`;
+        const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const newMsg: Message = {
+          id: tempId,
+          sender: "me",
+          timestamp,
+          type: "location",
+          latitude,
+          longitude,
+          locationName: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+          status: "sent",
+        };
+        setMessages(prev => [...prev, newMsg]);
+        onSendMessage(newMsg);
+
+        try {
+          const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+          if (!isLocalChat) {
+            const saved = await apiSendMessage({
+              chat_id: chat.id,
+              type: "location",
+              sender_id: uid,
+              text: `📍 ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+              latitude,
+              longitude,
+              location_name: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+            });
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
+          }
+        } catch (e) {
+          console.error("[CHAT] Error sending location:", e);
+        }
+      },
+      (err) => {
+        console.warn("[CHAT] Geolocation error:", err);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
   const handleSendText = async () => {
     if (!inputText.trim()) return;
     const tempId = `temp_${Date.now()}`;
@@ -257,13 +412,17 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       text: inputText,
       timestamp,
       type: "text",
-      status: "sent"
+      status: "sent",
+      replyToId: replyTo?.id,
+      replyToText: replyTo?.text,
+      replyToSender: replyTo?.sender === "me" ? "Tú" : chat.name,
     };
 
     // Optimistic add
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);
     setInputText("");
+    setReplyTo(null);
 
     // Stop typing indicator
     emitTyping(false);
@@ -282,6 +441,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           text: inputText,
           type: "text",
           sender_id: uid,
+          reply_to_id: replyTo?.id,
+          reply_to_text: replyTo?.text,
+          reply_to_sender: replyTo?.sender === "me" ? "Tú" : chat.name,
         });
         setMessages(prev => prev.map((m) =>
           m.id === tempId ? { ...m, id: saved.id } : m
@@ -394,20 +556,24 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     input.click();
   };
 
-  const handleCreatePoll = (e: React.FormEvent) => {
+  const handleCreatePoll = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pollQuestion.trim() || !pollOption1.trim() || !pollOption2.trim()) return;
 
+    const pollOpts = [
+      { id: "o1_" + Date.now(), text: pollOption1, votes: 0, votedUsers: [] },
+      { id: "o2_" + Date.now(), text: pollOption2, votes: 0, votedUsers: [] }
+    ];
+
+    const tempId = "msg_" + Date.now();
     const newMsg: Message = {
-      id: "msg_" + Date.now(),
+      id: tempId,
       sender: "me",
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       type: "poll",
       pollQuestion: pollQuestion,
-      pollOptions: [
-        { id: "o1_" + Date.now(), text: pollOption1, votes: 0, votedUsers: [] },
-        { id: "o2_" + Date.now(), text: pollOption2, votes: 0, votedUsers: [] }
-      ]
+      pollOptions: pollOpts,
+      status: "sent",
     };
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);
@@ -416,6 +582,23 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     setPollOption1("");
     setPollOption2("");
     setShowAttachments(false);
+
+    try {
+      const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+      if (!isLocalChat) {
+        const saved = await apiSendMessage({
+          chat_id: chat.id,
+          type: "poll",
+          sender_id: uid,
+          text: pollQuestion,
+          poll_question: pollQuestion,
+          poll_options: pollOpts,
+        });
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
+      }
+    } catch (e) {
+      console.error("[CHAT] Error saving poll:", e);
+    }
   };
 
   const handleVote = (messageId: string, optionId: string) => {
@@ -457,9 +640,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
   const handleDeleteMessage = async (messageId: string) => {
     setActiveReactionMenu(null);
-    setMessages(prev => prev.filter((m) => m.id !== messageId));
     try {
       await apiDeleteMessage(messageId);
+      setMessages(prev => prev.filter((m) => m.id !== messageId));
     } catch (e) {
       console.error("[CHAT] Delete error:", e);
     }
@@ -564,7 +747,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               <ArrowLeft className="w-5 h-5 text-teal-100" />
             </button>
             <div className="relative">
-              {chat.avatar ? (
+              {chat.isGroup ? (
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center border border-white/20">
+                  <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                </div>
+              ) : chat.avatar ? (
                 <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center border border-white/20">
@@ -573,14 +765,14 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                   </span>
                 </div>
               )}
-              {chat.status === "online" && (
+              {!chat.isGroup && chat.status === "online" && (
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#0a4d52]"></span>
               )}
             </div>
             <div>
               <h3 className="text-xs font-bold leading-tight truncate max-w-[120px]">{chat.name}</h3>
               <span className="text-[10px] text-teal-200 block">
-                {partnerTyping ? "Escribiendo..." : chat.status === "online" ? "En línea" : "Desconectado"}
+                {partnerTyping ? "Escribiendo..." : chat.isGroup ? "Grupo" : chat.status === "online" ? "En línea" : "Desconectado"}
               </span>
             </div>
           </div>
@@ -600,6 +792,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               title="Video llamada"
             >
               <Video className="w-5 h-5" />
+            </button>
+            {/* Search button */}
+            <button
+              onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); setSearchIndex(0); }}
+              className={`p-1.5 rounded-full transition-all cursor-pointer ${
+                showSearch ? "bg-white/20 text-white" : "text-teal-100 hover:bg-white/10 hover:text-white"
+              }`}
+              title="Buscar mensajes"
+            >
+              <Search className="w-4 h-4" />
             </button>
             {/* 3 dots menu */}
             <div className="relative">
@@ -663,11 +865,60 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         chatName={chat.name}
       />
 
+      {/* SEARCH BAR */}
+      {showSearch && (
+        <div className="relative z-10 px-3 py-2 bg-white/90 backdrop-blur-sm border-b border-slate-200 shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="flex-1 relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Buscar mensajes..."
+                value={searchQuery}
+                onChange={e => { setSearchQuery(e.target.value); setSearchIndex(0); }}
+                className="w-full pl-8 pr-3 py-1.5 text-[11px] rounded-lg border border-slate-200 bg-white outline-none focus:border-teal-400 transition-colors"
+                autoFocus
+              />
+            </div>
+            {searchQuery.trim() && (
+              <div className="flex items-center gap-1 text-[10px] text-slate-500 whitespace-nowrap">
+                {filteredMessages.length > 0 ? (
+                  <>
+                    <span>{searchIndex + 1} de {filteredMessages.length}</span>
+                    <button
+                      onClick={() => setSearchIndex(i => Math.max(0, i - 1))}
+                      className="p-0.5 hover:bg-slate-100 rounded cursor-pointer"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setSearchIndex(i => Math.min(filteredMessages.length - 1, i + 1))}
+                      className="p-0.5 hover:bg-slate-100 rounded cursor-pointer"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-slate-400">Sin resultados</span>
+                )}
+                <button
+                  onClick={() => { setShowSearch(false); setSearchQuery(""); setSearchIndex(0); }}
+                  className="p-0.5 hover:bg-slate-100 rounded cursor-pointer ml-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* MESSAGES LIST AREA */}
       <div 
         className="flex-1 p-4 overflow-y-auto space-y-3.5 relative transition-all duration-300 bg-transparent"
       >
         <div className="relative z-10 space-y-3.5">
+          {(() => { if (messages.length > 0 || visibleMessages.length > 0) console.log('[RENDER] Rendering messages — total:', messages.length, 'visible:', visibleMessages.length); })()}
           {messages.length > renderLimit && (
             <div className="flex justify-center pb-2">
               <button
@@ -678,23 +929,31 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               </button>
             </div>
           )}
-          {visibleMessages.map((msg) => {
+          {(showSearch && searchQuery.trim() ? filteredMessages : visibleMessages).map((msg, idx) => {
             const isMe = msg.sender === "me";
+            const isHighlighted = showSearch && searchQuery.trim() && idx === searchIndex;
             return (
-              <MessageBubble
+              <div
                 key={msg.id}
-                msg={msg}
-                isMe={isMe}
-                activeReactionMenu={activeReactionMenu}
-                setActiveReactionMenu={setActiveReactionMenu}
-                isPlayingAudio={isPlayingAudio}
-                setIsPlayingAudio={setIsPlayingAudio}
-                handleVote={handleVote}
-                handleAddReaction={handleAddReaction}
-                handleDeleteMessage={handleDeleteMessage}
-                bubbleColorMeId={bubbleColorMeId}
-                bubbleColorThemId={bubbleColorThemId}
-              />
+                ref={isHighlighted ? el => el?.scrollIntoView({ behavior: "smooth", block: "center" }) : undefined}
+                className={isHighlighted ? "ring-2 ring-teal-400 rounded-xl transition-all duration-300" : ""}
+              >
+                <MessageBubble
+                  msg={msg}
+                  isMe={isMe}
+                  activeReactionMenu={activeReactionMenu}
+                  setActiveReactionMenu={setActiveReactionMenu}
+                  isPlayingAudio={isPlayingAudio}
+                  setIsPlayingAudio={setIsPlayingAudio}
+                  handleVote={handleVote}
+                  handleAddReaction={handleAddReaction}
+                  handleDeleteMessage={handleDeleteMessage}
+                  handleForwardMessage={(m) => onForwardMessage?.(m)}
+                  handleReplyMessage={handleReplyMessage}
+                  bubbleColorMeId={bubbleColorMeId}
+                  bubbleColorThemId={bubbleColorThemId}
+                />
+              </div>
             );
           })}
         </div>
@@ -705,13 +964,13 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       {showAttachments && (
         <div className="absolute bottom-20 left-4 right-4 bg-white/95 backdrop-blur-md rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.18)] border border-slate-100 p-4 grid grid-cols-4 gap-3 z-30 animate-fade-in">
           <button 
-            onClick={() => { setShowGifPicker(true); setShowAttachments(false); }}
+            onClick={() => { setShowAttachments(false); triggerFilePick("image/*", "image"); }}
             className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
           >
-            <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform shadow-sm">
-              <Film className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform shadow-sm">
+              <Image className="w-5 h-5" />
             </div>
-            <span className="text-[9px] font-semibold text-slate-600">GIF / Sticker</span>
+            <span className="text-[9px] font-semibold text-slate-600">Fotos</span>
           </button>
 
           <button 
@@ -722,6 +981,26 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               <VideoIcon className="w-5 h-5" />
             </div>
             <span className="text-[9px] font-semibold text-slate-600">Video</span>
+          </button>
+
+          <button 
+            onClick={() => { setShowAttachments(false); triggerFilePick("*/*", "file"); }}
+            className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+          >
+            <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center text-amber-600 group-hover:scale-110 transition-transform shadow-sm">
+              <File className="w-5 h-5" />
+            </div>
+            <span className="text-[9px] font-semibold text-slate-600">Documento</span>
+          </button>
+
+          <button 
+            onClick={() => { setShowGifPicker(true); setShowAttachments(false); }}
+            className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+          >
+            <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform shadow-sm">
+              <Film className="w-5 h-5" />
+            </div>
+            <span className="text-[9px] font-semibold text-slate-600">GIF / Sticker</span>
           </button>
 
           <button 
@@ -744,6 +1023,26 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               <BarChart2 className="w-5 h-5" />
             </div>
             <span className="text-[9px] font-semibold text-slate-600">Encuesta</span>
+          </button>
+
+          <button
+            onClick={() => { setShowAttachments(false); triggerFilePick("image/*", "image"); }}
+            className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+          >
+            <div className="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center text-purple-600 group-hover:scale-110 transition-transform shadow-sm">
+              <Camera className="w-5 h-5" />
+            </div>
+            <span className="text-[9px] font-semibold text-slate-600">Cámara</span>
+          </button>
+
+          <button
+            onClick={() => { setShowAttachments(false); handleSendLocation(); }}
+            className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+          >
+            <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center text-orange-600 group-hover:scale-110 transition-transform shadow-sm">
+              <MapPin className="w-5 h-5" />
+            </div>
+            <span className="text-[9px] font-semibold text-slate-600">Ubicación</span>
           </button>
         </div>
       )}
@@ -802,6 +1101,27 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           onSelect={(url, type) => handleSendSticker(url, type)}
           onClose={() => setShowGifPicker(false)}
         />
+      )}
+
+      {/* REPLY PREVIEW BAR */}
+      {replyTo && (
+        <div className="px-3 pb-1 bg-transparent relative z-10 shrink-0">
+          <div className="bg-white/95 backdrop-blur-md rounded-2xl px-3 py-2 border border-slate-200 shadow-sm flex items-center gap-2">
+            <div className="w-0.5 h-8 bg-teal-500 rounded-full shrink-0"></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold text-teal-700 truncate">
+                {replyTo.sender === "me" ? "Tú" : chat.name}
+              </p>
+              <p className="text-[9px] text-slate-500 truncate">{replyTo.text || "Multimedia"}</p>
+            </div>
+            <button
+              onClick={() => setReplyTo(null)}
+              className="p-1 hover:bg-slate-100 rounded-full transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-3.5 h-3.5 text-slate-400" />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* FLOATING CHAT INPUT AREA */}

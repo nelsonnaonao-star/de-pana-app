@@ -1,18 +1,19 @@
 import React, { useState } from "react";
-import { Search, UserPlus, X, ChevronRight, Users } from "lucide-react";
+import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft } from "lucide-react";
 import { Contact } from "../services/contacts";
 
 interface ContactsListProps {
   contacts: Contact[];
   onSelectContact: (contact: Contact) => void;
   onAddContact: () => void;
+  onBack?: () => void;
 }
 
 function getInitials(name: string): string {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
-export default function ContactsList({ contacts, onSelectContact, onAddContact }: ContactsListProps) {
+export default function ContactsList({ contacts, onSelectContact, onAddContact, onBack }: ContactsListProps) {
   const [searchQuery, setSearchQuery] = useState("");
 
   const filtered = contacts.filter((c) =>
@@ -26,7 +27,14 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact }
     <div className="flex-1 bg-[#f1f5f9] flex flex-col h-full overflow-hidden">
       <div className="bg-gradient-to-r from-[#0a4d52] to-[#05292c] text-white px-4 py-4 shrink-0">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-black tracking-tight">Contactos</h3>
+          <div className="flex items-center gap-2">
+            {onBack && (
+              <button onClick={onBack} className="p-1 text-teal-300 hover:text-white transition-all cursor-pointer">
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            )}
+            <h3 className="text-sm font-black tracking-tight">Contactos</h3>
+          </div>
           <button
             onClick={onAddContact}
             className="p-1.5 hover:bg-white/10 rounded-full transition-all cursor-pointer"

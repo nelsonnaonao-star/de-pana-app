@@ -16,14 +16,14 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkca
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
-const upload = multer({
+const uploadVideo = multer({
   storage: multer.diskStorage({
     destination: path.join(__dirname, '..', '..', 'uploads'),
     filename: (req, file, cb) => {
       cb(null, `raw-${Date.now()}-${Math.random().toString(36).slice(2)}.mp4`);
     },
   }),
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('video/')) {
       cb(null, true);
@@ -33,12 +33,23 @@ const upload = multer({
   },
 });
 
+const uploadAny = multer({
+  storage: multer.diskStorage({
+    destination: path.join(__dirname, '..', '..', 'uploads'),
+    filename: (req, file, cb) => {
+      const ext = file.originalname.split('.').pop() || 'bin';
+      cb(null, `upload-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
+    },
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+
 function getOutputPath() {
   return path.join(__dirname, '..', '..', 'uploads', `compressed-${Date.now()}-${Math.random().toString(36).slice(2)}.mp4`);
 }
 
 router.post('/compress-video', (req, res) => {
-  upload.single('video')(req, res, async (err) => {
+  uploadVideo.single('video')(req, res, async (err) => {
     if (err) {
       console.error('[media] Multer error:', err.message);
       return res.status(400).json({ error: err.message });
@@ -109,10 +120,25 @@ router.post('/compress-video', (req, res) => {
   });
 });
 
+router.post('/upload', uploadAny.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se recibió ningún archivo' });
+    }
+    const url = await uploadToSupabase(req.file.path, req.file.mimetype, req.file.originalname.split('.').pop() || 'bin');
+    await fs.unlink(req.file.path).catch(() => {});
+    res.json({ url });
+  } catch (err) {
+    console.error('[media] Upload error:', err);
+    res.status(500).json({ error: 'Error al subir el archivo' });
+  }
+});
+
 async function uploadToSupabase(filePath, mimeType, ext = 'mp4') {
   if (!supabase) throw new Error('Supabase no configurado');
 
-  const fileName = `video-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const prefix = mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('image/') ? 'image' : 'file';
+  const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
   const fileBuffer = await fs.readFile(filePath);
 
   const { error } = await supabase.storage

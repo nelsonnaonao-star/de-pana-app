@@ -118,28 +118,41 @@ export async function setupCapacitorPush(userId: string) {
     } catch {}
 
     PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
-      console.log('[FCM] Push received:', JSON.stringify(notification.data));
+      console.log('[FCM] ═══════ PUSH RECEIVED ═══════');
+      console.log('[FCM] notification keys:', Object.keys(notification).join(','));
+      console.log('[FCM] data:', JSON.stringify(notification.data));
+      console.log('[FCM] data.type:', notification.data?.type);
       const data = notification.data;
       if (data?.type === 'call' && data?.chatId) {
         window.dispatchEvent(new CustomEvent('incoming-call', {
           detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio' },
         }));
+      } else if (data?.type === 'message' && data?.chatId) {
+        window.dispatchEvent(new CustomEvent('new-message-received', {
+          detail: { chatId: data.chatId, contactId: data.contactId, title: data.title, body: data.body },
+        }));
       }
     });
 
     PushNotifications.addListener('pushNotificationActionPerformed', (action: any) => {
+      console.log('[FCM] ═══════ ACTION PERFORMED ═══════');
+      console.log('[FCM] action:', JSON.stringify(action));
       const data = action.notification.data;
-      if (!data) return;
+      console.log('[FCM] action data:', JSON.stringify(data));
+      if (!data) {
+        console.log('[FCM] ❌ no data in action');
+        return;
+      }
       if (data.type === 'call' && data.chatId) {
+        console.log('[FCM] -> dispatching incoming-call');
         window.dispatchEvent(new CustomEvent('incoming-call', {
           detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName || 'Llamada entrante', callType: data.callType || 'audio' },
         }));
       } else if (data.chatId) {
-        if (data.contactId) {
-          window.dispatchEvent(new CustomEvent('open-chat', {
-            detail: { chatId: data.chatId, contactId: data.contactId },
-          }));
-        }
+        console.log('[FCM] -> dispatching open-chat with chatId:', data.chatId, 'contactId:', data.contactId);
+        window.dispatchEvent(new CustomEvent('open-chat', {
+          detail: { chatId: data.chatId, contactId: data.contactId, title: data.title, body: data.body },
+        }));
       }
     });
   } catch (e) {

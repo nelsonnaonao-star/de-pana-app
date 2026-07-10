@@ -247,4 +247,37 @@ router.post('/add-contact', async (req, res) => {
   }
 });
 
+// ─── Delete chat + all messages + participants ────────────────────
+router.delete('/chats/:chatId', async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const userId = req.query.userId || req.body?.userId;
+    if (!chatId) return res.status(400).json({ error: 'chatId requerido' });
+    if (!userId) return res.status(400).json({ error: 'userId requerido' });
+
+    // Soft-delete all messages in the chat
+    await supabaseAdmin
+      .from('messages')
+      .update({ is_deleted: true })
+      .eq('chat_id', chatId);
+
+    // Remove chat participants
+    await supabaseAdmin
+      .from('chat_participants')
+      .delete()
+      .eq('chat_id', chatId);
+
+    // Delete the chat itself
+    await supabaseAdmin
+      .from('chats')
+      .delete()
+      .eq('id', chatId);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DATA] delete chat error:', err);
+    res.status(500).json({ error: 'Error al eliminar chat' });
+  }
+});
+
 export default router;

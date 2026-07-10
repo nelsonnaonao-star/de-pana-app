@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { 
   Check, AlertTriangle, Info, Search, Plus, 
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
-  Smartphone, EyeOff, UserCheck, CircleUser
+  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft
 } from "lucide-react";
 import { Chat, Message, ActiveCall } from "../types";
 import WelcomeScreen from "./WelcomeScreen";
@@ -23,12 +23,14 @@ import BottomTabBar from "./phone/BottomTabBar";
 import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages, clearMessages } from "../services/messages";
-import { createChat as createChatInSupabase } from "../services/chats";
+import { getMessages, clearMessages, sendMessage as apiSendMessage } from "../services/messages";
+import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat } from "../services/chats";
 import { getMyFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
 import { WebRTCService } from "../services/webrtc";
 import { startCall as apiStartCall } from "../services/calls";
 import { sendFcmPush } from "../services/pushCapacitor";
+import { uploadAvatar } from "../services/storage";
+import { updateProfile } from "../services/auth";
 
 interface PhoneSimulatorProps {
   isCorrected?: boolean;
@@ -47,11 +49,26 @@ export default function PhoneSimulator({
   externalMessageTrigger = null,
   onClearExternalMessageTrigger = () => {}
 }: PhoneSimulatorProps) {
-  const { user, profile, contacts: appContacts, chats: supabaseChats, refreshChats, refreshContacts } = useSupabase();
+  const { user, profile, contacts: appContacts, chats: supabaseChats, refreshChats, refreshContacts, refreshProfile } = useSupabase();
+
+  // Deduplicate contacts by contact_user_id (prefer entry with phone) or by name+phone
+  const dedupedContacts = useMemo(() => {
+    const seen = new Map<string, typeof appContacts[0]>();
+    for (const c of appContacts) {
+      const key = c.contact_user_id || `${c.name}|${c.phone || ''}`;
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, c);
+      } else if (c.phone && !existing.phone) {
+        seen.set(key, c);
+      }
+    }
+    return Array.from(seen.values());
+  }, [appContacts]);
 
   // Application Screen State
   const [currentScreen, setCurrentScreen] = useState<
-    "welcome" | "chats" | "chat_room" | "qr_scanner" | "synced_contacts" | "contacts" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual"
+    "welcome" | "chats" | "chat_room" | "qr_scanner" | "synced_contacts" | "contacts" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual" | "create_group"
   >("chats");
 
   // Floating action menu
@@ -84,6 +101,7 @@ export default function PhoneSimulator({
   // Active Chats & Selected Chat
   const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [refetchTrigger, setRefetchTrigger] = useState(0);
 
   // Active Call Screen Overlay
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
@@ -100,6 +118,18 @@ export default function PhoneSimulator({
   const [contextMenuChat, setContextMenuChat] = useState<Chat | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Forward message state
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const forwardingSearchRef = useRef<HTMLInputElement>(null);
+  const [forwardSearchQuery, setForwardSearchQuery] = useState("");
+
+  // Group creation state
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
+  const [groupSearchQuery, setGroupSearchQuery] = useState("");
+  const [groupNameInput, setGroupNameInput] = useState("");
+  const [groupMuted, setGroupMuted] = useState(false);
+  const [groupAdminOnly, setGroupAdminOnly] = useState(false);
 
   // Search input filter
   const [searchQuery, setSearchQuery] = useState("");
@@ -132,6 +162,11 @@ export default function PhoneSimulator({
   // Toast notifications for user feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Profile editing
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editName, setEditName] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
@@ -159,7 +194,7 @@ export default function PhoneSimulator({
         description: f.description || '',
         location: f.location || '',
         flyerUrl: f.flyer_url || '',
-        isGenerated: !!f.flyer_url,
+        isGenerated: !!f.template_id,
         templateId: f.template_id || undefined,
         productName: f.product_name || undefined,
         price: f.price || undefined,
@@ -311,10 +346,9 @@ export default function PhoneSimulator({
     setCurrentScreen("chats");
   };
 
-  // Load Supabase chats when available
+  // Load Supabase chats when available (dedup already done in getChats service)
   useEffect(() => {
     if (supabaseChats.length > 0 && user) {
-      const chatsById = new Map(supabaseChats.map((sc: any) => [sc.id, sc]));
       const mapped = supabaseChats.map((sc: any) => ({
         id: sc.id,
         name: sc.name,
@@ -333,26 +367,10 @@ export default function PhoneSimulator({
           : "",
         unreadCount: sc.unread_count || 0,
         partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
+        isGroup: sc.is_group || false,
         messages: [],
       }));
-      // Deduplicate: keep only the best chat per partner (prefer the one where profile_id is NOT the current user)
-      const seen = new Map<string, any>();
-      for (const chat of mapped) {
-        if (!chat.partnerUserId) continue;
-        const existing = seen.get(chat.partnerUserId);
-        if (!existing) {
-          seen.set(chat.partnerUserId, chat);
-        } else {
-          const existingSc = chatsById.get(existing.id);
-          const chatSc = chatsById.get(chat.id);
-          const existingIsDuplicate = existingSc?.profile_id === user.id;
-          const currentIsDuplicate = chatSc?.profile_id === user.id;
-          if (existingIsDuplicate && !currentIsDuplicate) {
-            seen.set(chat.partnerUserId, chat);
-          }
-        }
-      }
-      setChats(Array.from(seen.values()));
+      setChats(mapped);
     }
   }, [supabaseChats, user]);
 
@@ -387,6 +405,7 @@ export default function PhoneSimulator({
     );
     if (existing) {
       setSelectedChatId(existing.id);
+      setCurrentScreen("chat_room");
     } else if (user) {
       try {
         const newChat = await createChatInSupabase({
@@ -396,10 +415,12 @@ export default function PhoneSimulator({
           admin_id: user.id,
         });
         await refreshChats();
-        if (newChat?.id) setSelectedChatId(newChat.id);
+        if (newChat?.id) {
+          setSelectedChatId(newChat.id);
+          setCurrentScreen("chat_room");
+        }
       } catch {}
     }
-    setCurrentScreen("chat_room");
   };
 
   useEffect(() => {
@@ -477,18 +498,43 @@ export default function PhoneSimulator({
     const handleOpenChat = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
-      if (d?.chatId && d?.contactId) {
+      if (d?.chatId) {
         setSelectedChatId(d.chatId);
-        setCurrentScreen('chats');
+        setCurrentScreen('chat_room');
+      }
+    };
+    const handleNewMessage = (e: Event) => {
+      console.log('[EVENT] ═══════ new-message-received DISPARADO ═══════');
+      const detail = (e as CustomEvent).detail;
+      console.log('[EVENT] raw detail:', typeof detail === 'string' ? detail : JSON.stringify(detail));
+      const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
+      console.log('[EVENT] parsed chatId:', d?.chatId, 'contactId:', d?.contactId, 'body:', d?.body?.substring(0, 50));
+      if (!d?.chatId) {
+        console.log('[EVENT] ❌ No chatId, abortando');
+        return;
+      }
+      console.log('[EVENT] selectedChatId:', selectedChatId, 'currentScreen:', currentScreen);
+      setChats(prev => prev.map(chat => {
+        if (chat.id === d.chatId) {
+          const updated = { ...chat, unreadCount: chat.unreadCount + 1 };
+          if (d.body) updated.lastMessage = d.body;
+          return updated;
+        }
+        return chat;
+      }));
+      if (selectedChatId === d.chatId && currentScreen === 'chat_room') {
+        setRefetchTrigger(n => n + 1);
       }
     };
     window.addEventListener('incoming-call', handleIncomingCall);
     window.addEventListener('open-chat', handleOpenChat);
+    window.addEventListener('new-message-received', handleNewMessage);
     return () => {
       window.removeEventListener('incoming-call', handleIncomingCall);
       window.removeEventListener('open-chat', handleOpenChat);
+      window.removeEventListener('new-message-received', handleNewMessage);
     };
-  }, [user?.id, activeCall]);
+  }, [user?.id, activeCall, selectedChatId, currentScreen]);
 
   useEffect(() => {
     if (externalMessageTrigger) {
@@ -512,6 +558,14 @@ export default function PhoneSimulator({
   }, [externalMessageTrigger, currentScreen, selectedChatId, onClearExternalMessageTrigger]);
 
   const activeChat = chats.find((c) => c.id === selectedChatId);
+
+  // Safety guard: if we're on chat_room but no activeChat, revert to chats
+  useEffect(() => {
+    if (currentScreen === "chat_room" && !activeChat) {
+      setCurrentScreen("chats");
+      setSelectedChatId(null);
+    }
+  }, [currentScreen, activeChat]);
 
   const handleSendMessageInRoom = (newMsg: Message) => {
     if (!selectedChatId) return;
@@ -624,9 +678,17 @@ export default function PhoneSimulator({
     showToast("Contacto agregado por QR ✅");
   };
 
+  const getChatByPartnerId = useCallback((partnerId: string) => {
+    return chats.find(c => {
+      const otherId = "partnerUserId" in c ? (c as any).partnerUserId : null;
+      if (otherId) return otherId === partnerId;
+      return c.profile_id === partnerId || c.admin_id === partnerId;
+    });
+  }, [chats]);
+
   const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }) => {
     const displayName = profile.contactName || profile.name;
-    const existing = chats.find(c => c.name.toLowerCase() === displayName.toLowerCase());
+    const existing = getChatByPartnerId(profile.id);
     if (existing) {
       setSelectedChatId(existing.id);
       setCurrentScreen("chat_room");
@@ -638,7 +700,7 @@ export default function PhoneSimulator({
           profile_id: profile.id,
           admin_id: user?.id || "",
         });
-        await refreshChats();
+        refreshChats();
         if (chat?.id) {
           setChats(prev => {
             if (prev.some(c => c.id === chat.id)) return prev;
@@ -655,19 +717,70 @@ export default function PhoneSimulator({
             }, ...prev];
           });
           setSelectedChatId(chat.id);
+          setCurrentScreen("chat_room");
         }
-      } catch {}
-      setCurrentScreen("chat_room");
+      } catch (e) {
+        console.warn("Error starting chat:", e);
+      }
     }
   };
 
-  const handleDeleteChat = (chatId: string) => {
+  const handleCreateGroup = async () => {
+    if (!user || selectedGroupMembers.length < 1) return;
+    try {
+      const memberProfiles = appContacts
+        .filter(c => selectedGroupMembers.includes(c.id || c.contact_user_id || ""))
+        .map(c => ({
+          name: c.name || "Usuario",
+          id: c.contact_user_id || c.id || "",
+        }));
+      const finalGroupName = groupNameInput.trim() || 
+        memberProfiles.map(m => m.name.split(" ")[0]).slice(0, 5).join(", ") + (memberProfiles.length > 5 ? "..." : "");
+      const groupChat = await createGroupChat(finalGroupName, user.id, selectedGroupMembers, groupAdminOnly);
+      refreshChats();
+      setSelectedGroupMembers([]);
+      setGroupSearchQuery("");
+      setGroupNameInput("");
+      setGroupMuted(false);
+      setGroupAdminOnly(false);
+      if (groupChat?.id) {
+        setChats(prev => {
+          if (prev.some(c => c.id === groupChat.id)) return prev;
+          return [{
+            id: groupChat.id,
+            name: finalGroupName,
+            avatar: "",
+            status: "online" as const,
+            lastMessage: "",
+            lastMessageTime: "",
+            unreadCount: 0,
+            messages: [],
+            isGroup: true,
+          }, ...prev];
+        });
+        setSelectedChatId(groupChat.id);
+        setCurrentScreen("chat_room");
+      }
+    } catch (e) {
+      console.error("[GROUP] Error creating group:", e);
+    }
+  };
+
+  const handleDeleteChat = async (chatId: string) => {
     setChats(prev => prev.filter(c => c.id !== chatId));
     setSwipedChatId(null);
     setContextMenuChat(null);
     setContextMenuPos(null);
     if (selectedChatId === chatId) {
       setSelectedChatId(null);
+      setCurrentScreen("chats");
+    }
+    if (user?.id && !chatId.startsWith("chat_biz_") && !chatId.startsWith("chat_state_")) {
+      try {
+        await apiDeleteChat(chatId, user.id);
+      } catch (e) {
+        console.warn("[CHAT] Delete chat API error:", e);
+      }
     }
   };
 
@@ -803,8 +916,10 @@ export default function PhoneSimulator({
               }}
               onSendMessage={handleSendMessageInRoom}
               onTriggerCall={handleTriggerCallFromChat}
+              onForwardMessage={setForwardingMessage}
               currentUserId={user?.id}
               currentUserName={profile?.name}
+              refetchTrigger={refetchTrigger}
             />
           ) : currentScreen === "qr_scanner" ? (
             <QrScanner
@@ -839,28 +954,137 @@ export default function PhoneSimulator({
               onBack={() => setCurrentScreen("chats")}
               onStartChat={handleStartChatFromSynced}
             />
-          ) : currentScreen === "contacts" ? (
-            <ContactsList
-              contacts={appContacts}
-              onSelectContact={(contact) => {
-                const existing = chats.find(c => c.name.toLowerCase() === contact.name.toLowerCase());
-                if (existing) {
-                  setSelectedChatId(existing.id);
-                  setCurrentScreen("chat_room");
-                } else if (contact.contact_user_id) {
-                  handleStartChatFromSynced({
-                    id: contact.contact_user_id,
-                    name: contact.name,
-                    contactName: contact.name,
-                    avatar_url: contact.avatar || "",
-                    phone_number: contact.phone || "",
-                  });
-                }
-              }}
-              onAddContact={() => setCurrentScreen("add_contact_manual")}
-            />
+          ) : currentScreen === "create_group" ? (
+            // GROUP CREATION SCREEN
+            <div className="flex-1 flex flex-col overflow-hidden bg-white">
+              <div className="bg-[#0a4d52] px-4 pt-5 pb-4 shrink-0">
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setCurrentScreen("chats")} className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer">
+                    <ArrowLeft className="w-5 h-5 text-teal-100" />
+                  </button>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Nuevo Grupo</h3>
+                    <p className="text-[10px] text-teal-200">{selectedGroupMembers.length} participantes</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Group name input */}
+              <div className="px-4 py-3 border-b border-slate-100">
+                <input
+                  type="text"
+                  placeholder="Nombre del grupo (opcional)"
+                  value={groupNameInput}
+                  onChange={e => setGroupNameInput(e.target.value)}
+                  className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-xs px-4 py-2.5 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
+                />
+              </div>
+
+              {/* Search contacts */}
+              <div className="px-4 py-2 border-b border-slate-100">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Buscar contactos..."
+                    value={groupSearchQuery}
+                    onChange={e => setGroupSearchQuery(e.target.value)}
+                    className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-xs pl-9 pr-4 py-2 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
+                  />
+                </div>
+              </div>
+
+              {/* Contact list */}
+              <div className="flex-1 overflow-y-auto px-4 py-2 space-y-0.5">
+                {appContacts
+                  .filter(c => c.name?.toLowerCase().includes(groupSearchQuery.toLowerCase()) || c.phone?.toLowerCase().includes(groupSearchQuery.toLowerCase()))
+                  .map(contact => {
+                    const isSelected = selectedGroupMembers.includes(contact.id || contact.contact_user_id || "");
+                    const contactId = contact.id || contact.contact_user_id || "";
+                    return (
+                      <button
+                        key={contactId}
+                        onClick={() => {
+                          setSelectedGroupMembers(prev =>
+                            isSelected ? prev.filter(id => id !== contactId) : [...prev, contactId]
+                          );
+                        }}
+                        className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors"
+                      >
+                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                          isSelected ? "bg-teal-500 border-teal-500" : "border-slate-300"
+                        }`}>
+                          {isSelected && <Check className="w-3 h-3 text-white" />}
+                        </div>
+                        {contact.avatar ? (
+                          <img src={contact.avatar} alt={contact.name} className="w-9 h-9 rounded-full object-cover" />
+                        ) : (
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                            <span className="text-white font-bold text-[10px]">
+                              {(contact.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                            </span>
+                          </div>
+                        )}
+                        <div className="text-left">
+                          <p className="text-[11px] font-bold text-slate-800">{contact.name}</p>
+                          <p className="text-[9px] text-slate-400">{contact.phone || "Sin teléfono"}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                {appContacts.length === 0 && (
+                  <p className="text-[10px] text-slate-400 text-center py-8">No hay contactos disponibles</p>
+                )}
+              </div>
+
+              {selectedGroupMembers.length >= 1 && (
+                <div className="px-4 py-3 border-t border-slate-100 bg-white space-y-2.5">
+                  {/* Mute toggle */}
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      </svg>
+                      <span className="text-[11px] font-semibold text-slate-700">Silenciar grupo</span>
+                    </div>
+                    <button
+                      onClick={() => setGroupMuted(!groupMuted)}
+                      className={`w-9 h-5 rounded-full transition-colors relative ${groupMuted ? "bg-teal-500" : "bg-slate-300"}`}
+                    >
+                      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${groupMuted ? "translate-x-4.5 left-0.5" : "left-0.5"}`}></span>
+                    </button>
+                  </label>
+
+                  {/* Admin-only posting toggle */}
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                      </svg>
+                      <span className="text-[11px] font-semibold text-slate-700">Solo admins pueden escribir</span>
+                    </div>
+                    <button
+                      onClick={() => setGroupAdminOnly(!groupAdminOnly)}
+                      className={`w-9 h-5 rounded-full transition-colors relative ${groupAdminOnly ? "bg-teal-500" : "bg-slate-300"}`}
+                    >
+                      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${groupAdminOnly ? "translate-x-4.5 left-0.5" : "left-0.5"}`}></span>
+                    </button>
+                  </label>
+
+                  <button
+                    onClick={handleCreateGroup}
+                    className="w-full py-2.5 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-xl text-xs font-bold transition-colors"
+                  >
+                    Crear Grupo
+                  </button>
+                </div>
+              )}
+            </div>
           ) : (
-            // Tab screen (Chats, States, Channels, Rates, Business, Profile)
+            // Tab screen (Chats, Contacts, States, Channels, Rates, Business, Profile)
             <div className="flex-1 flex flex-col overflow-hidden h-full relative">
               
               {/* Header section based on selected tab */}
@@ -1089,8 +1313,17 @@ export default function PhoneSimulator({
                             style={isSwiped ? { transform: 'translateX(80px)' } : undefined}
                           >
                             <div className="relative shrink-0">
-                              <div className="p-[2px] rounded-full border-2 border-dashed border-rose-500/90 transition-transform hover:rotate-12 duration-500">
-                                {chat.avatar ? (
+                              <div className={`p-[2px] rounded-full border-2 border-dashed ${chat.isGroup ? "border-purple-500/90" : "border-rose-500/90"} transition-transform hover:rotate-12 duration-500`}>
+                                {chat.isGroup ? (
+                                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
+                                    <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                                      <circle cx="9" cy="7" r="4" />
+                                      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                                      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                                    </svg>
+                                  </div>
+                                ) : chat.avatar ? (
                                   <img src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" />
                                 ) : (
                                   <div className="w-11 h-11 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
@@ -1100,7 +1333,7 @@ export default function PhoneSimulator({
                                   </div>
                                 )}
                               </div>
-                              {chat.status === "online" && (
+                              {!chat.isGroup && chat.status === "online" && (
                                 <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white z-10"></span>
                               )}
                             </div>
@@ -1184,6 +1417,30 @@ export default function PhoneSimulator({
                   <ChannelsPanel />
                 )}
 
+                {/* CONTACTS TAB */}
+                {currentScreen === "contacts" && (
+                  <ContactsList
+                    contacts={dedupedContacts}
+                    onSelectContact={(contact) => {
+                      if (!contact.contact_user_id) return;
+                      const existing = getChatByPartnerId(contact.contact_user_id);
+                      if (existing) {
+                        setSelectedChatId(existing.id);
+                        setCurrentScreen("chat_room");
+                      } else {
+                        handleStartChatFromSynced({
+                          id: contact.contact_user_id,
+                          name: contact.name,
+                          contactName: contact.name,
+                          avatar_url: contact.avatar || "",
+                          phone_number: contact.phone || "",
+                        });
+                      }
+                    }}
+                    onAddContact={() => setCurrentScreen("add_contact_manual")}
+                  />
+                )}
+
                 {/* RATES TAB */}
                 {currentScreen === "rates" && (
                   <RatesPanel />
@@ -1209,16 +1466,94 @@ export default function PhoneSimulator({
                       <div className="absolute top-4 right-4 bg-white/10 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] font-bold tracking-widest text-teal-200">
                         VERSIÓN PRO
                       </div>
-                      <div className="relative inline-block mt-2">
+                      <div className="relative inline-block mt-2 group">
                         <img 
                           src={registeredUser.avatar} 
                           alt="Profile" 
                           className="w-14 h-14 rounded-full mx-auto object-cover border-4 border-white/20 shadow-lg" 
                         />
                         <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (!file || !user) return;
+                            try {
+                              const blob = new Blob([await file.arrayBuffer()], { type: file.type });
+                              const url = await uploadAvatar(blob, user.id);
+                              await updateProfile(user.id, { avatar_url: url, avatar: url });
+                              await refreshProfile();
+                              setRegisteredUser(prev => prev ? { ...prev, avatar: url } : prev);
+                              showToast("Foto de perfil actualizada ✅");
+                            } catch (err) {
+                              console.error("Avatar upload failed:", err);
+                              showToast("Error al subir la foto ❌");
+                            }
+                          }}
+                        />
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="absolute inset-0 bg-black/0 group-hover:bg-black/40 rounded-full transition-all flex items-center justify-center cursor-pointer"
+                        >
+                          <Camera className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md" />
+                        </button>
                       </div>
-                      <h4 className="text-sm font-black mt-2 tracking-tight">{registeredUser.name}</h4>
-                      <p className="text-[10px] text-teal-200 font-mono mt-0.5">{registeredUser.phone}</p>
+                      {isEditingProfile ? (
+                        <div className="mt-3 flex flex-col items-center gap-2">
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="bg-white/15 text-white text-sm font-black text-center px-3 py-1.5 rounded-xl border border-white/30 outline-none w-48"
+                            placeholder="Tu nombre"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={async () => {
+                                if (!editName.trim() || !user) return;
+                                try {
+                                  await updateProfile(user.id, { name: editName.trim() });
+                                  await refreshProfile();
+                                  setRegisteredUser(prev => prev ? { ...prev, name: editName.trim() } : prev);
+                                  setIsEditingProfile(false);
+                                  showToast("Nombre actualizado ✅");
+                                } catch (err) {
+                                  console.error("Name update failed:", err);
+                                  showToast("Error al actualizar nombre ❌");
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-teal-500 hover:bg-teal-400 text-white font-black text-[10px] rounded-xl transition-colors cursor-pointer"
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              onClick={() => setIsEditingProfile(false)}
+                              className="px-3 py-1.5 bg-white/15 hover:bg-white/25 text-white font-black text-[10px] rounded-xl transition-colors cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <h4 className="text-sm font-black mt-2 tracking-tight">{registeredUser.name}</h4>
+                          <p className="text-[10px] text-teal-200 font-mono mt-0.5">{registeredUser.phone}</p>
+                          <div className="flex items-center justify-center gap-2 mt-1">
+                            <button
+                              onClick={() => {
+                                setEditName(registeredUser.name);
+                                setIsEditingProfile(true);
+                              }}
+                              className="px-2.5 py-0.5 bg-white/10 hover:bg-white/20 text-[9px] font-bold rounded-lg transition-colors cursor-pointer"
+                            >
+                              Editar perfil
+                            </button>
+                          </div>
+                        </>
+                      )}
                       <div className="bg-black/15 py-0.5 px-3 rounded-full inline-block mt-2 text-[9px] font-bold text-teal-100">
                         {userId}
                       </div>
@@ -1931,7 +2266,75 @@ export default function PhoneSimulator({
 
             </div>
           )}
-          
+
+          {/* FORWARD MESSAGE MODAL */}
+          {forwardingMessage && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60" onClick={() => setForwardingMessage(null)}>
+              <div className="bg-white rounded-2xl p-4 w-[90vw] max-w-[360px] max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center gap-2 mb-3">
+                  <Forward className="w-4 h-4 text-teal-600" />
+                  <h3 className="text-sm font-extrabold text-slate-900">Reenviar mensaje</h3>
+                </div>
+                <div className="relative mb-3">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    ref={forwardingSearchRef}
+                    type="text"
+                    placeholder="Buscar chat..."
+                    value={forwardSearchQuery}
+                    onChange={e => setForwardSearchQuery(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 text-[11px] rounded-lg border border-slate-200 bg-slate-50 outline-none focus:border-tele-400 transition-colors"
+                    autoFocus
+                  />
+                </div>
+                <div className="space-y-0.5 max-h-[50vh] overflow-y-auto">
+                  {chats
+                    .filter(c => c.name.toLowerCase().includes(forwardSearchQuery.toLowerCase()))
+                    .map(chat => (
+                      <button
+                        key={chat.id}
+                        onClick={async () => {
+                          try {
+                            await apiSendMessage({
+                              chat_id: chat.id,
+                              sender_id: user?.id,
+                              text: forwardingMessage.text || "",
+                              type: forwardingMessage.type as any,
+                              image_url: forwardingMessage.type === "image" || forwardingMessage.type === "video" ? forwardingMessage.mediaUrl : undefined,
+                              video_url: forwardingMessage.type === "video" ? forwardingMessage.mediaUrl : undefined,
+                              audio_url: forwardingMessage.type === "audio" || forwardingMessage.type === "voice_note" ? forwardingMessage.mediaUrl : undefined,
+                              document_name: forwardingMessage.type === "file" ? forwardingMessage.fileName : undefined,
+                              forwarded: true,
+                            });
+                            setForwardingMessage(null);
+                            setForwardSearchQuery("");
+                          } catch (e) {
+                            console.error("[FORWARD] Error:", e);
+                          }
+                        }}
+                        className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors text-left"
+                      >
+                        {chat.avatar ? (
+                          <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover" />
+                        ) : (
+                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                            <span className="text-white font-bold text-[10px]">
+                              {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                            </span>
+                          </div>
+                        )}
+                        <span className="flex-1 text-[11px] font-bold text-slate-800 truncate">{chat.name}</span>
+                        <ArrowRight className="w-3.5 h-3.5 text-slate-300" />
+                      </button>
+                    ))}
+                  {chats.length === 0 && (
+                    <p className="text-[10px] text-slate-400 text-center py-4">No hay chats para reenviar</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
         </div>
       )}
 
