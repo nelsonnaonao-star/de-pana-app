@@ -1125,7 +1125,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       )}
 
       {/* FLOATING CHAT INPUT AREA */}
-      <div className="px-3 pb-4 pt-2 bg-transparent relative z-10 shrink-0 flex items-center gap-2">
+      <div className="px-3 pb-4 pt-2 bg-transparent relative z-10 shrink-0 flex items-center gap-1.5 overflow-hidden">
         {recordingType ? (
           // ACTIVE RECORDING MODE
           <div className="flex-1 flex items-center justify-between bg-teal-900/95 backdrop-blur-md px-4 py-2.5 rounded-full border border-teal-800/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] text-white animate-fade-in">
@@ -1154,14 +1154,14 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           // STANDARD INPUT MODE - WHATSAPP/TELEGRAM-LIKE DUAL FLOATING SYSTEM
           <>
             {/* 1. Main Input Pill (Always solid white, no dark style overrides) */}
-            <div className="flex-1 bg-white rounded-full px-3 py-2 shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100/50 flex items-center gap-2 transition-all duration-300">
+            <div className="flex-1 min-w-0 bg-white rounded-full pl-3 pr-1.5 py-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100/50 flex items-center gap-1 transition-all duration-300 overflow-hidden">
               {/* Emoji/Smile button */}
               <button 
                 onClick={() => { setShowGifPicker(true); }}
-                className="p-1 text-slate-400 hover:text-[#0a4d52] rounded-full transition-all cursor-pointer"
+                className="p-1 text-slate-400 hover:text-[#0a4d52] rounded-full transition-all cursor-pointer shrink-0"
                 title="GIFs y Stickers"
               >
-                <Smile className="w-5 h-5" />
+                <Smile className="w-4 h-4" />
               </button>
 
               {/* Text Input */}
@@ -1180,30 +1180,30 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleSendText();
                 }}
-                className="flex-1 bg-transparent text-xs py-1 px-1 outline-none border-none text-slate-800 placeholder-slate-400 font-medium"
+                className="flex-1 min-w-0 bg-transparent text-xs py-1 outline-none border-none text-slate-800 placeholder-slate-400 font-medium"
               />
 
               {/* Attachment Clip Button */}
               <button 
                 onClick={() => setShowAttachments(!showAttachments)}
-                className={`p-1 rounded-full transition-all cursor-pointer ${
+                className={`p-1 rounded-full transition-all cursor-pointer shrink-0 ${
                   showAttachments 
                     ? "bg-[#0a4d52] text-white rotate-45 shadow-inner scale-105" 
                     : "text-slate-400 hover:text-[#0a4d52]"
                 }`}
                 title="Adjuntar multimedia o encuestas"
               >
-                <Paperclip className="w-5 h-5" />
+                <Paperclip className="w-4 h-4" />
               </button>
 
               {/* Circular Video Note trigger inside pill when text is empty */}
               {!inputText.trim() && (
                 <button 
                   onClick={() => setRecordingType("video")}
-                  className="p-1 text-slate-400 hover:text-[#0a4d52] rounded-full transition-all cursor-pointer"
+                  className="p-1 text-slate-400 hover:text-[#0a4d52] rounded-full transition-all cursor-pointer shrink-0"
                   title="Grabar Nota de video circular"
                 >
-                  <VideoIcon className="w-5 h-5" />
+                  <VideoIcon className="w-4 h-4" />
                 </button>
               )}
             </div>

@@ -157,7 +157,6 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
     reactions: {},
     read_by: [],
     poll_question: message.poll_question || null,
-    poll_options: message.poll_options || null,
   };
 
   const { data, error } = await supabase

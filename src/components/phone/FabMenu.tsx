@@ -1,5 +1,5 @@
 import React from "react";
-import { Plus, QrCode } from "lucide-react";
+import { Plus, QrCode, Phone } from "lucide-react";
 
 interface FabMenuProps {
   showActionMenu: boolean;
@@ -64,6 +64,13 @@ export default function FabMenu({ showActionMenu, setShowActionMenu, setCurrentS
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
               <span className="text-xs font-semibold text-slate-700">Nuevo Grupo</span>
+            </button>
+            <button
+              onClick={() => { setShowActionMenu(false); setCurrentScreen("calls"); }}
+              className="flex items-center gap-2.5 px-4 py-3 hover:bg-slate-50 transition-colors w-full text-left border-t border-slate-100 cursor-pointer"
+            >
+              <Phone className="w-4 h-4 text-teal-600" />
+              <span className="text-xs font-semibold text-slate-700">Historial de Llamadas</span>
             </button>
           </div>
           <div className="fixed inset-0 z-[-1]" onClick={() => setShowActionMenu(false)} />

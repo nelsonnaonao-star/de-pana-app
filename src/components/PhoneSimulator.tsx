@@ -19,6 +19,7 @@ import BusinessPanel, { BusinessFlyer } from "./BusinessPanel";
 import RatesPanel from "./RatesPanel";
 import StatesPanel from "./StatesPanel";
 import ChannelsPanel from "./ChannelsPanel";
+import CallLog from "./CallLog";
 import BottomTabBar from "./phone/BottomTabBar";
 import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
@@ -725,6 +726,44 @@ export default function PhoneSimulator({
     }
   };
 
+  const handleStartChatFromCall = async (partnerId: string, name: string, avatar: string) => {
+    const existing = getChatByPartnerId(partnerId);
+    if (existing) {
+      setSelectedChatId(existing.id);
+      setCurrentScreen("chat_room");
+    } else {
+      try {
+        const chat = await createChatInSupabase({
+          name,
+          avatar,
+          profile_id: partnerId,
+          admin_id: user?.id || "",
+        });
+        refreshChats();
+        if (chat?.id) {
+          setChats(prev => {
+            if (prev.some(c => c.id === chat.id)) return prev;
+            return [{
+              id: chat.id,
+              name,
+              avatar,
+              status: "online" as const,
+              lastMessage: "",
+              lastMessageTime: "",
+              unreadCount: 0,
+              partnerUserId: partnerId,
+              messages: [],
+            }, ...prev];
+          });
+          setSelectedChatId(chat.id);
+          setCurrentScreen("chat_room");
+        }
+      } catch (e) {
+        console.warn("Error starting chat from calls:", e);
+      }
+    }
+  };
+
   const handleCreateGroup = async () => {
     if (!user || selectedGroupMembers.length < 1) return;
     try {
@@ -1171,6 +1210,13 @@ export default function PhoneSimulator({
                 </div>
               )}
 
+              {currentScreen === "calls" && (
+                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Historial de Llamadas</h3>
+                  <p className="text-[10px] text-teal-100/85">Llamadas recientes de audio y video</p>
+                </div>
+              )}
+
               {currentScreen === "rates" && (
                 <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Tasas de Cambio</h3>
@@ -1438,6 +1484,15 @@ export default function PhoneSimulator({
                       }
                     }}
                     onAddContact={() => setCurrentScreen("add_contact_manual")}
+                  />
+                )}
+
+                {/* CALLS TAB */}
+                {currentScreen === "calls" && user && (
+                  <CallLog
+                    userId={user.id}
+                    onBack={() => setCurrentScreen("chats")}
+                    onStartChat={handleStartChatFromCall}
                   />
                 )}
 

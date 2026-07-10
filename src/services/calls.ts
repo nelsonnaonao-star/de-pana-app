@@ -43,7 +43,7 @@ export async function startCall(call: Partial<Call>): Promise<Call> {
     .insert({
       caller_id: call.caller_id,
       callee_id: call.callee_id,
-      status: "ongoing",
+      status: "missed",
       type: call.type || "audio",
       call_type: call.type || "audio",
       started_at: new Date().toISOString(),
