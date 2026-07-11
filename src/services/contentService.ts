@@ -1,17 +1,16 @@
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 
 const API = '/api/content';
 
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(apiUrl(url));
+  const res = await authFetch(apiUrl(url));
   if (!res.ok) throw new Error(`GET ${url} failed`);
   return res.json();
 }
 
 async function post<T>(url: string, body: any): Promise<T> {
-  const res = await fetch(apiUrl(url), {
+  const res = await authFetch(apiUrl(url), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`POST ${url} failed`);
@@ -19,7 +18,7 @@ async function post<T>(url: string, body: any): Promise<T> {
 }
 
 async function del(url: string): Promise<void> {
-  const res = await fetch(apiUrl(url), { method: 'DELETE' });
+  const res = await authFetch(apiUrl(url), { method: 'DELETE' });
   if (!res.ok) throw new Error(`DELETE ${url} failed`);
 }
 

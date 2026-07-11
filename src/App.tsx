@@ -2,8 +2,9 @@ import { Toaster } from "react-hot-toast";
 import { useSupabase } from "./contexts/SupabaseContext";
 import AuthScreen from "./components/AuthScreen";
 import PhoneSimulator from "./components/PhoneSimulator";
+import ErrorBoundary from "./components/ErrorBoundary";
 
-export default function App() {
+function AppContent() {
   const { user, loading } = useSupabase();
 
   return (
@@ -32,5 +33,13 @@ export default function App() {
         <PhoneSimulator />
       )}
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
   );
 }

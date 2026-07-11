@@ -538,8 +538,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       const blob = new Blob([file], { type: file.type });
       try {
         const url = await uploadChatMedia(blob, "files");
+        const tempId = "msg_" + Date.now();
         const newMsg: Message = {
-          id: "msg_" + Date.now(),
+          id: tempId,
           sender: "me",
           timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           type,
@@ -549,6 +550,30 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         };
         setMessages(prev => [...prev, newMsg]);
         onSendMessage(newMsg);
+
+        const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+        if (!isLocalChat) {
+          const payload: any = {
+            chat_id: chat.id,
+            sender_id: uid,
+            type,
+            text: file.name,
+          };
+          if (type === "image") {
+            payload.image_url = url;
+            payload.text = "Imagen";
+          } else if (type === "video") {
+            payload.video_url = url;
+            payload.text = "Video";
+          } else if (type === "audio") {
+            payload.audio_url = url;
+            payload.text = "Audio";
+          } else {
+            payload.text = file.name;
+          }
+          const saved = await apiSendMessage(payload);
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
+        }
       } catch (err) {
         console.error("[CHAT] File upload error:", err);
       }
@@ -602,28 +627,42 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   };
 
   const handleVote = (messageId: string, optionId: string) => {
-    setMessages(prev => prev.map((m) => {
-      if (m.id === messageId && m.pollOptions) {
-        const options = m.pollOptions.map((o) => {
-          const alreadyVoted = o.votedUsers.includes("me");
-          if (o.id === optionId) {
-            return {
-              ...o,
-              votes: alreadyVoted ? o.votes - 1 : o.votes + 1,
-              votedUsers: alreadyVoted ? o.votedUsers.filter((u) => u !== "me") : [...o.votedUsers, "me"]
-            };
-          } else {
-            return {
-              ...o,
-              votes: o.votedUsers.includes("me") ? o.votes - 1 : o.votes,
-              votedUsers: o.votedUsers.filter((u) => u !== "me")
-            };
-          }
-        });
-        return { ...m, pollOptions: options };
-      }
-      return m;
-    }));
+    let updatedPollOptions: { id: string; text: string; votes: number; votedUsers: string[] }[] | null = null;
+
+    setMessages(prev => {
+      const next = prev.map((m) => {
+        if (m.id === messageId && m.pollOptions) {
+          const options = m.pollOptions.map((o) => {
+            const alreadyVoted = o.votedUsers.includes("me");
+            if (o.id === optionId) {
+              return {
+                ...o,
+                votes: alreadyVoted ? o.votes - 1 : o.votes + 1,
+                votedUsers: alreadyVoted ? o.votedUsers.filter((u) => u !== "me") : [...o.votedUsers, "me"]
+              };
+            } else {
+              return {
+                ...o,
+                votes: o.votedUsers.includes("me") ? o.votes - 1 : o.votes,
+                votedUsers: o.votedUsers.filter((u) => u !== "me")
+              };
+            }
+          });
+          updatedPollOptions = options;
+          return { ...m, pollOptions: options };
+        }
+        return m;
+      });
+      return next;
+    });
+
+    if (updatedPollOptions) {
+      Promise.resolve(supabase
+        .from("messages")
+        .update({ poll_options: updatedPollOptions })
+        .eq("id", messageId)
+      ).then(() => {}).catch(() => {});
+    }
   };
 
   const handleAddReaction = (messageId: string, emoji: string) => {
@@ -666,8 +705,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     const durStr = `${Math.floor(recordingSeconds / 60)}:${(recordingSeconds % 60).toString().padStart(2, "0")}`;
     try {
       const url = await uploadChatMedia(blob, recordingType === "voice" ? "voice" : "video");
+      const tempId = "msg_" + Date.now();
       const newMsg: Message = {
-        id: "msg_" + Date.now(),
+        id: tempId,
         sender: "me",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         type: recordingType === "voice" ? "voice_note" : "video_note",
@@ -676,6 +716,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       };
       setMessages(prev => [...prev, newMsg]);
       onSendMessage(newMsg);
+
+      const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+      if (!isLocalChat) {
+        const saved = await apiSendMessage({
+          chat_id: chat.id,
+          sender_id: uid,
+          type: recordingType === "voice" ? "voice_note" : "video_note",
+          audio_url: recordingType === "voice" ? url : undefined,
+          video_url: recordingType === "video" ? url : undefined,
+          text: recordingType === "voice" ? "Nota de voz" : "Nota de video",
+        });
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
+      }
     } catch (err) {
       console.error("[CHAT] Upload recording error:", err);
     }

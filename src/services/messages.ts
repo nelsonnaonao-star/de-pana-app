@@ -1,5 +1,5 @@
 import { supabase } from "../lib/supabase";
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 
 export type Message = {
   id: string;
@@ -97,25 +97,32 @@ function toMessage(row: any): Message {
   };
 }
 
-export async function getMessages(chatId: string): Promise<Message[]> {
-  console.log('[MESSAGES] ═══════ getMessages() EJECUTADO ═══════');
-  console.log('[MESSAGES] chatId:', chatId);
-  const { data, error } = await supabase
+export async function getMessages(chatId: string, options?: { limit?: number; before?: string; after?: string }): Promise<Message[]> {
+  const limit = options?.limit || 200;
+
+  let query = supabase
     .from("messages")
     .select("*")
     .eq("chat_id", chatId)
-    .eq("is_deleted", false)
-    .order("created_at", { ascending: true });
+    .eq("is_deleted", false);
 
-  if (error) {
-    console.error("[MESSAGES] get error:", error);
-    throw error;
+  if (options?.after) {
+    query = query.gt("created_at", options.after).order("created_at", { ascending: true }).limit(limit);
+  } else if (options?.before) {
+    query = query.lt("created_at", options.before).order("created_at", { ascending: false }).limit(limit);
+    const { data, error } = await query;
+    if (error) throw error;
+    return (data || []).map(toMessage).reverse();
+  } else {
+    query = query.order("created_at", { ascending: false }).limit(limit);
+    const { data, error } = await query;
+    if (error) throw error;
+    return (data || []).map(toMessage).reverse();
   }
-  console.log('[MESSAGES] raw rows count:', data?.length || 0);
-  console.log('[MESSAGES] raw rows:', JSON.stringify(data));
-  const mapped = (data || []).map(toMessage);
-  console.log('[MESSAGES] mapped count:', mapped.length);
-  return mapped;
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []).map(toMessage);
 }
 
 export async function sendMessage(message: Partial<Message>): Promise<Message> {
@@ -156,7 +163,6 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
     is_ephemeral: false,
     reactions: {},
     read_by: [],
-    poll_question: message.poll_question || null,
   };
 
   const { data, error } = await supabase
@@ -165,12 +171,8 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
     .select()
     .single();
 
-  if (error) {
-    console.error("[MESSAGES] send error:", error);
-    throw error;
-  }
+  if (error) throw error;
 
-  // Update chat last_message
   try {
     await supabase
       .from("chats")
@@ -181,10 +183,9 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
       })
       .eq("id", message.chat_id);
   } catch (e) {
-    console.warn("[MESSAGES] update chat last_message falló:", e);
+    // ignore chat update failure
   }
 
-  // Backup push notification (in case webhook is not configured)
   try {
     const { data: chat } = await supabase
       .from("chats")
@@ -199,7 +200,6 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
         .single();
 
       if (chat.is_group) {
-        // Group chat: broadcast to all participants except sender
         const { data: participants } = await supabase
           .from("chat_participants")
           .select("profile_id")
@@ -211,7 +211,6 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
           }
         }
       } else {
-        // 1:1 chat: send to the other participant
         const receiverId = chat.profile_id === message.sender_id ? chat.admin_id : chat.profile_id;
         if (receiverId) {
           sendBackupPush(receiverId, senderProfile?.name || "RED ON", message.text || "Nuevo mensaje", message.chat_id, message.sender_id);
@@ -226,10 +225,9 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
 async function sendBackupPush(receiverId: string, senderName: string, text: string, chatId: string, senderId: string) {
   try {
     const serverUrl = import.meta.env.VITE_SERVER_URL;
-    if (!serverUrl) { console.warn('[PUSH] VITE_SERVER_URL not set'); return; }
-    const res = await fetch(`${serverUrl}/api/fcm/send`, {
+    if (!serverUrl) return;
+    await authFetch(`${serverUrl}/api/fcm/send`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         profile_id: receiverId,
         title: senderName || "RED ON",
@@ -237,10 +235,8 @@ async function sendBackupPush(receiverId: string, senderName: string, text: stri
         data: { type: "message", chatId, contactId: senderId },
       }),
     });
-    if (!res.ok) console.warn('[PUSH] backup send failed:', res.status, await res.text().catch(() => ''));
-    else console.log('[PUSH] backup send OK');
-  } catch (err) {
-    console.warn('[PUSH] backup send error:', err);
+  } catch {
+    // ignore push failures
   }
 }
 
@@ -254,35 +250,35 @@ export async function markAsRead(chatId: string, userId: string, userName: strin
     .neq("sender_id", userId)
     .eq("is_deleted", false);
 
-  if (fetchError) {
-    console.error("[MESSAGES] markAsRead fetch error:", fetchError);
-    throw fetchError;
-  }
-
+  if (fetchError) throw fetchError;
   if (!messages || messages.length === 0) return;
 
   const now = new Date().toISOString();
-  const toUpdate = messages
+  const unreadIds = messages
     .filter((m: any) => {
       const readBy = m.read_by || [];
       return !readBy.some((r: any) => r.userId === userId);
     })
-    .map((m: any) => ({
-      id: m.id,
-      read_by: [...(m.read_by || []), { userId, name, readAt: now }],
-      status: "read" as const,
-    }));
+    .map((m: any) => m.id);
 
-  if (toUpdate.length === 0) return;
+  if (unreadIds.length === 0) return;
 
-  for (const m of toUpdate) {
-    try {
+  const { error: batchError } = await supabase
+    .from("messages")
+    .update({ status: "read", read_at: now })
+    .in("id", unreadIds);
+
+  if (batchError) {
+    const unread = messages.filter((m: any) => {
+      const readBy = m.read_by || [];
+      return !readBy.some((r: any) => r.userId === userId);
+    });
+    for (const m of unread) {
+      const newReadBy = [...(m.read_by || []), { userId, name, readAt: now }];
       await supabase
         .from("messages")
-        .update({ read_by: m.read_by, status: m.status })
+        .update({ read_by: newReadBy, status: "read", read_at: now })
         .eq("id", m.id);
-    } catch (e) {
-      console.warn("[MESSAGES] markAsRead update falló:", e);
     }
   }
 }
@@ -294,10 +290,7 @@ export async function addReaction(messageId: string, emoji: string) {
     .eq("id", messageId)
     .single();
 
-  if (fetchError) {
-    console.error("[MESSAGES] addReaction fetch error:", fetchError);
-    throw fetchError;
-  }
+  if (fetchError) throw fetchError;
 
   const current: Record<string, number> = msg?.reactions || {};
   current[emoji] = (current[emoji] || 0) + 1;
@@ -307,10 +300,7 @@ export async function addReaction(messageId: string, emoji: string) {
     .update({ reactions: current })
     .eq("id", messageId);
 
-  if (error) {
-    console.error("[MESSAGES] addReaction update error:", error);
-    throw error;
-  }
+  if (error) throw error;
 }
 
 export async function deleteMessage(messageId: string) {
@@ -319,10 +309,7 @@ export async function deleteMessage(messageId: string) {
     .update({ is_deleted: true })
     .eq("id", messageId);
 
-  if (error) {
-    console.error("[MESSAGES] delete error:", error);
-    throw error;
-  }
+  if (error) throw error;
 }
 
 export async function clearMessages(chatId: string) {
@@ -331,12 +318,8 @@ export async function clearMessages(chatId: string) {
     .update({ is_deleted: true })
     .eq("chat_id", chatId);
 
-  if (error) {
-    console.error("[MESSAGES] clearMessages error:", error);
-    throw error;
-  }
+  if (error) throw error;
 
-  // Reset chat's last_message
   try {
     await supabase
       .from("chats")
@@ -346,7 +329,5 @@ export async function clearMessages(chatId: string) {
         updated_at: new Date().toISOString(),
       })
       .eq("id", chatId);
-  } catch (e) {
-    console.warn("[MESSAGES] clearMessages update chat falló:", e);
-  }
+  } catch {}
 }

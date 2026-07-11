@@ -1,25 +1,19 @@
 import { Router } from 'express';
-import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
-
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY || '';
-if (!supabaseKey) {
-  console.warn('[DATA] SUPABASE_SERVICE_KEY no configurada');
-}
-
-const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
+import { supabaseAdmin } from '../db.js';
 
 const router = Router();
+
+function sanitizeInput(str) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/[<>]/g, '').trim().slice(0, 500);
+}
 
 router.get('/profile/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (req.userId !== userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data, error } = await supabaseAdmin
       .from('profiles')
       .select('*')
@@ -36,6 +30,9 @@ router.get('/profile/:userId', async (req, res) => {
 router.get('/chats/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (req.userId !== userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data, error } = await supabaseAdmin
       .from('chats')
       .select('*')
@@ -52,6 +49,9 @@ router.get('/chats/:userId', async (req, res) => {
 router.get('/contacts/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (req.userId !== userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data, error } = await supabaseAdmin
       .from('contacts')
       .select('*')
@@ -67,6 +67,9 @@ router.get('/contacts/:userId', async (req, res) => {
 router.get('/calls/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (req.userId !== userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data, error } = await supabaseAdmin
       .from('calls')
       .select('*')
@@ -83,6 +86,9 @@ router.get('/calls/:userId', async (req, res) => {
 router.get('/all/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (req.userId !== userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const [profile, chats, contacts, calls] = await Promise.all([
       supabaseAdmin.from('profiles').select('*').eq('id', userId).maybeSingle(),
       supabaseAdmin.from('chats').select('*').or(`profile_id.eq.${userId},admin_id.eq.${userId}`).order('updated_at', { ascending: false, nullsFirst: false }),
@@ -101,7 +107,6 @@ router.get('/all/:userId', async (req, res) => {
   }
 });
 
-// ─── Lookup profile by ID (for QR scanning) ──────────────────────
 router.post('/lookup-profile', async (req, res) => {
   try {
     const { userId, username, phone } = req.body;
@@ -112,9 +117,9 @@ router.post('/lookup-profile', async (req, res) => {
     if (userId) {
       query = query.eq('id', userId);
     } else if (username) {
-      query = query.eq('username', username);
+      query = query.eq('username', sanitizeInput(username));
     } else if (phone) {
-    const cleanPhone = phone.replace(/\D/g, '').trim();
+      const cleanPhone = phone.replace(/\D/g, '').trim();
       const { data: allProfiles, error: allError } = await supabaseAdmin
         .from('profiles')
         .select('id, name, username, phone_number, avatar, avatar_url, bio');
@@ -137,7 +142,6 @@ router.post('/lookup-profile', async (req, res) => {
   }
 });
 
-// ─── Check phone - busca si un número pertenece a un usuario RED ON ─────
 router.post('/check-phone', async (req, res) => {
   try {
     const { phone } = req.body;
@@ -172,21 +176,24 @@ router.post('/check-phone', async (req, res) => {
   }
 });
 
-// ─── Create chat ─────────────────────────────────────────────────
 router.post('/create-chat', async (req, res) => {
   try {
     const chat = req.body;
     if (!chat.profile_id || !chat.admin_id) return res.status(400).json({ error: 'profile_id y admin_id requeridos' });
 
+    if (req.userId !== chat.admin_id && req.userId !== chat.profile_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado para crear este chat' });
+    }
+
     const { data, error } = await supabaseAdmin
       .from('chats')
       .insert({
-        name: chat.name || '',
+        name: sanitizeInput(chat.name || ''),
         is_group: chat.is_group || false,
         avatar: chat.avatar || '',
         avatar_color: chat.avatar_color || 'bg-slate-450',
         phone: chat.phone || '',
-        username: chat.username || '',
+        username: sanitizeInput(chat.username || ''),
         bio: chat.bio || '',
         profile_id: chat.profile_id,
         admin_id: chat.admin_id,
@@ -206,16 +213,19 @@ router.post('/create-chat', async (req, res) => {
   }
 });
 
-// ─── Add contact ─────────────────────────────────────────────────
 router.post('/add-contact', async (req, res) => {
   try {
     const contact = req.body;
     if (!contact.user_id) return res.status(400).json({ error: 'user_id requerido' });
     if (!contact.contact_user_id && !contact.phone) return res.status(400).json({ error: 'contact_user_id o phone requerido' });
 
+    if (req.userId !== contact.user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
     const payload = {
       user_id: contact.user_id,
-      name: contact.name || '',
+      name: sanitizeInput(contact.name || ''),
       avatar: contact.avatar || '',
       bio: contact.bio || (contact.phone ? `Contacto externo: ${contact.phone}` : ''),
       type: 'human',
@@ -247,27 +257,33 @@ router.post('/add-contact', async (req, res) => {
   }
 });
 
-// ─── Delete chat + all messages + participants ────────────────────
 router.delete('/chats/:chatId', async (req, res) => {
   try {
     const { chatId } = req.params;
-    const userId = req.query.userId || req.body?.userId;
+    const userId = req.userId;
     if (!chatId) return res.status(400).json({ error: 'chatId requerido' });
-    if (!userId) return res.status(400).json({ error: 'userId requerido' });
 
-    // Soft-delete all messages in the chat
+    const { data: chat, error: chatError } = await supabaseAdmin
+      .from('chats')
+      .select('profile_id, admin_id')
+      .eq('id', chatId)
+      .maybeSingle();
+    if (chatError || !chat) return res.status(404).json({ error: 'Chat no encontrado' });
+
+    if (req.userId !== chat.profile_id && req.userId !== chat.admin_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado para eliminar este chat' });
+    }
+
     await supabaseAdmin
       .from('messages')
       .update({ is_deleted: true })
       .eq('chat_id', chatId);
 
-    // Remove chat participants
     await supabaseAdmin
       .from('chat_participants')
       .delete()
       .eq('chat_id', chatId);
 
-    // Delete the chat itself
     await supabaseAdmin
       .from('chats')
       .delete()

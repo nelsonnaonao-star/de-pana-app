@@ -1,88 +1,95 @@
-import initSqlJs from 'sql.js';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, '..', 'redon.db');
+const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co';
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY || '';
 
-let db = null;
-
-function save() {
-  const data = db.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(dbPath, buffer);
-}
+export const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
 
 export async function initDb() {
-  const SQL = await initSqlJs();
-  if (fs.existsSync(dbPath)) {
-    const buffer = fs.readFileSync(dbPath);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
-  }
-  db.run('PRAGMA foreign_keys = ON');
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS password_reset_codes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      profile_id TEXT NOT NULL,
-      code TEXT NOT NULL,
-      phone TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      used INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  save();
-  return db;
-}
-
-function getDb() {
-  if (!db) throw new Error('Database not initialized. Call initDb() first.');
-  return db;
-}
-
-export function getOne(sql, params = []) {
-  const stmt = getDb().prepare(sql);
-  stmt.bind(params);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
-    return row;
-  }
-  stmt.free();
-  return undefined;
-}
-
-export function getAll(sql, params = []) {
-  const stmt = getDb().prepare(sql);
-  stmt.bind(params);
-  const rows = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return rows;
-}
-
-export function run(sql, params = []) {
-  getDb().run(sql, params);
-  save();
-}
-
-export function transaction(fn) {
-  getDb().run('BEGIN');
+  // Ensure password_reset_codes table exists via Supabase RPC
   try {
-    fn();
-    getDb().run('COMMIT');
-    save();
-  } catch (e) {
-    getDb().run('ROLLBACK');
-    throw e;
+    await supabaseAdmin.rpc('init_password_reset_codes');
+  } catch {
+    // Table may already exist or RPC may not exist — that's fine
+    // The table should be created via Supabase dashboard migration
   }
+  return supabaseAdmin;
 }
 
-export default { getOne, getAll, run, transaction, initDb };
+export async function getOne(table, filters = {}) {
+  let query = supabaseAdmin.from(table).select('*');
+  for (const [key, value] of Object.entries(filters)) {
+    if (value && typeof value === 'object' && value.op) {
+      switch (value.op) {
+        case 'neq': query = query.neq(key, value.value); break;
+        case 'gt': query = query.gt(key, value.value); break;
+        case 'gte': query = query.gte(key, value.value); break;
+        case 'like': query = query.like(key, value.value); break;
+        case 'ilike': query = query.ilike(key, value.value); break;
+        default: query = query.eq(key, value.value);
+      }
+    } else {
+      query = query.eq(key, value);
+    }
+  }
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function getAll(table, filters = {}, options = {}) {
+  let query = supabaseAdmin.from(table).select('*');
+  for (const [key, value] of Object.entries(filters)) {
+    if (value && typeof value === 'object' && value.op) {
+      switch (value.op) {
+        case 'neq': query = query.neq(key, value.value); break;
+        case 'gt': query = query.gt(key, value.value); break;
+        case 'gte': query = query.gte(key, value.value); break;
+        case 'like': query = query.like(key, value.value); break;
+        case 'ilike': query = query.ilike(key, value.value); break;
+        default: query = query.eq(key, value);
+      }
+    } else {
+      query = query.eq(key, value);
+    }
+  }
+  if (options.orderBy) {
+    query = query.order(options.orderBy, { ascending: options.ascending ?? false });
+  }
+  if (options.limit) {
+    query = query.limit(options.limit);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+export async function run(table, data) {
+  const { data: result, error } = await supabaseAdmin
+    .from(table)
+    .insert(data)
+    .select()
+    .single();
+  if (error) throw error;
+  return result;
+}
+
+export async function updateOne(table, updates, filters) {
+  let query = supabaseAdmin.from(table).update(updates);
+  for (const [key, value] of Object.entries(filters)) {
+    query = query.eq(key, value);
+  }
+  const { error } = await query;
+  if (error) throw error;
+}
+
+export async function deleteOne(table, filters) {
+  let query = supabaseAdmin.from(table).delete();
+  for (const [key, value] of Object.entries(filters)) {
+    query = query.eq(key, value);
+  }
+  const { error } = await query;
+  if (error) throw error;
+}
+
+export default { getOne, getAll, run, updateOne, deleteOne, initDb, supabaseAdmin };

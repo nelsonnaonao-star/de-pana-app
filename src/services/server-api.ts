@@ -1,7 +1,7 @@
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(apiUrl(url));
+  const res = await authFetch(apiUrl(url));
   if (!res.ok) throw new Error(`GET ${url} failed: ${res.status}`);
   return res.json();
 }

@@ -1,5 +1,6 @@
-const GIPHY_API_KEY = "bd36d0j4ju5xmnkLKzGwe6X1wFTURLGB";
-const GIPHY_BASE = "https://api.giphy.com/v1";
+import { authFetch } from "../lib/api";
+
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || '';
 
 export interface GiphyResult {
   id: string;
@@ -15,17 +16,18 @@ export interface GiphyResult {
 type Endpoint = "gifs" | "stickers";
 
 async function giphyFetch(endpoint: Endpoint, action: string, query: string, limit = 30): Promise<GiphyResult[]> {
-  const params = action === "search"
-    ? `q=${encodeURIComponent(query)}`
-    : "";
-  const url = `${GIPHY_BASE}/${endpoint}/${action}?api_key=${GIPHY_API_KEY}&${params}&limit=${limit}&rating=g`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    console.warn(`GIPHY ${endpoint}/${action} failed:`, res.status);
+  const params = new URLSearchParams({ type: endpoint, limit: String(limit) });
+  if (query) params.set('q', query);
+  const url = `${SERVER_URL}/api/giphy/${action}?${params.toString()}`;
+
+  try {
+    const res = await authFetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.data || []);
+  } catch {
     return [];
   }
-  const data = await res.json();
-  return data.data || [];
 }
 
 export async function searchGifs(query: string, limit = 30): Promise<GiphyResult[]> {

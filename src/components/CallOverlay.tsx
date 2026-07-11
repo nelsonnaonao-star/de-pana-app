@@ -31,6 +31,33 @@ export default function CallOverlay({
   const [activeFilter, setActiveFilter] = useState<string>("none");
   const [activeBg, setActiveBg] = useState<string>("none");
   const [showEffects, setShowEffects] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (call.status === "connected") {
+      if (!timerRef.current) {
+        timerRef.current = setInterval(() => {
+          setElapsedSeconds(s => s + 1);
+        }, 1000);
+      }
+    } else if (call.status === "outgoing") {
+      setElapsedSeconds(0);
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [call.status]);
+
+  const formatTime = (totalSeconds: number) => {
+    const m = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+    const s = String(totalSeconds % 60).padStart(2, "0");
+    return `${m}:${s}`;
+  };
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -212,7 +239,7 @@ export default function CallOverlay({
         <div className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
           <span className="text-[10px] font-mono tracking-wider">
-            {call.status === "outgoing" ? "CONECTANDO..." : "00:24"}
+            {call.status === "outgoing" ? "CONECTANDO..." : formatTime(elapsedSeconds)}
           </span>
         </div>
         <div className="flex items-center gap-1 bg-black/40 backdrop-blur-md px-2.5 py-1 rounded-full text-[9px] font-bold border border-white/10 text-teal-200">

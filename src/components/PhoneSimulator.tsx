@@ -596,7 +596,22 @@ export default function PhoneSimulator({
 
   const handleTriggerCallFromChat = async (type: "audio" | "video") => {
     if (!activeChat || !user) return;
-    const callId = "call_" + Date.now();
+
+    const partnerId = activeChat.partnerUserId || "";
+
+    // Persist call in DB first to get a stable callId for WebRTC signaling
+    let callId = "call_" + Date.now();
+    if (partnerId) {
+      try {
+        const dbCall = await apiStartCall({
+          caller_id: user.id,
+          callee_id: partnerId,
+          type,
+          chat_id: activeChat.id,
+        });
+        if (dbCall?.id) callId = dbCall.id;
+      } catch (e) { console.warn('[Call] apiStartCall error:', e); }
+    }
 
     try {
       const webrtc = new WebRTCService(callId, user.id);
@@ -622,7 +637,6 @@ export default function PhoneSimulator({
       await webrtc.subscribeToSignals();
       await webrtc.createOffer();
 
-      const partnerId = activeChat.partnerUserId || "";
       setActiveCall({
         id: callId,
         contactName: activeChat.name,
@@ -636,20 +650,11 @@ export default function PhoneSimulator({
         targetUserId: partnerId
       });
 
-      // Persist call in DB for callee to discover
+      // Send FCM push with the stable callId
       if (partnerId) {
-        try {
-          await apiStartCall({
-            caller_id: user.id,
-            callee_id: partnerId,
-            type,
-            chat_id: activeChat.id,
-          });
-        } catch (e) { console.warn('[Call] apiStartCall error:', e); }
-        // Backup FCM push (en caso de que el webhook tarde)
         sendFcmPush(partnerId, profile?.name || 'RED ON', 'Llamada entrante...', {
           type: 'call', chatId: activeChat.id, callerId: user.id,
-          callerName: profile?.name || 'RED ON', callType: type,
+          callerName: profile?.name || 'RED ON', callType: type, callId: callId,
         });
       }
 

@@ -171,8 +171,8 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
 }
 
 export async function deleteChat(chatId: string, userId: string) {
-  const { apiUrl } = await import("../lib/api");
-  const res = await fetch(apiUrl(`/api/data/chats/${chatId}?userId=${userId}`), {
+  const { authFetch, apiUrl } = await import("../lib/api");
+  const res = await authFetch(apiUrl(`/api/data/chats/${chatId}?userId=${userId}`), {
     method: "DELETE",
   });
   if (!res.ok) {

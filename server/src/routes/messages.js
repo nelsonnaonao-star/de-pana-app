@@ -1,16 +1,5 @@
 import { Router } from 'express';
-import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
-
-const supabaseAdmin = createClient(
-  process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co',
-  process.env.SUPABASE_SERVICE_KEY || '',
-);
+import { supabaseAdmin } from '../db.js';
 
 const router = Router();
 
@@ -20,6 +9,10 @@ router.post('/send', async (req, res) => {
     const msg = req.body;
     if (!msg.chat_id || !msg.sender_id) {
       return res.status(400).json({ error: 'chat_id y sender_id requeridos' });
+    }
+
+    if (req.userId !== msg.sender_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No puedes enviar mensajes como otro usuario' });
     }
 
     const { data: message, error } = await supabaseAdmin
@@ -64,7 +57,6 @@ router.post('/send', async (req, res) => {
 
     if (error) throw error;
 
-    // Update chat's last_message
     await supabaseAdmin
       .from('chats')
       .update({
@@ -81,17 +73,37 @@ router.post('/send', async (req, res) => {
   }
 });
 
-// ─── Get messages for a chat ─────────────────────────────────────
+// ─── Get messages for a chat (with pagination) ──────────────────
 router.get('/:chatId', async (req, res) => {
   try {
     const { chatId } = req.params;
-    const { data, error } = await supabaseAdmin
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const before = req.query.before;
+    const after = req.query.after;
+
+    let query = supabaseAdmin
       .from('messages')
       .select('*')
       .eq('chat_id', chatId)
-      .eq('is_deleted', false)
-      .order('created_at', { ascending: true });
+      .eq('is_deleted', false);
 
+    if (after) {
+      query = query.gt('created_at', after).order('created_at', { ascending: true }).limit(limit);
+    } else if (before) {
+      query = query.lt('created_at', before).order('created_at', { ascending: false }).limit(limit);
+      const { data, error } = await query;
+      if (error) throw error;
+      res.json((data || []).reverse());
+      return;
+    } else {
+      query = query.order('created_at', { ascending: false }).limit(limit);
+      const { data, error } = await query;
+      if (error) throw error;
+      res.json((data || []).reverse());
+      return;
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
@@ -100,7 +112,7 @@ router.get('/:chatId', async (req, res) => {
   }
 });
 
-// ─── Mark messages as read (by chat) ─────────────────────────────
+// ─── Mark messages as read (batch) ───────────────────────────────
 router.post('/mark-read', async (req, res) => {
   try {
     const { chat_id, user_id, reader_name } = req.body;
@@ -108,9 +120,12 @@ router.post('/mark-read', async (req, res) => {
       return res.status(400).json({ error: 'chat_id y user_id requeridos' });
     }
 
+    if (req.userId !== user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
     const name = reader_name || 'Usuario';
 
-    // Get all unread messages in this chat not sent by the reader
     const { data: messages, error: fetchError } = await supabaseAdmin
       .from('messages')
       .select('id, read_by, status')
@@ -124,21 +139,42 @@ router.post('/mark-read', async (req, res) => {
       return res.json({ updated: 0 });
     }
 
-    let updated = 0;
-    for (const msg of messages) {
+    const now = new Date().toISOString();
+    const unreadMessages = messages.filter(msg => {
       const currentReadBy = (msg.read_by || []);
-      const alreadyRead = currentReadBy.some(r => r.userId === user_id);
-      if (!alreadyRead) {
-        const newReadBy = [...currentReadBy, { userId: user_id, name, readAt: new Date().toISOString() }];
+      return !currentReadBy.some(r => r.userId === user_id);
+    });
+
+    if (unreadMessages.length === 0) {
+      return res.json({ updated: 0 });
+    }
+
+    const messageIds = unreadMessages.map(m => m.id);
+
+    const { error: batchError } = await supabaseAdmin
+      .from('messages')
+      .update({
+        status: 'read',
+        read_at: now,
+      })
+      .in('id', messageIds);
+
+    if (batchError) {
+      console.error('[MESSAGES] batch update error:', batchError);
+      let updated = 0;
+      for (const msg of unreadMessages) {
+        const currentReadBy = (msg.read_by || []);
+        const newReadBy = [...currentReadBy, { userId: user_id, name, readAt: now }];
         const { error: updateError } = await supabaseAdmin
           .from('messages')
-          .update({ status: 'read', read_at: new Date().toISOString(), read_by: newReadBy })
+          .update({ status: 'read', read_at: now, read_by: newReadBy })
           .eq('id', msg.id);
         if (!updateError) updated++;
       }
+      return res.json({ updated });
     }
 
-    res.json({ updated });
+    res.json({ updated: unreadMessages.length });
   } catch (err) {
     console.error('[MESSAGES] mark-read error:', err);
     res.status(500).json({ error: err.message });
@@ -153,11 +189,15 @@ router.post('/delete', async (req, res) => {
 
     const { data: msg, error: fetchError } = await supabaseAdmin
       .from('messages')
-      .select('chat_id, text')
+      .select('chat_id, text, sender_id')
       .eq('id', message_id)
       .single();
 
     if (fetchError) return res.status(404).json({ error: 'Mensaje no encontrado' });
+
+    if (req.userId !== msg.sender_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'Solo puedes eliminar tus propios mensajes' });
+    }
 
     const { error } = await supabaseAdmin
       .from('messages')

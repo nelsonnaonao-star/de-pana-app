@@ -1,33 +1,48 @@
 import { Router } from 'express';
-import { getOne, getAll, run } from '../db.js';
-import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
-
-const supabaseAdmin = createClient(
-  process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co',
-  process.env.SUPABASE_SERVICE_KEY || '',
-);
+import { supabaseAdmin } from '../db.js';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = Router();
 
-// ─── SMS Password Recovery ────────────────────────────────────────────
+// ─── Rate limiters ────────────────────────────────────────────────
+import rateLimit from 'express-rate-limit';
+
+const resetCodeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Demasiados intentos. Espera 15 minutos.' },
+});
+
+const verifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Demasiados intentos de verificación.' },
+});
+
+const profileLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  message: { error: 'Demasiadas solicitudes.' },
+});
 
 function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+function sanitizeInput(str) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/[<>]/g, '').trim().slice(0, 500);
+}
+
+// ─── SMS Password Recovery ────────────────────────────────────────
+
 // Step 1: Send reset code via SMS
-router.post('/send-reset-code', async (req, res) => {
+router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
   try {
     const { phone } = req.body;
     if (!phone) return res.status(400).json({ error: 'Teléfono requerido' });
 
-    const cleanPhone = phone.replace(/\D/g, '').trim();
+    const cleanPhone = sanitizeInput(phone).replace(/\D/g, '');
     if (cleanPhone.length < 4) return res.status(400).json({ error: 'Teléfono inválido' });
 
     // Look up profile in Supabase
@@ -46,31 +61,38 @@ router.post('/send-reset-code', async (req, res) => {
     if (!profile) return res.status(404).json({ error: 'No se encontró un usuario con ese teléfono' });
 
     // Invalidate any previous unused codes for this profile
-    run('UPDATE password_reset_codes SET used = 1 WHERE profile_id = ? AND used = 0', [profile.id]);
+    await supabaseAdmin
+      .from('password_reset_codes')
+      .update({ used: true })
+      .eq('profile_id', profile.id)
+      .eq('used', false);
 
     // Generate new code (15 min expiry)
     const code = generateCode();
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-    run(
-      'INSERT INTO password_reset_codes (profile_id, code, phone, expires_at) VALUES (?, ?, ?, ?)',
-      [profile.id, code, profile.phone_number, expiresAt],
-    );
+    await supabaseAdmin
+      .from('password_reset_codes')
+      .insert({
+        profile_id: profile.id,
+        code,
+        phone: profile.phone_number,
+        expires_at: expiresAt,
+      });
 
     // Mask phone for response
     const maskedPhone = profile.phone_number.length > 4
       ? profile.phone_number.slice(0, -4).replace(/\d/g, '*') + profile.phone_number.slice(-4)
       : profile.phone_number;
 
-    console.log(`[SMS-RECOVERY] Code for ${profile.phone_number}: ${code}`);
+    // In production: integrate Twilio/SMS service here
+    // For now we log the code server-side only
+    console.log(`[SMS-RECOVERY] Code sent to ${maskedPhone}`);
 
-    // ⚠️ Modo desarrollo: envía el código en la respuesta para mostrarlo en la UI
-    // En producción, integrar Twilio y eliminar debugCode
     res.json({
       message: 'Código enviado por SMS',
       maskedPhone,
       expiresIn: 900,
-      debugCode: code,
     });
   } catch (err) {
     console.error('[SMS-RECOVERY] Error:', err);
@@ -79,24 +101,30 @@ router.post('/send-reset-code', async (req, res) => {
 });
 
 // Step 2: Verify reset code
-router.post('/verify-reset-code', (req, res) => {
+router.post('/verify-reset-code', verifyLimiter, async (req, res) => {
   try {
     const { phone, code } = req.body;
     if (!phone || !code) return res.status(400).json({ error: 'Teléfono y código requeridos' });
 
-    const cleanPhone = phone.replace(/\D/g, '').trim();
+    const cleanPhone = sanitizeInput(phone).replace(/\D/g, '');
+    const cleanCode = sanitizeInput(code).replace(/\D/g, '');
     const now = new Date().toISOString();
 
-    const record = getOne(
-      `SELECT id, profile_id, expires_at FROM password_reset_codes
-       WHERE phone LIKE ? AND code = ? AND used = 0 AND expires_at > ?
-       ORDER BY id DESC LIMIT 1`,
-      [`%${cleanPhone}%`, code, now],
-    );
+    const { data: records, error } = await supabaseAdmin
+      .from('password_reset_codes')
+      .select('id, profile_id, expires_at')
+      .ilike('phone', `%${cleanPhone}%`)
+      .eq('code', cleanCode)
+      .eq('used', false)
+      .gt('expires_at', now)
+      .order('id', { ascending: false })
+      .limit(1);
 
-    if (!record) return res.status(400).json({ error: 'Código inválido o expirado' });
+    if (error || !records || records.length === 0) {
+      return res.status(400).json({ error: 'Código inválido o expirado' });
+    }
 
-    res.json({ message: 'Código verificado', profileId: record.profile_id });
+    res.json({ message: 'Código verificado', profileId: records[0].profile_id });
   } catch (err) {
     console.error('[SMS-RECOVERY] Verify error:', err);
     res.status(500).json({ error: 'Error al verificar el código' });
@@ -104,27 +132,35 @@ router.post('/verify-reset-code', (req, res) => {
 });
 
 // Step 3: Update password
-router.post('/update-password', async (req, res) => {
+router.post('/update-password', verifyLimiter, async (req, res) => {
   try {
     const { phone, code, newPassword } = req.body;
     if (!phone || !code || !newPassword) {
       return res.status(400).json({ error: 'Teléfono, código y nueva contraseña requeridos' });
     }
-    if (newPassword.length < 4) {
-      return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres' });
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
     }
 
-    const cleanPhone = phone.replace(/\D/g, '').trim();
+    const cleanPhone = sanitizeInput(phone).replace(/\D/g, '');
+    const cleanCode = sanitizeInput(code).replace(/\D/g, '');
     const now = new Date().toISOString();
 
-    const record = getOne(
-      `SELECT id, profile_id FROM password_reset_codes
-       WHERE phone LIKE ? AND code = ? AND used = 0 AND expires_at > ?
-       ORDER BY id DESC LIMIT 1`,
-      [`%${cleanPhone}%`, code, now],
-    );
+    const { data: records, error: fetchError } = await supabaseAdmin
+      .from('password_reset_codes')
+      .select('id, profile_id')
+      .ilike('phone', `%${cleanPhone}%`)
+      .eq('code', cleanCode)
+      .eq('used', false)
+      .gt('expires_at', now)
+      .order('id', { ascending: false })
+      .limit(1);
 
-    if (!record) return res.status(400).json({ error: 'Código inválido o expirado. Solicita uno nuevo.' });
+    if (fetchError || !records || records.length === 0) {
+      return res.status(400).json({ error: 'Código inválido o expirado. Solicita uno nuevo.' });
+    }
+
+    const record = records[0];
 
     // Update password via Supabase Admin API
     const { error } = await supabaseAdmin.auth.admin.updateUserById(
@@ -138,7 +174,10 @@ router.post('/update-password', async (req, res) => {
     }
 
     // Mark code as used
-    run('UPDATE password_reset_codes SET used = 1 WHERE id = ?', [record.id]);
+    await supabaseAdmin
+      .from('password_reset_codes')
+      .update({ used: true })
+      .eq('id', record.id);
 
     console.log(`[SMS-RECOVERY] Password updated for profile ${record.profile_id}`);
     res.json({ message: 'Contraseña actualizada correctamente' });
@@ -149,13 +188,18 @@ router.post('/update-password', async (req, res) => {
 });
 
 // ─── Auto-confirm user after registration ──────────────────────────
-router.post('/auto-confirm', async (req, res) => {
+router.post('/auto-confirm', profileLimiter, async (req, res) => {
   try {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId requerido' });
 
+    const sanitizedUserId = sanitizeInput(userId);
+    if (!/^[0-9a-f-]{36}$/i.test(sanitizedUserId)) {
+      return res.status(400).json({ error: 'userId inválido' });
+    }
+
     const { error } = await supabaseAdmin.auth.admin.updateUserById(
-      userId,
+      sanitizedUserId,
       { email_confirm: true },
     );
 
@@ -164,7 +208,6 @@ router.post('/auto-confirm', async (req, res) => {
       return res.status(500).json({ error: 'Error al confirmar usuario' });
     }
 
-    console.log(`[AUTO-CONFIRM] User ${userId} confirmed`);
     res.json({ message: 'Usuario confirmado' });
   } catch (err) {
     console.error('[AUTO-CONFIRM] Error:', err);
@@ -173,16 +216,18 @@ router.post('/auto-confirm', async (req, res) => {
 });
 
 // ─── Lookup profile by username or phone (for login) ─────────────
-router.post('/lookup-profile', async (req, res) => {
+router.post('/lookup-profile', profileLimiter, async (req, res) => {
   try {
     const { identifier } = req.body;
     if (!identifier) return res.status(400).json({ error: 'Identificador requerido' });
 
+    const cleanId = sanitizeInput(identifier);
+
     // Try exact username first
-      let { data: profiles, error } = await supabaseAdmin
-        .from('profiles')
-        .select('id, username, email, name, phone_number, avatar, avatar_url')
-        .eq('username', identifier);
+    let { data: profiles, error } = await supabaseAdmin
+      .from('profiles')
+      .select('id, username, email, name, phone_number, avatar, avatar_url')
+      .eq('username', cleanId);
 
     if (error) {
       console.error('[LOOKUP-PROFILE] Error:', error);
@@ -191,7 +236,7 @@ router.post('/lookup-profile', async (req, res) => {
 
     // If not found, try by phone (last 7 digits)
     if (!profiles || profiles.length === 0) {
-      const last7 = identifier.replace(/\D/g, '').slice(-7);
+      const last7 = cleanId.replace(/\D/g, '').slice(-7);
       if (last7.length >= 4) {
         const { data: phoneProfiles } = await supabaseAdmin
           .from('profiles')
@@ -215,26 +260,27 @@ router.post('/lookup-profile', async (req, res) => {
 });
 
 // ─── Check duplicate username/phone (for registration) ───────────
-router.post('/check-duplicate', async (req, res) => {
+router.post('/check-duplicate', profileLimiter, async (req, res) => {
   try {
-    const { username } = req.body;
-    const { phone } = req.body;
+    const { username, phone } = req.body;
     if (!username && !phone) return res.status(400).json({ error: 'Usuario o teléfono requerido' });
 
     let result = null;
     if (username) {
+      const cleanUsername = sanitizeInput(username);
       const { data } = await supabaseAdmin
         .from('profiles')
         .select('id')
-        .eq('username', username)
+        .eq('username', cleanUsername)
         .maybeSingle();
       if (data) result = 'username';
     }
     if (!result && phone) {
+      const cleanPhone = sanitizeInput(phone);
       const { data } = await supabaseAdmin
         .from('profiles')
         .select('id')
-        .eq('phone_number', phone)
+        .eq('phone_number', cleanPhone)
         .maybeSingle();
       if (data) result = 'phone';
     }
@@ -246,14 +292,28 @@ router.post('/check-duplicate', async (req, res) => {
 });
 
 // ─── Upsert profile (for registration) ───────────────────────────
-router.post('/upsert-profile', async (req, res) => {
+router.post('/upsert-profile', profileLimiter, authMiddleware, async (req, res) => {
   try {
     const profile = req.body;
     if (!profile.id) return res.status(400).json({ error: 'id requerido' });
 
+    // Enforce: user can only upsert their own profile
+    if (req.userId !== profile.id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No tienes permiso para modificar este perfil' });
+    }
+
+    // Sanitize allowed fields only
+    const allowedFields = ['id', 'name', 'username', 'phone_number', 'avatar', 'avatar_url', 'bio', 'status', 'notif_config', 'auto_reply_config'];
+    const sanitized = {};
+    for (const key of allowedFields) {
+      if (profile[key] !== undefined) {
+        sanitized[key] = typeof profile[key] === 'string' ? sanitizeInput(profile[key]) : profile[key];
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from('profiles')
-      .upsert(profile)
+      .upsert(sanitized)
       .select()
       .maybeSingle();
 

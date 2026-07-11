@@ -1,47 +1,46 @@
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY || "";
-let registeredUserId: string | null = null;
+async function registerTokenWithServer(token: string, userId: string, attempt = 1): Promise<void> {
+  const serverUrl = import.meta.env.VITE_SERVER_URL;
+  if (!serverUrl) return;
+  try {
+    const res = await authFetch(`${serverUrl}/api/fcm/register`, {
+      method: 'POST',
+      body: JSON.stringify({ profile_id: userId, token, device: 'android-fcm' }),
+    });
+    if (!res.ok && attempt < 3) {
+      await new Promise(r => setTimeout(r, 3000 * attempt));
+      return registerTokenWithServer(token, userId, attempt + 1);
+    }
+  } catch {
+    if (attempt < 3) {
+      await new Promise(r => setTimeout(r, 3000 * attempt));
+      return registerTokenWithServer(token, userId, attempt + 1);
+    }
+  }
+}
 
 export async function registerPushNotifications(userId: string): Promise<boolean> {
-  if (!("Notification" in window)) {
-    console.log("[PUSH] Notifications not supported");
-    return false;
-  }
-  if (!("serviceWorker" in navigator)) {
-    console.log("[PUSH] Service workers not supported");
-    return false;
-  }
-  if (!VAPID_PUBLIC_KEY) {
-    console.warn("[PUSH] VAPID public key not configured");
-    return false;
-  }
-  if (registeredUserId === userId) {
-    return true;
-  }
+  if (!("Notification" in window)) return false;
+  if (!("serviceWorker" in navigator)) return false;
+
+  const VAPID_PUBLIC_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY || "";
+  if (!VAPID_PUBLIC_KEY) return false;
 
   try {
     const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      console.log("[PUSH] Permission denied");
-      return false;
-    }
+    if (permission !== "granted") return false;
 
     const existing = await navigator.serviceWorker.getRegistration("/push-sw.js");
-    const registration = existing || await navigator.serviceWorker.register("/push-sw.js", {
-      scope: "/",
-    });
-    registeredUserId = userId;
-    console.log("[PUSH] Service worker registered");
+    const registration = existing || await navigator.serviceWorker.register("/push-sw.js", { scope: "/" });
 
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
     });
 
-    const res = await fetch(apiUrl("/api/fcm/register"), {
+    const res = await authFetch(apiUrl("/api/fcm/register"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         profile_id: userId,
         token: JSON.stringify(subscription),
@@ -49,15 +48,8 @@ export async function registerPushNotifications(userId: string): Promise<boolean
       }),
     });
 
-    if (!res.ok) {
-      console.warn("[PUSH] Failed to register with server");
-      return false;
-    }
-
-    console.log("[PUSH] Registered successfully");
-    return true;
-  } catch (e) {
-    console.error("[PUSH] Error:", e);
+    return res.ok;
+  } catch {
     return false;
   }
 }
@@ -67,14 +59,10 @@ export async function unregisterPushNotifications(): Promise<void> {
     const registration = await navigator.serviceWorker.getRegistration("/push-sw.js");
     if (registration) {
       const subscription = await registration.pushManager.getSubscription();
-      if (subscription) {
-        await subscription.unsubscribe();
-      }
+      if (subscription) await subscription.unsubscribe();
       await registration.unregister();
     }
-  } catch (e) {
-    console.warn("[PUSH] Unregister error:", e);
-  }
+  } catch {}
 }
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {

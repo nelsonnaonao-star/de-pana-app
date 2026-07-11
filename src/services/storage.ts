@@ -1,18 +1,23 @@
 import { supabase } from "../lib/supabase";
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 
 const BUCKET = "chat-images";
 
 async function uploadViaServer(blob: Blob): Promise<string | null> {
   try {
+    const token = (await supabase.auth.getSession()).data.session?.access_token;
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const formData = new FormData();
     formData.append("file", blob, `file.${blob.type.split("/")[1] || "bin"}`);
     const res = await fetch(apiUrl("/api/media/upload"), {
       method: "POST",
+      headers,
       body: formData,
     });
     if (!res.ok) {
-      if (res.status === 404) return null;
+      if (res.status === 401 || res.status === 404) return null;
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || "Error al subir archivo");
     }

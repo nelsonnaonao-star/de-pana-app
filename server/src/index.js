@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { initDb } from './db.js';
+import { authMiddleware } from './middleware/auth.js';
 import authRoutes from './routes/auth.js';
 import fcmRoutes from './routes/fcm.js';
 import turnRoutes from './routes/turn.js';
@@ -63,43 +64,83 @@ async function main() {
     contentSecurityPolicy: false,
   }));
 
+  app.use(express.json({ limit: '10mb' }));
+
+  // ─── Global rate limiter ───────────────────────────────────────
   const globalLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
-    max: 100,
+    max: 200,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.' },
   });
-  app.use('/api/', (req, res, next) => {
-    if (req.path === '/fcm/webhook') return next();
-    globalLimiter(req, res, next);
-  });
 
-  const smsLimiter = rateLimit({
+  // ─── Strict rate limiter for sensitive endpoints ────────────────
+  const strictLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 3,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Has solicitado demasiados códigos. Espera 15 minutos.' },
+    max: 10,
+    message: { error: 'Demasiados intentos. Espera 15 minutos.' },
   });
-  app.use('/api/auth/send-reset-code', smsLimiter);
 
-  app.use(express.json({ limit: '10mb' }));
+  // ─── Upload rate limiter ───────────────────────────────────────
+  const uploadLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 30,
+    message: { error: 'Demasiadas subidas. Espera unos minutos.' },
+  });
+
+  // ─── PUBLIC routes (no auth needed) ────────────────────────────
+  app.use('/api/health', (_req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+  app.use('/api/auth', globalLimiter, authRoutes);
+  app.use('/api/rates', globalLimiter, ratesRoutes);
+  app.use('/api/turn', globalLimiter, turnRoutes);
+  app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);
+
+  // ─── FCM webhook (called by Supabase, not by client) ───────────
+  app.use('/api/fcm', (req, res, next) => {
+    if (req.path === '/webhook') return next();
+    globalLimiter(req, res, next);
+  }, fcmRoutes);
+
+  // ─── PROTECTED routes (auth required) ──────────────────────────
+  app.use('/api/data', globalLimiter, authMiddleware, dataRoutes);
+  app.use('/api/messages', globalLimiter, authMiddleware, messagesRoutes);
+  app.use('/api/content', globalLimiter, authMiddleware, contentRoutes);
+  app.use('/api/media', uploadLimiter, authMiddleware, mediaRoutes);
+
+  // ─── GIPHY proxy (hides API key from client) ───────────────────
+  const GIPHY_API_KEY = process.env.GIPHY_API_KEY || 'bd36d0j4ju5xmnkLKzGwe6X1wFTURLGB';
+  app.get('/api/giphy/:action', async (req, res) => {
+    try {
+      const { action } = req.params;
+      const { q, limit = 30, type = 'gifs' } = req.query;
+
+      if (!['trending', 'search'].includes(action)) {
+        return res.status(400).json({ error: 'Invalid action' });
+      }
+      if (!['gifs', 'stickers'].includes(type)) {
+        return res.status(400).json({ error: 'Invalid type' });
+      }
+
+      const params = action === 'search' ? `q=${encodeURIComponent(q || '')}` : '';
+      const url = `https://api.giphy.com/v1/${type}/${action}?api_key=${GIPHY_API_KEY}&${params}&limit=${Math.min(Number(limit) || 30, 50)}&rating=g`;
+
+      const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) return res.status(response.status).json({ error: 'Giphy API error' });
+      const data = await response.json();
+      res.json(data.data || []);
+    } catch (err) {
+      console.error('[GIPHY] Proxy error:', err.message);
+      res.status(500).json({ error: 'Error fetching from Giphy' });
+    }
+  });
+
+  // ─── Static files ──────────────────────────────────────────────
   app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
-  // API routes
-  app.use('/api/auth', authRoutes);
-  app.use('/api/fcm', fcmRoutes);
-  app.use('/api/turn', turnRoutes);
-  app.use('/api/link-preview', linkPreviewRoutes);
-  app.use('/api/media', mediaRoutes);
-  app.use('/api/data', dataRoutes);
-  app.use('/api/rates', ratesRoutes);
-  app.use('/api/messages', messagesRoutes);
-  app.use('/api/content', contentRoutes);
-
-  // Gemini AI Chat endpoint (from original server.ts)
-  const { GoogleGenAI } = await import('@google/genai');
+  // ─── Gemini AI Chat endpoint ───────────────────────────────────
   app.post('/api/chat', async (req, res) => {
     try {
       const { message, history } = req.body;
@@ -112,6 +153,7 @@ async function main() {
         return res.status(500).json({ error: 'GEMINI_API_KEY no configurada.' });
       }
 
+      const { GoogleGenAI } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey });
 
       const formattedContents = [];
@@ -153,11 +195,6 @@ async function main() {
   });
   app.use('/uploads', (req, res) => {
     res.status(404).json({ error: `Archivo no encontrado: ${req.originalUrl}` });
-  });
-
-  // Health check endpoint for Render (must be BEFORE catch-all)
-  app.get('/api/health', (_req, res) => {
-    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
   // SPA catch-all for all other routes

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
-import { createClient } from '@supabase/supabase-js';
+import { supabaseAdmin } from '../db.js';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
@@ -11,10 +11,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const router = Router();
 
 ffmpeg.setFfmpegPath(ffmpegPath.path);
-
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co';
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 const uploadVideo = multer({
   storage: multer.diskStorage({
@@ -51,7 +47,6 @@ function getOutputPath() {
 router.post('/compress-video', (req, res) => {
   uploadVideo.single('video')(req, res, async (err) => {
     if (err) {
-      console.error('[media] Multer error:', err.message);
       return res.status(400).json({ error: err.message });
     }
 
@@ -63,7 +58,6 @@ router.post('/compress-video', (req, res) => {
     const outputPath = getOutputPath();
     const originalSize = req.file.size;
 
-    // If video is already small (< 2 MB), skip compression and upload directly
     if (originalSize < 2 * 1024 * 1024) {
       try {
         const origExt = req.file.originalname.split('.').pop() || 'mp4';
@@ -71,13 +65,11 @@ router.post('/compress-video', (req, res) => {
         await fs.unlink(inputPath).catch(() => {});
         return res.json({ url, compressed: false, originalSize, compressedSize: originalSize });
       } catch (uploadErr) {
-        console.error('[media] Upload error (skip compression):', uploadErr);
         await fs.unlink(inputPath).catch(() => {});
         return res.status(500).json({ error: 'Error al subir el video' });
       }
     }
 
-    // Compress with FFmpeg
     try {
       await new Promise((resolve, reject) => {
         ffmpeg(inputPath)
@@ -92,7 +84,6 @@ router.post('/compress-video', (req, res) => {
           ])
           .on('end', resolve)
           .on('error', (ffmpegErr) => {
-            console.error('[media] FFmpeg error:', ffmpegErr.message);
             reject(ffmpegErr);
           })
           .save(outputPath);
@@ -105,8 +96,6 @@ router.post('/compress-video', (req, res) => {
 
       res.json({ url, compressed: true, originalSize, compressedSize });
     } catch (compressErr) {
-      console.error('[media] Compression failed, fallback to raw upload:', compressErr);
-      // Fallback: upload the original file instead
       try {
         const origExt = req.file.originalname.split('.').pop() || 'mp4';
         const url = await uploadToSupabase(inputPath, req.file.mimetype, origExt);
@@ -129,25 +118,24 @@ router.post('/upload', uploadAny.single('file'), async (req, res) => {
     await fs.unlink(req.file.path).catch(() => {});
     res.json({ url });
   } catch (err) {
-    console.error('[media] Upload error:', err);
     res.status(500).json({ error: 'Error al subir el archivo' });
   }
 });
 
 async function uploadToSupabase(filePath, mimeType, ext = 'mp4') {
-  if (!supabase) throw new Error('Supabase no configurado');
+  if (!supabaseAdmin) throw new Error('Supabase no configurado');
 
   const prefix = mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('image/') ? 'image' : 'file';
   const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
   const fileBuffer = await fs.readFile(filePath);
 
-  const { error } = await supabase.storage
+  const { error } = await supabaseAdmin.storage
     .from('chat-images')
     .upload(fileName, fileBuffer, { contentType: mimeType, upsert: false });
 
   if (error) throw error;
 
-  const { data } = supabase.storage.from('chat-images').getPublicUrl(fileName);
+  const { data } = supabaseAdmin.storage.from('chat-images').getPublicUrl(fileName);
   return data.publicUrl;
 }
 

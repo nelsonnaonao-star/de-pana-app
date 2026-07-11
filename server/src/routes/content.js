@@ -1,12 +1,12 @@
 import { Router } from 'express';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseAdmin = createClient(
-  process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co',
-  process.env.SUPABASE_SERVICE_KEY || '',
-);
+import { supabaseAdmin } from '../db.js';
 
 const router = Router();
+
+function sanitizeInput(str) {
+  if (typeof str !== 'string') return '';
+  return str.replace(/[<>]/g, '').trim().slice(0, 2000);
+}
 
 function mapStoryFromDb(s) {
   return {
@@ -69,6 +69,9 @@ router.post('/stories', async (req, res) => {
     if (!user_id || !type) {
       return res.status(400).json({ error: 'user_id y type requeridos' });
     }
+    if (req.userId !== user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No puedes crear stories como otro usuario' });
+    }
     const insertData = mapStoryToDb(req.body);
     const { data, error } = await supabaseAdmin
       .from('stories')
@@ -85,6 +88,14 @@ router.post('/stories', async (req, res) => {
 
 router.delete('/stories/:id', async (req, res) => {
   try {
+    const { data: story, error: fetchErr } = await supabaseAdmin
+      .from('stories')
+      .select('user_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (story && req.userId !== story.user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { error } = await supabaseAdmin
       .from('stories')
       .delete()
@@ -199,9 +210,12 @@ router.post('/channels', async (req, res) => {
     if (!name || !created_by) {
       return res.status(400).json({ error: 'name y created_by requeridos' });
     }
+    if (req.userId !== created_by && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data, error } = await supabaseAdmin
       .from('broadcast_channels')
-      .insert({ name, description, avatar_url: avatar || null, admin_id: created_by })
+      .insert({ name: sanitizeInput(name), description: sanitizeInput(description || ''), avatar_url: avatar || null, admin_id: created_by })
       .select()
       .single();
     if (error) throw error;
@@ -231,6 +245,9 @@ router.post('/channels/subscribe', async (req, res) => {
     if (!channel_id || !user_id) {
       return res.status(400).json({ error: 'channel_id y user_id requeridos' });
     }
+    if (req.userId !== user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data, error } = await supabaseAdmin
       .from('broadcast_subscribers')
       .upsert({ channel_id, user_id }, { onConflict: 'channel_id,user_id' })
@@ -247,6 +264,9 @@ router.post('/channels/subscribe', async (req, res) => {
 router.post('/channels/unsubscribe', async (req, res) => {
   try {
     const { channel_id, user_id } = req.body;
+    if (req.userId !== user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { error } = await supabaseAdmin
       .from('broadcast_subscribers')
       .delete()
@@ -268,7 +288,7 @@ router.post('/channels/updates', async (req, res) => {
     }
     const { data, error } = await supabaseAdmin
       .from('broadcast_messages')
-      .insert({ channel_id, text })
+      .insert({ channel_id, text: sanitizeInput(text) })
       .select()
       .single();
     if (error) throw error;
@@ -290,6 +310,9 @@ router.post('/channels/react', async (req, res) => {
     if (!update_id || !user_id || !reaction) {
       return res.status(400).json({ error: 'update_id, user_id y reaction requeridos' });
     }
+    if (req.userId !== user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
 
     const { data: existing } = await supabaseAdmin
       .from('channel_update_reactions')
@@ -300,14 +323,12 @@ router.post('/channels/react', async (req, res) => {
 
     if (existing) {
       if (existing.reaction === reaction) {
-        // Same reaction — toggle off
         await supabaseAdmin
           .from('channel_update_reactions')
           .delete()
           .eq('id', existing.id);
         res.json({ reacted: false });
       } else {
-        // Changed reaction — update type
         await supabaseAdmin
           .from('channel_update_reactions')
           .update({ reaction })
@@ -370,16 +391,19 @@ router.post('/flyers', async (req, res) => {
     if (!flyer.user_id || !flyer.business_name) {
       return res.status(400).json({ error: 'user_id y business_name requeridos' });
     }
+    if (req.userId !== flyer.user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data, error } = await supabaseAdmin
       .from('business_flyers')
       .insert({
         user_id: flyer.user_id,
-        business_name: flyer.business_name,
-        description: flyer.description || '',
-        location: flyer.location || '',
+        business_name: sanitizeInput(flyer.business_name),
+        description: sanitizeInput(flyer.description || ''),
+        location: sanitizeInput(flyer.location || ''),
         flyer_url: flyer.flyer_url || '',
         template_id: flyer.template_id || null,
-        product_name: flyer.product_name || '',
+        product_name: sanitizeInput(flyer.product_name || ''),
         price: flyer.price || '',
         music_url: flyer.music_url || '',
         music_name: flyer.music_name || '',
@@ -438,6 +462,14 @@ router.post('/flyers/click/:id', async (req, res) => {
 
 router.delete('/flyers/:id', async (req, res) => {
   try {
+    const { data: flyer, error: fetchErr } = await supabaseAdmin
+      .from('business_flyers')
+      .select('user_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (flyer && req.userId !== flyer.user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { error } = await supabaseAdmin
       .from('business_flyers')
       .delete()

@@ -43,7 +43,7 @@ export async function startCall(call: Partial<Call>): Promise<Call> {
     .insert({
       caller_id: call.caller_id,
       callee_id: call.callee_id,
-      status: "missed",
+      status: "ongoing",
       type: call.type || "audio",
       call_type: call.type || "audio",
       started_at: new Date().toISOString(),
@@ -58,12 +58,26 @@ export async function startCall(call: Partial<Call>): Promise<Call> {
 }
 
 export async function endCall(callId: string) {
-  const startedAt = new Date();
+  const endedAt = new Date();
+
+  const { data: call, error: fetchError } = await supabase
+    .from("calls")
+    .select("started_at")
+    .eq("id", callId)
+    .single();
+
+  let duration = 0;
+  if (call?.started_at) {
+    duration = Math.floor((endedAt.getTime() - new Date(call.started_at).getTime()) / 1000);
+    if (duration < 0) duration = 0;
+  }
+
   const { error } = await supabase
     .from("calls")
     .update({
       status: "ended",
-      ended_at: startedAt.toISOString(),
+      ended_at: endedAt.toISOString(),
+      duration,
     })
     .eq("id", callId);
   if (error) throw error;

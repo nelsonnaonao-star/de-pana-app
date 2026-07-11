@@ -1,5 +1,5 @@
 import { supabase } from "../lib/supabase";
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 import toast from "react-hot-toast";
 
 export type Profile = {
@@ -73,9 +73,8 @@ export async function login(identifier: string, password: string) {
     if (error.message.toLowerCase().includes("confirm") || error.message.toLowerCase().includes("email not confirmed")) {
       console.debug("[LOGIN] Auto-confirm necesario");
       try {
-        await fetch(apiUrl("/api/auth/auto-confirm"), {
+        await authFetch(apiUrl("/api/auth/auto-confirm"), {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId: profile.id }),
         });
       } catch (e) {
@@ -155,9 +154,8 @@ export async function register(
   if (!data.user) throw new Error("Error al crear usuario");
 
   try {
-    await fetch(apiUrl("/api/auth/auto-confirm"), {
+    await authFetch(apiUrl("/api/auth/auto-confirm"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: data.user.id }),
     });
   } catch (e) {
