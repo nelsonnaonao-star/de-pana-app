@@ -112,6 +112,13 @@ export default function BusinessPanel({
   // Create Mode Selection: "upload" (Subir propio), "generate" (Generador inteligente)
   const [createMode, setCreateMode] = useState<"upload" | "generate">("upload");
 
+  // Full-screen flyer viewer
+  const [viewingFlyer, setViewingFlyer] = useState<BusinessFlyer | null>(null);
+
+  // Publishing loading / success states
+  const [publishing, setPublishing] = useState(false);
+  const [publishSuccess, setPublishSuccess] = useState(false);
+
   // State for active music playing
   const [playingMusicUrl, setPlayingMusicUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -176,10 +183,18 @@ export default function BusinessPanel({
     onIncrementView(flyerId);
   };
 
+  // Open full-screen flyer viewer
+  const openFlyerViewer = (flyer: BusinessFlyer) => {
+    setViewingFlyer(flyer);
+    onIncrementView(flyer.id);
+  };
+
   // Publish manual flyer
-  const handlePublishManual = (e: React.FormEvent) => {
+  const handlePublishManual = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!upName.trim() || !upDesc.trim() || !upLoc.trim()) return;
+
+    setPublishing(true);
 
     const selectedMusic = MUSIC_PRESETS.find(m => m.id === upMusicId);
 
@@ -192,25 +207,37 @@ export default function BusinessPanel({
       isGenerated: false,
       musicUrl: selectedMusic?.url || undefined,
       musicName: selectedMusic?.name !== "Sin Música" ? selectedMusic?.name : undefined,
-      views: 1, // Start with 1 view
+      views: 1,
       clicks: 0,
       ownerName: "Nelson Castro (Tú)",
       ownerAvatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
       ownerPhone: "+58 412 1234567"
     };
 
+    // Simulate upload/processing time
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
     onAddFlyer(newFlyer);
-    // Reset form & go to stats
+
+    // Reset form
     setUpName("");
     setUpDesc("");
     setUpLoc("");
-    setActiveSubTab("stats");
+
+    setPublishing(false);
+    setPublishSuccess(true);
+    setTimeout(() => {
+      setPublishSuccess(false);
+      setActiveSubTab("stats");
+    }, 2000);
   };
 
   // Publish generated flyer
-  const handlePublishGenerated = (e: React.FormEvent) => {
+  const handlePublishGenerated = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!genName.trim() || !genProduct.trim() || !genPrice.trim() || !genLoc.trim()) return;
+
+    setPublishing(true);
 
     const selectedMusic = MUSIC_PRESETS.find(m => m.id === genMusicId);
 
@@ -225,21 +252,31 @@ export default function BusinessPanel({
       price: genPrice,
       musicUrl: selectedMusic?.url || undefined,
       musicName: selectedMusic?.name !== "Sin Música" ? selectedMusic?.name : undefined,
-      views: 1, // Start with 1 view
+      views: 1,
       clicks: 0,
       ownerName: "Nelson Castro (Tú)",
       ownerAvatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
       ownerPhone: "+58 412 1234567"
     };
 
+    // Simulate generation + upload time
+    await new Promise(resolve => setTimeout(resolve, 1800));
+
     onAddFlyer(newFlyer);
-    // Reset form & go to stats
+
+    // Reset form
     setGenName("");
     setGenProduct("");
     setGenPrice("");
     setGenDesc("");
     setGenLoc("");
-    setActiveSubTab("stats");
+
+    setPublishing(false);
+    setPublishSuccess(true);
+    setTimeout(() => {
+      setPublishSuccess(false);
+      setActiveSubTab("stats");
+    }, 2000);
   };
 
   // Click on "Chatear con el negocio"
@@ -373,7 +410,10 @@ export default function BusinessPanel({
                     </div>
 
                     {/* Flyer Rendering block (Either Image or Template generated) */}
-                    <div className="relative rounded-xl overflow-hidden aspect-video shadow-inner bg-slate-900 border border-slate-100 flex items-center justify-center">
+                    <div
+                      className="relative rounded-xl overflow-hidden aspect-video shadow-inner bg-slate-900 border border-slate-100 flex items-center justify-center cursor-pointer active:scale-[0.98] transition-transform"
+                      onClick={() => openFlyerViewer(flyer)}
+                    >
                       {flyer.isGenerated ? (
                         /* DYNAMIC PRE-DESIGNED TEMPLATE */
                         <div className={`w-full h-full p-4 flex flex-col justify-between text-left ${
@@ -657,9 +697,16 @@ export default function BusinessPanel({
 
                 <button
                   type="submit"
-                  className="w-full bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md mt-4 cursor-pointer"
+                  disabled={publishing}
+                  className="w-full bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md mt-4 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Compass className="w-4 h-4 animate-pulse" /> Publicar Flyer en Red On
+                  {publishing ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Publicando...
+                    </>
+                  ) : (
+                    <><Compass className="w-4 h-4 animate-pulse" /> Publicar Flyer en Red On</>
+                  )}
                 </button>
               </form>
             )}
@@ -829,9 +876,16 @@ export default function BusinessPanel({
                   {/* Submit and Publish */}
                   <button
                     type="submit"
-                    className="w-full bg-[#0a4d52] hover:bg-[#10646a] text-white font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md mt-4 cursor-pointer"
+                    disabled={publishing}
+                    className="w-full bg-[#0a4d52] hover:bg-[#10646a] text-white font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md mt-4 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Check className="w-4 h-4 text-emerald-400" /> Generar y Publicar Flyer
+                    {publishing ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generando y Publicando...
+                      </>
+                    ) : (
+                      <><Check className="w-4 h-4 text-emerald-400" /> Generar y Publicar Flyer</>
+                    )}
                   </button>
                 </form>
               </div>
@@ -937,6 +991,164 @@ export default function BusinessPanel({
         )}
 
       </div>
+
+      {/* ======================================= */}
+      {/* PUBLISH SUCCESS OVERLAY ✅ */}
+      {/* ======================================= */}
+      {publishSuccess && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[200] flex items-center justify-center animate-fade-in">
+          <div className="bg-white rounded-3xl p-8 mx-6 text-center space-y-3 shadow-2xl scale-in-center">
+            <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
+              <Check className="w-8 h-8 text-emerald-500" />
+            </div>
+            <h3 className="text-lg font-black text-slate-900">Publicación Exitosa</h3>
+            <p className="text-xs text-slate-500">Tu flyer ya está visible en Red On Negocios</p>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================= */}
+      {/* FULL-SCREEN FLYER VIEWER 👁️ */}
+      {/* ======================================= */}
+      {viewingFlyer && (
+        <div className="fixed inset-0 bg-black z-[100] flex flex-col overflow-y-auto" onClick={() => setViewingFlyer(null)}>
+          {/* Close button */}
+          <button
+            onClick={() => setViewingFlyer(null)}
+            className="absolute top-4 right-4 z-[110] p-2 bg-black/60 backdrop-blur-md rounded-full text-white cursor-pointer hover:bg-black/80 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          {/* Full-bleed flyer image */}
+          <div className="relative w-full aspect-[4/5] bg-slate-900 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+            {viewingFlyer.isGenerated ? (
+              <div className={`w-full h-full p-6 flex flex-col justify-between text-left ${
+                TEMPLATE_PRESETS.find(t => t.id === viewingFlyer.templateId)?.bgClass || ""
+              }`}>
+                <div className="flex justify-between items-start">
+                  <span className="text-[10px] font-bold bg-white/20 border border-white/20 px-3 py-1 rounded-full uppercase">
+                    Producto Destacado
+                  </span>
+                  <span className="text-lg font-black bg-[#14b8a6] text-white px-4 py-1 rounded-xl shadow-lg font-mono">
+                    {viewingFlyer.price}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  <h2 className={`text-2xl font-black leading-tight uppercase ${
+                    TEMPLATE_PRESETS.find(t => t.id === viewingFlyer.templateId)?.textClass || ""
+                  }`}>
+                    {viewingFlyer.productName}
+                  </h2>
+                  <p className="text-sm opacity-90 leading-relaxed">
+                    {viewingFlyer.description}
+                  </p>
+                </div>
+                <div className="flex justify-between items-center text-xs opacity-80 border-t border-white/10 pt-3 font-medium">
+                  <span className="flex items-center gap-1.5">
+                    <MapPin className="w-4 h-4 text-red-400" /> {viewingFlyer.location}
+                  </span>
+                  <span className="font-mono text-cyan-300">Generado en Red On</span>
+                </div>
+              </div>
+            ) : (
+              <img
+                src={viewingFlyer.flyerUrl}
+                alt={viewingFlyer.businessName}
+                className="w-full h-full object-contain bg-slate-900"
+              />
+            )}
+          </div>
+
+          {/* Flyer details panel */}
+          <div className="bg-white rounded-t-3xl -mt-4 relative z-10 p-5 space-y-4 flex-1" onClick={(e) => e.stopPropagation()}>
+            {/* Business name & publisher */}
+            <div className="flex items-center gap-3">
+              <img
+                src={viewingFlyer.ownerAvatar}
+                alt={viewingFlyer.ownerName}
+                className="w-10 h-10 rounded-full object-cover border-2 border-[#14b8a6]"
+              />
+              <div className="flex-1">
+                <h3 className="text-sm font-black text-slate-900 leading-tight">
+                  {viewingFlyer.businessName}
+                </h3>
+                <span className="text-[10px] text-slate-400 font-medium">
+                  Publicado por {viewingFlyer.ownerName}
+                </span>
+              </div>
+            </div>
+
+            {/* Description */}
+            <div className="space-y-1">
+              <h4 className="text-[9px] font-bold text-slate-400 uppercase">Descripción</h4>
+              <p className="text-xs text-slate-700 leading-relaxed">
+                {viewingFlyer.description}
+              </p>
+            </div>
+
+            {/* Location */}
+            <div className="flex items-center gap-2 bg-slate-50 rounded-xl p-3">
+              <MapPin className="w-4 h-4 text-[#14b8a6]" />
+              <span className="text-[10px] text-slate-600 font-medium">{viewingFlyer.location}</span>
+            </div>
+
+            {/* Price (if exists) */}
+            {viewingFlyer.price && (
+              <div className="flex items-center gap-2 bg-[#14b8a6]/10 rounded-xl p-3">
+                <Tag className="w-4 h-4 text-[#0a4d52]" />
+                <span className="text-[11px] text-[#0a4d52] font-black">{viewingFlyer.price}</span>
+              </div>
+            )}
+
+            {/* Stats row */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center justify-center gap-2 bg-slate-50 rounded-xl p-3">
+                <Eye className="w-4 h-4 text-[#14b8a6]" />
+                <span className="text-[10px] font-bold text-slate-700">{viewingFlyer.views} vistas</span>
+              </div>
+              <div className="flex items-center justify-center gap-2 bg-slate-50 rounded-xl p-3">
+                <MousePointerClick className="w-4 h-4 text-indigo-500" />
+                <span className="text-[10px] font-bold text-slate-700">{viewingFlyer.clicks} clicks</span>
+              </div>
+            </div>
+
+            {/* Music indicator */}
+            {viewingFlyer.musicUrl && (
+              <div className="flex items-center gap-2 bg-teal-50 rounded-xl p-3 border border-teal-100">
+                <Music className="w-4 h-4 text-teal-600" />
+                <span className="text-[10px] font-bold text-teal-700">
+                  Música: {viewingFlyer.musicName || "Ambiente"}
+                </span>
+              </div>
+            )}
+
+            {/* Share + Chat buttons */}
+            <div className="flex gap-3 pt-2 pb-6">
+              <button
+                onClick={() => {
+                  if (navigator.share) {
+                    navigator.share({ title: viewingFlyer.businessName, text: viewingFlyer.description }).catch(() => {});
+                  }
+                }}
+                className="flex-1 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Share2 className="w-3.5 h-3.5" /> Compartir
+              </button>
+              <button
+                onClick={() => {
+                  onIncrementClick(viewingFlyer.id);
+                  handleChatAction(viewingFlyer);
+                  setViewingFlyer(null);
+                }}
+                className="flex-1 bg-[#0a4d52] hover:bg-[#10646a] text-white font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5" /> Chatear con el Negocio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ======================================= */}
       {/* FULL-SCREEN ROOT OVERLAY: EDITOR PRO 🎨 */}

@@ -41,7 +41,7 @@ export default function CallOverlay({
           setElapsedSeconds(s => s + 1);
         }, 1000);
       }
-    } else if (call.status === "outgoing") {
+    } else if (call.status === "outgoing" || call.status === "connecting") {
       setElapsedSeconds(0);
     }
 
@@ -110,7 +110,7 @@ export default function CallOverlay({
 
   if (call.status === "incoming") {
     return (
-      <div className="absolute inset-0 bg-gradient-to-b from-[#0a4d52] via-[#041a1c] to-[#010809] text-white z-50 flex flex-col justify-between p-8 select-none">
+      <div className="absolute inset-0 bg-gradient-to-b from-[#0a4d52] via-[#041a1c] to-[#010809] text-white z-[9999] flex flex-col justify-between p-8 select-none">
         <div className="absolute top-[20%] left-1/2 -translate-x-1/2 w-64 h-64 rounded-full bg-teal-500/10 blur-3xl pointer-events-none"></div>
 
         <div className="text-center mt-12 space-y-3 relative z-10">
@@ -158,7 +158,7 @@ export default function CallOverlay({
   }
 
   return (
-    <div className="absolute inset-0 bg-slate-950 text-white z-50 flex flex-col justify-between overflow-hidden select-none">
+    <div className="absolute inset-0 bg-slate-950 text-white z-[9999] flex flex-col justify-between overflow-hidden select-none">
 
       <div ref={emojiContainerRef} className="absolute inset-0 pointer-events-none z-30 overflow-hidden" />
 
@@ -229,7 +229,7 @@ export default function CallOverlay({
           <div className="text-center mt-6 space-y-1 relative z-10">
             <h3 className="text-lg font-bold">{call.contactName}</h3>
             <p className="text-xs text-slate-400">
-              {call.status === "outgoing" ? "Llamando..." : "Llamada de voz cifrada"}
+              {call.status === "outgoing" ? "Llamando..." : call.status === "connecting" ? "Conectando..." : "Llamada de voz cifrada"}
             </p>
           </div>
         </div>
@@ -239,7 +239,7 @@ export default function CallOverlay({
         <div className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
           <span className="text-[10px] font-mono tracking-wider">
-            {call.status === "outgoing" ? "CONECTANDO..." : formatTime(elapsedSeconds)}
+            {call.status === "outgoing" ? "CONECTANDO..." : call.status === "connecting" ? "CONECTANDO..." : formatTime(elapsedSeconds)}
           </span>
         </div>
         <div className="flex items-center gap-1 bg-black/40 backdrop-blur-md px-2.5 py-1 rounded-full text-[9px] font-bold border border-white/10 text-teal-200">

@@ -7,7 +7,7 @@ export type Message = {
   sender_id: string;
   receiver_id?: string;
   text?: string;
-  type: "text" | "image" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
+  type: "text" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   status: "sent" | "delivered" | "read";
   created_at: string;
   read_at?: string;

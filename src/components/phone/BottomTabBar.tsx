@@ -5,6 +5,7 @@ interface BottomTabBarProps {
   currentScreen: string;
   setCurrentScreen: (screen: any) => void;
   isEditingMedia: boolean;
+  totalUnread?: number;
 }
 
 const TABS = [
@@ -16,7 +17,7 @@ const TABS = [
   { id: "profile", label: "Perfil", icon: CircleUser },
 ];
 
-export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditingMedia }: BottomTabBarProps) {
+export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditingMedia, totalUnread = 0 }: BottomTabBarProps) {
   if (isEditingMedia) return null;
 
   return (
@@ -25,6 +26,7 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = currentScreen === tab.id;
+          const showBadge = tab.id === "chats" && totalUnread > 0;
           return (
             <button
               key={tab.id}
@@ -33,10 +35,15 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
                 isActive ? "text-[#10646a]" : "text-slate-400 hover:text-slate-600"
               }`}
             >
-              <div className={`p-1.5 rounded-xl transition-all ${
+              <div className={`p-1.5 rounded-xl transition-all relative ${
                 isActive ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
               }`}>
                 <Icon className="w-4 h-4" />
+                {showBadge && (
+                  <span className="absolute -top-1 -right-2 bg-[#25D366] text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded-full border border-white z-30 shadow-sm">
+                    {totalUnread > 99 ? "99+" : totalUnread}
+                  </span>
+                )}
               </div>
               <span className={`text-[9px] ${isActive ? "font-bold" : "font-medium"} tracking-tight`}>{tab.label}</span>
             </button>

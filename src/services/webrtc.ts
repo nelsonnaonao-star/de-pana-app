@@ -1,7 +1,7 @@
 import { supabase } from "../lib/supabase";
 
 type SignalPayload = {
-  type: "offer" | "answer" | "ice-candidate" | "call-ended";
+  type: "offer" | "answer" | "ice-candidate" | "call-ended" | "callee-ready";
   sdp?: string;
   candidate?: string;
   sdpMid?: string;
@@ -59,6 +59,7 @@ export class WebRTCService {
   onRemoteStream: ((stream: MediaStream) => void) | null = null;
   onCallEnded: (() => void) | null = null;
   onConnectionStateChange: ((state: string) => void) | null = null;
+  onCalleeReady: (() => void) | null = null;
 
   constructor(callId: string, userId: string) {
     this.callId = callId;
@@ -140,6 +141,7 @@ export class WebRTCService {
     if (!this.pc) throw new Error("PeerConnection not created. Call createPeerConnection() first.");
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
+    console.log('[WEBRTC SIGNALING] 📤 Sending offer via Supabase Realtime channel:', this.callId);
     await this.sendSignal({
       type: "offer",
       sdp: JSON.stringify(offer),
@@ -150,22 +152,43 @@ export class WebRTCService {
 
   async handleOffer(offerSdp: string): Promise<RTCSessionDescriptionInit> {
     if (!this.pc) throw new Error("PeerConnection not created.");
-    const offer = JSON.parse(offerSdp) as RTCSessionDescriptionInit;
-    await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await this.pc.createAnswer();
-    await this.pc.setLocalDescription(answer);
-    await this.sendSignal({
-      type: "answer",
-      sdp: JSON.stringify(answer),
-      from: this.userId,
-    });
-    return answer;
+    console.log('[WEBRTC CRÍTICO] 📩 Receptor recibió SDP Offer — signalingState:', this.pc.signalingState);
+    try {
+      const offer = JSON.parse(offerSdp) as RTCSessionDescriptionInit;
+      await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+      console.log('[WEBRTC CRÍTICO] ✅ Receptor aplicó offer remoteDescription — signalingState:', this.pc.signalingState);
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+      console.log('[WEBRTC CRÍTICO] ✅ Receptor creó answer — signalingState:', this.pc.signalingState);
+      console.log('[WEBRTC CRÍTICO] 📤 Receptor enviando answer via broadcast, from:', this.userId);
+      await this.sendSignal({
+        type: "answer",
+        sdp: JSON.stringify(answer),
+        from: this.userId,
+      });
+      console.log('[WEBRTC CRÍTICO] ✅ Receptor answer enviado exitosamente');
+      return answer;
+    } catch (err) {
+      console.error('[WEBRTC CRÍTICO] ❌ Error en Receptor handleOffer:', err);
+      throw err;
+    }
   }
 
   async handleAnswer(answerSdp: string) {
-    if (!this.pc) return;
-    const answer = JSON.parse(answerSdp) as RTCSessionDescriptionInit;
-    await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+    if (!this.pc) {
+      console.error('[WEBRTC CRÍTICO] ❌ handleAnswer: NO PeerConnection exists!');
+      return;
+    }
+    console.log('[WEBRTC CRÍTICO] 📩 Emisor recibió SDP Answer — aplicando setRemoteDescription...');
+    console.log('[WEBRTC CRÍTICO] PC signalingState ANTES de setRemoteDescription:', this.pc.signalingState);
+    try {
+      const answer = JSON.parse(answerSdp) as RTCSessionDescriptionInit;
+      await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+      console.log('[WEBRTC CRÍTICO] ✅ Emisor aplicó RemoteDescription con éxito — signalingState DESPUÉS:', this.pc.signalingState);
+      console.log('[WEBRTC CRÍTICO] ✅ ICE connection state:', this.pc.iceConnectionState);
+    } catch (err) {
+      console.error('[WEBRTC CRÍTICO] ❌ Error en setRemoteDescription:', err);
+    }
   }
 
   async addIceCandidate(candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) {
@@ -183,6 +206,7 @@ export class WebRTCService {
     }
 
     this.subscribedPromise = new Promise((resolve) => {
+      console.log('[WEBRTC SIGNALING] 📡 Creating signal channel:', this.callId);
       this.channel = supabase.channel(`call-signal:${this.callId}`, {
         config: { broadcast: { ack: false, self: false } },
       });
@@ -190,12 +214,15 @@ export class WebRTCService {
       this.channel.on("broadcast", { event: "signal" }, async (payload) => {
         const signal = payload.payload as SignalPayload;
         if (signal.from === this.userId) return;
+        console.log('[WEBRTC CRÍTICO] 📩 Señal recibida tipo:', signal.type, 'from:', signal.from.substring(0, 8));
 
         switch (signal.type) {
           case "offer":
+            console.log('[WEBRTC CRÍTICO] 📩 Emisor/Receptor recibió OFFER — procesando...');
             await this.handleOffer(signal.sdp!);
             break;
           case "answer":
+            console.log('[WEBRTC CRÍTICO] 📩 Emisor/Receptor recibió ANSWER — procesando...');
             await this.handleAnswer(signal.sdp!);
             break;
           case "ice-candidate":
@@ -206,12 +233,18 @@ export class WebRTCService {
             );
             break;
           case "call-ended":
+            console.log('[WEBRTC SIGNALING] 📞 Call-ended signal received');
             this.onCallEnded?.();
+            break;
+          case "callee-ready":
+            console.log('[WEBRTC SIGNALING] 📞 Callee-ready signal received');
+            this.onCalleeReady?.();
             break;
         }
       });
 
       this.channel.subscribe((status) => {
+        console.log('[WEBRTC SIGNALING] 📡 Signal channel status:', status, 'for call:', this.callId);
         if (status === "SUBSCRIBED") {
           resolve();
         }
@@ -219,6 +252,32 @@ export class WebRTCService {
     });
 
     return this.subscribedPromise;
+  }
+
+  async resendOffer(): Promise<void> {
+    if (!this.pc) {
+      console.log('[WEBRTC CRÍTICO] ⚠️ resendOffer: no PeerConnection, creating one first');
+      await this.createPeerConnection();
+      await this.subscribeToSignals();
+    }
+    console.log('[WEBRTC CRÍTICO] 📤 resendOffer: signalingState=', this.pc?.signalingState, 'channel state=', this.channel?.state);
+    const offer = await this.pc!.createOffer();
+    await this.pc!.setLocalDescription(offer);
+    console.log('[WEBRTC CRÍTICO] 📤 Re-sending offer to receiver after callee-ready');
+    await this.sendSignal({
+      type: "offer",
+      sdp: JSON.stringify(offer),
+      from: this.userId,
+    });
+    console.log('[WEBRTC CRÍTICO] ✅ Offer resent successfully');
+  }
+
+  async signalCalleeReady(): Promise<void> {
+    console.log('[WEBRTC SIGNALING] 📤 Sending callee-ready signal');
+    await this.sendSignal({
+      type: "callee-ready",
+      from: this.userId,
+    });
   }
 
   async endCall() {

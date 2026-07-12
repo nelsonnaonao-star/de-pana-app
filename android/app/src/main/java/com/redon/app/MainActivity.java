@@ -18,13 +18,26 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
 
     private static final String TAG = "MainActivity";
+    private static MainActivity instance;
+
+    public static Object getCapacitorBridge() {
+        if (instance == null) return null;
+        return instance.bridge;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        instance = this;
         createNotificationChannels();
         requestFullScreenIntentPermission();
         handleCallIntent(getIntent());
+    }
+
+    @Override
+    public void onDestroy() {
+        instance = null;
+        super.onDestroy();
     }
 
     @Override

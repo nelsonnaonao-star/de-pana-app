@@ -9,126 +9,89 @@ let ratesCache = {
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+function parseVesNumber(str) {
+  if (!str) return null;
+  const cleaned = str.replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+async function scrapeBCV() {
+  const res = await fetch('https://www.bcv.org.ve', {
+    signal: AbortSignal.timeout(15000),
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml',
+      'Accept-Language': 'es-VE,es;q=0.9',
+    },
+  });
+  if (!res.ok) throw new Error(`BCV HTTP ${res.status}`);
+  const html = await res.text();
+
+  let usd = null, eur = null, dateStr = null;
+
+  const usdMatch = html.match(/id="dolar"[\s\S]*?<strong[^>]*>([\s\S]*?)<\/strong>/i);
+  if (usdMatch) usd = parseVesNumber(usdMatch[1]);
+
+  const eurMatch = html.match(/id="euro"[\s\S]*?<strong[^>]*>([\s\S]*?)<\/strong>/i);
+  if (eurMatch) eur = parseVesNumber(eurMatch[1]);
+
+  const dateMatch = html.match(/content="([\d]{4}-[\d]{2}-[\d]{2}T[\d:+\-Z]+)"/i);
+  if (dateMatch) dateStr = dateMatch[1];
+
+  if (!usd && !eur) throw new Error('Could not parse rates from BCV HTML');
+
+  return { usd, eur, date: dateStr || new Date().toISOString() };
+}
+
+async function fetchBcvToday() {
+  const res = await fetch('https://bcv.today/api/v1/rate.json', {
+    cache: 'no-cache',
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`bcv.today HTTP ${res.status}`);
+  const data = await res.json();
+  return {
+    usd: data.USD || null,
+    eur: data.EUR || null,
+    date: data.effective_date || data.date || new Date().toISOString(),
+  };
+}
+
 router.get('/dollar', async (_req, res) => {
   try {
     if (ratesCache.data && Date.now() - ratesCache.timestamp < CACHE_TTL) {
       return res.json(ratesCache.data);
     }
 
-    let oficialUsd = null;
-    let paraleloUsd = null;
-    let oficialEur = null;
-    let paraleloEur = null;
+    let source = 'BCV Oficial';
+    let rates;
 
-    // 1) USD rates (oficial BCV + paralelo)
     try {
-      const response = await fetch('https://ve.dolarapi.com/v1/dolares', {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data)) {
-          for (const item of data) {
-            if (item.fuente === 'oficial') {
-              oficialUsd = item;
-            } else if (item.fuente === 'paralelo') {
-              paraleloUsd = item;
-            }
-          }
-        }
-      }
+      rates = await scrapeBCV();
+      source = 'BCV Oficial';
     } catch (e) {
-      console.warn('[RATES] USD fetch failed:', e.message);
+      console.warn('[RATES] BCV scrape failed, trying bcv.today:', e.message);
+      rates = await fetchBcvToday();
+      source = 'bcv.today (cache)';
     }
-
-    // 2) EUR rates (oficial BCV + paralelo)
-    try {
-      const response = await fetch('https://ve.dolarapi.com/v1/euros', {
-        signal: AbortSignal.timeout(5000),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (Array.isArray(data)) {
-          for (const item of data) {
-            if (item.fuente === 'oficial') {
-              oficialEur = item;
-            } else if (item.fuente === 'paralelo') {
-              paraleloEur = item;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[RATES] EUR fetch failed:', e.message);
-    }
-
-    // Build response
-    const usdOficial = oficialUsd ? {
-      name: 'Dólar BCV (Oficial)',
-      symbol: '$',
-      value: oficialUsd.promedio || 0,
-      change: '+0.00%',
-      isUp: true,
-      source: 'Banco Central de Venezuela',
-      time: oficialUsd.fechaActualizacion,
-    } : null;
-
-    const usdParalelo = paraleloUsd ? {
-      name: 'Dólar Paralelo',
-      symbol: '$',
-      value: paraleloUsd.promedio || 0,
-      change: '+0.00%',
-      isUp: true,
-      source: 'Mercado Paralelo',
-      time: paraleloUsd.fechaActualizacion,
-    } : null;
-
-    const eurOficial = oficialEur ? {
-      name: 'Euro BCV (Oficial)',
-      symbol: '€',
-      value: oficialEur.promedio || 0,
-      change: '+0.00%',
-      isUp: true,
-      source: 'Banco Central de Venezuela',
-      time: oficialEur.fechaActualizacion,
-    } : null;
-
-    const eurParalelo = paraleloEur ? {
-      name: 'Euro Paralelo',
-      symbol: '€',
-      value: paraleloEur.promedio || 0,
-      change: '+0.00%',
-      isUp: true,
-      source: 'Mercado Paralelo',
-      time: paraleloEur.fechaActualizacion,
-    } : null;
-
-    // Primary (always prefer BCV oficial)
-    const usd = usdOficial || usdParalelo || {
-      name: 'Dólar',
-      symbol: '$',
-      value: 709.69,
-      change: '+0.00%',
-      isUp: true,
-      source: 'Referencia',
-      time: new Date().toISOString(),
-    };
-
-    const eur = eurOficial || eurParalelo || {
-      name: 'Euro',
-      symbol: '€',
-      value: 811.45,
-      change: '+0.00%',
-      isUp: true,
-      source: 'Referencia',
-      time: new Date().toISOString(),
-    };
 
     const result = {
-      usd,
-      eur,
-      bcv: usdOficial && eurOficial ? { usd: usdOficial, eur: eurOficial } : null,
-      paralelo: usdParalelo && eurParalelo ? { usd: usdParalelo, eur: eurParalelo } : null,
+      usd: rates.usd ? {
+        name: 'Dólar BCV',
+        symbol: '$',
+        value: rates.usd,
+        source: 'Banco Central de Venezuela',
+        time: rates.date,
+      } : null,
+      eur: rates.eur ? {
+        name: 'Euro BCV',
+        symbol: '€',
+        value: rates.eur,
+        source: 'Banco Central de Venezuela',
+        time: rates.date,
+      } : null,
+      dataSource: source,
       updatedAt: new Date().toISOString(),
     };
 
@@ -136,7 +99,7 @@ router.get('/dollar', async (_req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[RATES] Error:', err);
-    res.status(500).json({ error: 'Error al obtener tasas' });
+    res.status(500).json({ error: 'Error al obtener tasas del BCV' });
   }
 });
 

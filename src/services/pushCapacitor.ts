@@ -96,11 +96,15 @@ export async function setupCapacitorPush(userId: string) {
 
     PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
       const data = notification.data;
+      console.log('[WEBRTC SIGNALING] 📱 pushNotificationReceived:', JSON.stringify(data));
       if (data?.type === 'call' && data?.chatId) {
+        console.log('[WEBRTC SIGNALING] 📱 Dispatching incoming-call CustomEvent from FCM');
+        try { new Audio('/sounds/ringtone.mp3').play().catch(() => {}); } catch {}
         window.dispatchEvent(new CustomEvent('incoming-call', {
-          detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio' },
+          detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio', callId: data.callId },
         }));
       } else if (data?.type === 'message' && data?.chatId) {
+        try { new Audio('/sounds/notificacion.mp3').play().catch(() => {}); } catch {}
         window.dispatchEvent(new CustomEvent('new-message-received', {
           detail: { chatId: data.chatId, contactId: data.contactId, title: data.title, body: data.body },
         }));
@@ -112,7 +116,7 @@ export async function setupCapacitorPush(userId: string) {
       if (!data) return;
       if (data.type === 'call' && data.chatId) {
         window.dispatchEvent(new CustomEvent('incoming-call', {
-          detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName || 'Llamada entrante', callType: data.callType || 'audio' },
+          detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName || 'Llamada entrante', callType: data.callType || 'audio', callId: data.callId },
         }));
       } else if (data.chatId) {
         window.dispatchEvent(new CustomEvent('open-chat', {

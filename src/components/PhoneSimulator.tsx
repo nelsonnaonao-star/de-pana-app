@@ -112,6 +112,89 @@ export default function PhoneSimulator({
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const webrtcRef = useRef<WebRTCService | null>(null);
 
+  // Ringback tone for outgoing calls (synthesized via Web Audio API)
+  const ringbackCtxRef = useRef<AudioContext | null>(null);
+  const ringbackIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Ringtone for incoming calls (looped playback of ringtone.mp3)
+  const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
+  const notificationAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const playIncomingRingtone = useCallback(() => {
+    try {
+      stopIncomingRingtone();
+      const audio = new Audio('/sounds/ringtone.mp3');
+      audio.loop = true;
+      audio.volume = 0.8;
+      ringtoneAudioRef.current = audio;
+      audio.play().catch(() => {});
+      console.log('[APP] 🔊 Incoming ringtone started');
+    } catch (e) {
+      console.warn('[APP] Failed to play incoming ringtone:', e);
+    }
+  }, []);
+
+  const stopIncomingRingtone = useCallback(() => {
+    if (ringtoneAudioRef.current) {
+      try { ringtoneAudioRef.current.pause(); ringtoneAudioRef.current.currentTime = 0; } catch {}
+      ringtoneAudioRef.current = null;
+      console.log('[APP] 🔇 Incoming ringtone stopped');
+    }
+  }, []);
+
+  const playNotificationSound = useCallback(() => {
+    try {
+      if (notificationAudioRef.current) {
+        try { notificationAudioRef.current.pause(); notificationAudioRef.current.currentTime = 0; } catch {}
+      }
+      const audio = new Audio('/sounds/notificacion.mp3');
+      audio.volume = 0.7;
+      notificationAudioRef.current = audio;
+      audio.play().catch(() => {});
+      console.log('[APP] 🔊 Notification sound played');
+    } catch (e) {
+      console.warn('[APP] Failed to play notification sound:', e);
+    }
+  }, []);
+
+  const playRingbackTone = useCallback(() => {
+    try {
+      stopRingbackTone();
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      ringbackCtxRef.current = ctx;
+      const playBeep = () => {
+        if (!ringbackCtxRef.current) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 440;
+        gain.gain.value = 0.15;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+        osc.stop(ctx.currentTime + 0.4);
+      };
+      playBeep();
+      ringbackIntervalRef.current = setInterval(playBeep, 1000);
+      console.log('[WEBRTC SIGNALING] 🔊 Ringback tone started');
+    } catch (e) {
+      console.warn('[WEBRTC SIGNALING] Failed to play ringback tone:', e);
+    }
+  }, []);
+
+  const stopRingbackTone = useCallback(() => {
+    if (ringbackIntervalRef.current) {
+      clearInterval(ringbackIntervalRef.current);
+      ringbackIntervalRef.current = null;
+    }
+    if (ringbackCtxRef.current) {
+      try { ringbackCtxRef.current.close(); } catch {}
+      ringbackCtxRef.current = null;
+      console.log('[WEBRTC SIGNALING] 🔇 Ringback tone stopped');
+    }
+  }, []);
+
   // Swipe-to-delete state
   const [swipedChatId, setSwipedChatId] = useState<string | null>(null);
 
@@ -431,9 +514,40 @@ export default function PhoneSimulator({
     }
   }, [externalCallTrigger, onClearExternalCallTrigger]);
 
-  // Realtime subscription for incoming calls from other users
+  // Realtime subscription for incoming messages — update unreadCount badge
+  const chatsRef = useRef(chats);
+  chatsRef.current = chats;
+
   useEffect(() => {
     if (!user) return;
+    const channel = supabase
+      .channel(`messages-unread-${user.id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+      }, (payload: any) => {
+        const msg = payload.new;
+        if (!msg || msg.sender_id === user.id) return;
+        const isCurrentChat = currentScreen === "chat_room" && selectedChatId === msg.chat_id;
+        if (isCurrentChat) return;
+        setChats(prev => prev.map(c =>
+          c.id === msg.chat_id ? { ...c, unreadCount: c.unreadCount + 1, lastMessage: msg.text || c.lastMessage } : c
+        ));
+      })
+      .subscribe((status) => {
+        console.log('[UNREAD] 📡 Messages unread subscription:', status);
+      });
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, currentScreen, selectedChatId]);
+
+  // Realtime subscription for incoming calls from other users
+  const activeCallRef = useRef<ActiveCall | null>(null);
+  activeCallRef.current = activeCall;
+
+  useEffect(() => {
+    if (!user) return;
+    console.log('[WEBRTC SIGNALING] 📡 Subscribing to Supabase Realtime calls for user:', user.id);
     const channel = supabase
       .channel(`calls-realtime-${user.id}`)
       .on('postgres_changes', {
@@ -443,8 +557,15 @@ export default function PhoneSimulator({
         filter: `callee_id=eq.${user.id}`,
       }, async (payload: any) => {
         const call = payload.new;
-        if (call.status !== 'ongoing') return;
-        if (activeCall) return;
+        console.log('[WEBRTC SIGNALING] 📩 Realtime INSERT received:', JSON.stringify({ id: call.id, status: call.status, caller_id: call.caller_id, callee_id: call.callee_id, type: call.type }));
+        if (call.status !== 'ringing') {
+          console.log('[WEBRTC SIGNALING] ❌ Ignoring call with status:', call.status);
+          return;
+        }
+        if (activeCallRef.current) {
+          console.log('[WEBRTC SIGNALING] ❌ Already in a call, ignoring incoming call');
+          return;
+        }
         let callerName = "Desconocido";
         let callerAvatar = "";
         try {
@@ -458,6 +579,9 @@ export default function PhoneSimulator({
             callerAvatar = data.avatar || data.avatar_url || "";
           }
         } catch {}
+        if (activeCallRef.current) return;
+        console.log('[WEBRTC SIGNALING] ✅ Setting activeCall from Realtime — caller:', callerName, 'status: incoming');
+        playIncomingRingtone();
         setActiveCall({
           id: call.id,
           contactName: callerName,
@@ -471,9 +595,14 @@ export default function PhoneSimulator({
           targetUserId: call.caller_id,
         });
       })
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[WEBRTC SIGNALING] 📡 Realtime subscription status:', status);
+      });
     return () => { supabase.removeChannel(channel); };
-  }, [user?.id, activeCall]);
+  }, [user?.id]);
+
+  // ─── CALLER: Listen for call status UPDATE (callee accepted the call) ───
+  // Replaced by onCalleeReady broadcast signal in webrtc.ts — no DB dependency needed.
 
   useEffect(() => {
     if (!user) return;
@@ -481,7 +610,10 @@ export default function PhoneSimulator({
       const detail = (e as CustomEvent).detail;
       const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
       const chatId = d?.chatId || d?.roomId || '';
-      if (chatId && d?.callerId && !activeCall) {
+      console.log('[WEBRTC SIGNALING] 📱 FCM incoming-call event received:', JSON.stringify(d));
+      if (chatId && d?.callerId && !activeCallRef.current) {
+        console.log('[WEBRTC SIGNALING] ✅ Setting activeCall from FCM — caller:', d.callerName, 'status: incoming');
+        playIncomingRingtone();
         setActiveCall({
           id: d.callId || ('call_' + Date.now()),
           contactName: d.callerName || 'Llamada entrante',
@@ -494,6 +626,8 @@ export default function PhoneSimulator({
           isGroup: false,
           targetUserId: d.callerId,
         });
+      } else {
+        console.log('[WEBRTC SIGNALING] ❌ FCM incoming-call ignored:', { chatId, callerId: d?.callerId, hasActiveCall: !!activeCallRef.current });
       }
     };
     const handleOpenChat = (e: Event) => {
@@ -535,7 +669,7 @@ export default function PhoneSimulator({
       window.removeEventListener('open-chat', handleOpenChat);
       window.removeEventListener('new-message-received', handleNewMessage);
     };
-  }, [user?.id, activeCall, selectedChatId, currentScreen]);
+  }, [user?.id, selectedChatId, currentScreen]);
 
   useEffect(() => {
     if (externalMessageTrigger) {
@@ -587,15 +721,18 @@ export default function PhoneSimulator({
   };
 
   const cleanupCall = useCallback(() => {
+    stopRingbackTone();
+    stopIncomingRingtone();
     webrtcRef.current?.cleanup();
     webrtcRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
     setActiveCall(null);
-  }, []);
+  }, [stopRingbackTone, stopIncomingRingtone]);
 
   const handleTriggerCallFromChat = async (type: "audio" | "video") => {
     if (!activeChat || !user) return;
+    console.log('[WEBRTC SIGNALING] 📞 Starting outgoing call to:', activeChat.name, 'type:', type);
 
     const partnerId = activeChat.partnerUserId || "";
 
@@ -603,6 +740,7 @@ export default function PhoneSimulator({
     let callId = "call_" + Date.now();
     if (partnerId) {
       try {
+        console.log('[WEBRTC SIGNALING] 📞 Inserting call into DB...');
         const dbCall = await apiStartCall({
           caller_id: user.id,
           callee_id: partnerId,
@@ -610,7 +748,8 @@ export default function PhoneSimulator({
           chat_id: activeChat.id,
         });
         if (dbCall?.id) callId = dbCall.id;
-      } catch (e) { console.warn('[Call] apiStartCall error:', e); }
+        console.log('[WEBRTC SIGNALING] ✅ Call inserted, id:', callId);
+      } catch (e) { console.warn('[WEBRTC SIGNALING] apiStartCall error:', e); }
     }
 
     try {
@@ -618,24 +757,44 @@ export default function PhoneSimulator({
       webrtcRef.current = webrtc;
 
       webrtc.onRemoteStream = (stream) => {
+        console.log('[WEBRTC CRÍTICO] 🎉 Emisor recibió remote stream — LLAMADA CONECTADA');
         setRemoteStream(stream);
         setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
+        stopRingbackTone();
       };
 
       webrtc.onConnectionStateChange = (state) => {
-        console.debug("[Call] ICE state:", state);
+        console.log('[WEBRTC SIGNALING] 🔗 ICE state:', state);
       };
 
       webrtc.onCallEnded = () => {
+        console.log('[WEBRTC SIGNALING] 📞 Call ended');
+        stopRingbackTone();
         cleanupCall();
       };
 
+      webrtc.onCalleeReady = async () => {
+        console.log('[WEBRTC SIGNALING] ✅ Callee is ready — re-sending offer');
+        stopRingbackTone();
+        try {
+          await webrtc.resendOffer();
+          console.log('[WEBRTC SIGNALING] ✅ Offer re-sent after callee-ready');
+        } catch (e) {
+          console.error('[WEBRTC SIGNALING] ❌ Failed to re-send offer:', e);
+        }
+      };
+
+      console.log('[WEBRTC SIGNALING] 📞 Getting local stream...');
       const local = await webrtc.startLocalStream(true, type === "video");
       setLocalStream(local);
 
+      console.log('[WEBRTC SIGNALING] 📞 Creating peer connection...');
       await webrtc.createPeerConnection();
+      console.log('[WEBRTC SIGNALING] 📞 Subscribing to signals...');
       await webrtc.subscribeToSignals();
+      console.log('[WEBRTC SIGNALING] 📞 Creating offer...');
       await webrtc.createOffer();
+      console.log('[WEBRTC SIGNALING] ✅ Offer sent — waiting for answer');
 
       setActiveCall({
         id: callId,
@@ -650,8 +809,12 @@ export default function PhoneSimulator({
         targetUserId: partnerId
       });
 
+      // Play ringback tone for outgoing call
+      playRingbackTone();
+
       // Send FCM push with the stable callId
       if (partnerId) {
+        console.log('[WEBRTC SIGNALING] 📞 Sending FCM push to:', partnerId);
         sendFcmPush(partnerId, profile?.name || 'RED ON', 'Llamada entrante...', {
           type: 'call', chatId: activeChat.id, callerId: user.id,
           callerName: profile?.name || 'RED ON', callType: type, callId: callId,
@@ -661,12 +824,14 @@ export default function PhoneSimulator({
       // ICE connection timeout: auto-cleanup after 30s
       setTimeout(() => {
         if (webrtcRef.current && activeCall?.status === "outgoing") {
-          console.warn("[Call] ICE timeout — no connection after 30s");
+          console.warn('[WEBRTC SIGNALING] ⏰ ICE timeout — no connection after 30s');
+          stopRingbackTone();
           cleanupCall();
         }
       }, 30000);
     } catch (err) {
-      console.error("[Call] Failed to start call:", err);
+      console.error('[WEBRTC SIGNALING] ❌ Failed to start call:', err);
+      stopRingbackTone();
       webrtcRef.current?.cleanup();
       webrtcRef.current = null;
       setLocalStream(null);
@@ -897,42 +1062,64 @@ export default function PhoneSimulator({
           localStream={localStream}
           remoteStream={remoteStream}
           onAccept={async () => {
-            // Incoming call accepted — set up WebRTC callee side
             if (!user) return;
             const callId = activeCall.id;
-            setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
+            const callType = activeCall.type;
+            console.log('[WEBRTC SIGNALING] ✅ Call accepted by receiver, callId:', callId);
+            stopIncomingRingtone();
+
             try {
+              // STEP 1: Set up WebRTC and subscribe to broadcast FIRST
               const webrtc = new WebRTCService(callId, user.id);
               webrtcRef.current = webrtc;
 
               webrtc.onRemoteStream = (stream) => {
+                console.log('[WEBRTC SIGNALING] 📹 Remote stream received on callee side — call CONNECTED');
                 setRemoteStream(stream);
+                setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
               };
 
               webrtc.onConnectionStateChange = (state) => {
-                console.debug("[Call] ICE state:", state);
+                console.log('[WEBRTC SIGNALING] 🔗 Callee ICE state:', state);
               };
 
               webrtc.onCallEnded = () => {
+                console.log('[WEBRTC SIGNALING] 📞 Call ended (callee)');
                 cleanupCall();
               };
 
-              const local = await webrtc.startLocalStream(true, activeCall.type === "video");
+              console.log('[WEBRTC SIGNALING] 📞 Callee getting local stream...');
+              const local = await webrtc.startLocalStream(true, callType === "video");
               setLocalStream(local);
 
+              console.log('[WEBRTC SIGNALING] 📞 Callee creating PeerConnection...');
               await webrtc.createPeerConnection();
+
+              console.log('[WEBRTC SIGNALING] 📞 Callee subscribing to signal channel...');
               await webrtc.subscribeToSignals();
+              console.log('[WEBRTC SIGNALING] ✅ Callee subscribed to broadcast channel — signaling ready');
+
+              // Signal the caller directly via broadcast (no DB update needed)
+              webrtc.signalCalleeReady()
+                .then(() => console.log('[WEBRTC SIGNALING] ✅ Callee-ready signal sent — caller will resend offer'))
+                .catch((e) => console.warn('[WEBRTC SIGNALING] ⚠️ Callee-ready signal failed:', e?.message));
+
+              // Set status to "connecting" — actual "connected" only when onRemoteStream fires
+              setActiveCall((prev) => prev ? { ...prev, status: "connecting" } : null);
             } catch (err) {
-              console.error("[Call] Failed to accept call:", err);
-              cleanupCall();
+              console.error('[WEBRTC SIGNALING] ❌ Failed to accept call:', err);
             }
           }}
           onDecline={() => {
+            console.log('[WEBRTC SIGNALING] ❌ Call declined');
+            stopIncomingRingtone();
             cleanupCall();
           }}
           onToggleMute={() => setActiveCall((prev) => (prev ? { ...prev, isMuted: !prev.isMuted } : null))}
           onToggleVideo={() => setActiveCall((prev) => (prev ? { ...prev, isVideoOff: !prev.isVideoOff } : null))}
           onEndCall={async () => {
+            console.log('[WEBRTC SIGNALING] 📞 Ending call');
+            stopRingbackTone();
             await webrtcRef.current?.endCall();
             cleanupCall();
           }}
@@ -1331,7 +1518,7 @@ export default function PhoneSimulator({
                               }
                               setSelectedChatId(chat.id);
                               setCurrentScreen("chat_room");
-                              chat.unreadCount = 0;
+                              setChats(prev => prev.map(c => c.id === chat.id ? { ...c, unreadCount: 0 } : c));
                             }}
                             onTouchStart={onTouchStart}
                             onTouchMove={onTouchMove}
@@ -1398,8 +1585,8 @@ export default function PhoneSimulator({
                                 <p className="text-[11px] text-slate-500 truncate max-w-[180px]">{chat.lastMessage}</p>
                                 
                                 {chat.unreadCount > 0 ? (
-                                  <span className="w-4 h-4 rounded-full bg-rose-500 text-white text-[8px] font-bold flex items-center justify-center shrink-0 shadow-sm animate-pulse-subtle">
-                                    {chat.unreadCount}
+                                  <span className="bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center shadow-sm shrink-0">
+                                    {chat.unreadCount > 99 ? "99+" : chat.unreadCount}
                                   </span>
                                 ) : (
                                   <CheckCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
@@ -2322,6 +2509,7 @@ export default function PhoneSimulator({
                 currentScreen={currentScreen}
                 setCurrentScreen={setCurrentScreen}
                 isEditingMedia={isEditingMedia}
+                totalUnread={chats.reduce((sum, c) => sum + c.unreadCount, 0)}
               />
 
             </div>

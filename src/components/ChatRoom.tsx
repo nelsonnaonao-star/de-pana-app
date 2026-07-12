@@ -10,6 +10,7 @@ import { Chat, Message } from "../types";
 import GifPicker from "./GifPicker";
 import MessageBubble from "./chat/MessageBubble";
 import ChatCustomizer from "./chat/ChatCustomizer";
+import ChatPatternBackground from "./chat/ChatPatternBackground";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, clearMessages } from "../services/messages";
 import { supabase } from "../lib/supabase";
@@ -494,7 +495,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       id: tempId,
       sender: "me",
       timestamp,
-      type: "image",
+      type: type === "sticker" ? "sticker" : "image",
       mediaUrl: url,
       fileName: type === "gif" ? "GIF.gif" : "Sticker.png",
       status: "sent"
@@ -512,7 +513,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       } else {
         const saved = await apiSendMessage({
           chat_id: chat.id,
-          type: "image",
+          type: type === "sticker" ? "sticker" : "image",
           sender_id: uid,
           sticker_url: type === "sticker" ? url : undefined,
           gif_url: type === "gif" ? url : undefined,
@@ -535,21 +536,25 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
-      const blob = new Blob([file], { type: file.type });
+      const tempId = "msg_" + Date.now();
+      const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const sendingMsg: Message = {
+        id: tempId,
+        sender: "me",
+        timestamp,
+        type,
+        mediaUrl: URL.createObjectURL(new Blob([await file.arrayBuffer()], { type: file.type })),
+        fileName: file.name,
+        fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
+        status: "sending",
+      };
+      setMessages(prev => [...prev, sendingMsg]);
+      onSendMessage(sendingMsg);
+
       try {
+        const blob = new Blob([file], { type: file.type });
         const url = await uploadChatMedia(blob, "files");
-        const tempId = "msg_" + Date.now();
-        const newMsg: Message = {
-          id: tempId,
-          sender: "me",
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          type,
-          mediaUrl: url,
-          fileName: file.name,
-          fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
-        };
-        setMessages(prev => [...prev, newMsg]);
-        onSendMessage(newMsg);
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
 
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
         if (!isLocalChat) {
@@ -572,10 +577,13 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
             payload.text = file.name;
           }
           const saved = await apiSendMessage(payload);
-          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m));
+        } else {
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sent" } : m));
         }
       } catch (err) {
         console.error("[CHAT] File upload error:", err);
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sent" } : m));
       }
     };
     input.click();
@@ -742,28 +750,50 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
 
   const bgPreset = CHAT_BACKGROUNDS.find(bg => bg.id === selectedBgId);
   const rawBg = bgPreset?.value || "#f8fafc";
+  const isPatternBg = rawBg.startsWith("pattern:");
+  const isGradientBg = rawBg.startsWith("linear-gradient");
   const isImageBg = rawBg.startsWith("url");
-  const containerBgStyle: React.CSSProperties = isImageBg
-    ? {
-        backgroundImage: rawBg.replace(/ center\/cover no-repeat$/, ''),
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        backgroundRepeat: "no-repeat",
-      }
-    : { backgroundColor: rawBg };
+
+  const patternParts = isPatternBg ? rawBg.replace("pattern:", "").split("|") : [];
+  const patternTheme = (patternParts[0] || "stars") as "stars" | "bubbles" | "dots" | "constellation" | "waves" | "sparkle";
+  const patternFrom = patternParts[1] || "blue";
+  const patternTo = patternParts[2] || "purple";
+
+  const containerBgStyle: React.CSSProperties = isPatternBg
+    ? { background: "transparent" }
+    : isGradientBg
+      ? { backgroundImage: rawBg }
+      : isImageBg
+        ? {
+            backgroundImage: rawBg.replace(/ center\/cover no-repeat$/, ''),
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            backgroundRepeat: "no-repeat",
+          }
+        : { backgroundColor: rawBg };
 
   return (
     <div 
       className="flex-1 flex flex-col h-full overflow-hidden relative"
       style={containerBgStyle}
     >
-      {/* Subtle dark overlay for darker backgrounds to ensure text remains highly readable across the whole chat screen */}
-      {selectedBgId !== "default" && selectedBgId !== "minimal_white" && selectedBgId !== "olive" && selectedBgId !== "pink" && (
+      {/* SVG Pattern Background */}
+      {isPatternBg && (
+        <ChatPatternBackground
+          theme={patternTheme}
+          gradientFrom={patternFrom}
+          gradientTo={patternTo}
+          strokeOpacity={0.3}
+          className="pointer-events-none"
+        />
+      )}
+      {/* Subtle dark overlay only for dark Unsplash backgrounds */}
+      {!isPatternBg && !isGradientBg && selectedBgId !== "default" && selectedBgId !== "minimal_white" && selectedBgId !== "olive" && selectedBgId !== "pink" && (
         <div className="absolute inset-0 bg-black/15 pointer-events-none z-0"></div>
       )}
 
       {/* HEADER BAR */}
-      <div className="relative text-white px-4 pt-5 pb-9 shrink-0 z-10 bg-[#0a4d52]">
+      <div className="relative text-white px-4 pt-5 pb-9 shrink-0 z-40 bg-[#0a4d52]">
         {/* SVG Waves Background */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
         <svg

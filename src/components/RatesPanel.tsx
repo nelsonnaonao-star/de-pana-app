@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { apiUrl } from "../lib/api";
 import { 
   TrendingUp, Calculator, DollarSign, Euro, 
-  ShieldAlert, Check, RefreshCw
+  ShieldCheck, Check, RefreshCw
 } from "lucide-react";
 
 interface RateItem {
@@ -10,32 +9,26 @@ interface RateItem {
   name: string;
   symbol: string;
   value: number;
-  change: string;
-  isUp: boolean;
   source: string;
-  time: string;
+  date: string;
 }
 
 const FALLBACK_RATES: RateItem[] = [
   {
     id: "usd_bcv",
-    name: "Dólar BCV (Oficial)",
+    name: "Dólar BCV",
     symbol: "$",
-    value: 709.69,
-    change: "+0.00%",
-    isUp: true,
+    value: 721.35,
     source: "Banco Central de Venezuela",
-    time: "Cargando...",
+    date: "Cargando...",
   },
   {
     id: "eur_bcv",
-    name: "Euro BCV (Oficial)",
+    name: "Euro BCV",
     symbol: "€",
-    value: 811.45,
-    change: "+0.00%",
-    isUp: true,
+    value: 823.94,
     source: "Banco Central de Venezuela",
-    time: "Cargando...",
+    date: "Cargando...",
   },
 ];
 
@@ -43,100 +36,98 @@ export default function RatesPanel() {
   const [rates, setRates] = useState<RateItem[]>(FALLBACK_RATES);
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [timeAgo, setTimeAgo] = useState<string>("");
+  const [error, setError] = useState<string>("");
 
   const [amount, setAmount] = useState<string>("");
   const [selectedRateId, setSelectedRateId] = useState<string>("usd_bcv");
 
-  const activeRate = rates.find(r => r.id === selectedRateId) || rates[0] || null;
+  const activeRate = rates.find(r => r.id === selectedRateId) || rates[0];
 
-  // Calculations
   const numAmount = Number(amount) || 0;
   const rateValue = activeRate?.value || 0;
   const result = numAmount * rateValue;
 
+  function getTimeAgo(isoString: string): string {
+    if (!isoString) return "";
+    const diff = Date.now() - new Date(isoString).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "ahora mismo";
+    if (mins < 60) return `hace ${mins} min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `hace ${hours}h`;
+    const days = Math.floor(hours / 24);
+    return `hace ${days}d`;
+  }
+
   async function fetchRates() {
     setLoading(true);
+    setError("");
+    const serverUrl = import.meta.env.VITE_SERVER_URL;
+    const apiUrl = serverUrl
+      ? `${serverUrl}/api/rates/dollar`
+      : "https://bcv.today/api/v1/rate.json";
+
     try {
-      const res = await fetch(apiUrl("/api/rates/dollar"));
-      if (res.ok) {
-        const data = await res.json();
-        const newRates: RateItem[] = [];
+      const res = await fetch(apiUrl, {
+        cache: "no-cache",
+        signal: AbortSignal.timeout(15000),
+      });
 
-        // BCV official rates (primary)
-        if (data.bcv) {
-          newRates.push({
-            id: "usd_bcv",
-            name: data.bcv.usd.name,
-            symbol: data.bcv.usd.symbol,
-            value: data.bcv.usd.value,
-            change: data.bcv.usd.change,
-            isUp: data.bcv.usd.isUp,
-            source: data.bcv.usd.source,
-            time: data.bcv.usd.time,
-          });
-          newRates.push({
-            id: "eur_bcv",
-            name: data.bcv.eur.name,
-            symbol: data.bcv.eur.symbol,
-            value: data.bcv.eur.value,
-            change: data.bcv.eur.change,
-            isUp: data.bcv.eur.isUp,
-            source: data.bcv.eur.source,
-            time: data.bcv.eur.time,
-          });
-        } else {
-          // Fallback to top-level usd/eur if BCV not available
-          newRates.push({
-            id: "usd_bcv",
-            name: data.usd.name,
-            symbol: data.usd.symbol,
-            value: data.usd.value,
-            change: data.usd.change,
-            isUp: data.usd.isUp,
-            source: data.usd.source,
-            time: data.usd.time,
-          });
-          newRates.push({
-            id: "eur_bcv",
-            name: data.eur.name,
-            symbol: data.eur.symbol,
-            value: data.eur.value,
-            change: data.eur.change,
-            isUp: data.eur.isUp,
-            source: data.eur.source,
-            time: data.eur.time,
-          });
-        }
+      if (!res.ok) throw new Error(`API error ${res.status}`);
 
-        // Paralelo rates (secondary)
-        if (data.paralelo) {
-          newRates.push({
-            id: "usd_paralelo",
-            name: data.paralelo.usd.name,
-            symbol: data.paralelo.usd.symbol,
-            value: data.paralelo.usd.value,
-            change: data.paralelo.usd.change,
-            isUp: data.paralelo.usd.isUp,
-            source: data.paralelo.usd.source,
-            time: data.paralelo.usd.time,
-          });
-          newRates.push({
-            id: "eur_paralelo",
-            name: data.paralelo.eur.name,
-            symbol: data.paralelo.eur.symbol,
-            value: data.paralelo.eur.value,
-            change: data.paralelo.eur.change,
-            isUp: data.paralelo.eur.isUp,
-            source: data.paralelo.eur.source,
-            time: data.paralelo.eur.time,
-          });
-        }
+      const data = await res.json();
+      const newRates: RateItem[] = [];
 
+      // Server format: { usd: { name, symbol, value, source, time }, eur: {...}, dataSource }
+      // Fallback format (bcv.today): { USD: number, EUR: number, effective_date: string }
+      if (data.usd && data.usd.value) {
+        newRates.push({
+          id: "usd_bcv",
+          name: data.usd.name || "Dólar BCV",
+          symbol: "$",
+          value: data.usd.value,
+          source: data.usd.source || "Banco Central de Venezuela",
+          date: data.usd.time || data.updatedAt || "",
+        });
+      } else if (data.USD) {
+        newRates.push({
+          id: "usd_bcv",
+          name: "Dólar BCV",
+          symbol: "$",
+          value: data.USD,
+          source: "Banco Central de Venezuela",
+          date: data.effective_date || data.date || "",
+        });
+      }
+
+      if (data.eur && data.eur.value) {
+        newRates.push({
+          id: "eur_bcv",
+          name: data.eur.name || "Euro BCV",
+          symbol: "€",
+          value: data.eur.value,
+          source: data.eur.source || "Banco Central de Venezuela",
+          date: data.eur.time || data.updatedAt || "",
+        });
+      } else if (data.EUR) {
+        newRates.push({
+          id: "eur_bcv",
+          name: "Euro BCV",
+          symbol: "€",
+          value: data.EUR,
+          source: "Banco Central de Venezuela",
+          date: data.effective_date || data.date || "",
+        });
+      }
+
+      if (newRates.length > 0) {
         setRates(newRates);
-        setLastUpdated(data.updatedAt);
+        setLastUpdated(new Date().toISOString());
       }
     } catch (e) {
-      console.warn("Failed to fetch rates:", e);
+      console.warn("Failed to fetch BCV rates:", e);
+      setError("No se pudieron cargar las tasas del BCV");
     } finally {
       setLoading(false);
     }
@@ -144,9 +135,30 @@ export default function RatesPanel() {
 
   useEffect(() => {
     fetchRates();
+
     const interval = setInterval(fetchRates, 5 * 60 * 1000);
-    return () => clearInterval(interval);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        fetchRates();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!lastUpdated) return;
+    setTimeAgo(getTimeAgo(lastUpdated));
+    const timer = setInterval(() => setTimeAgo(getTimeAgo(lastUpdated)), 30000);
+    return () => clearInterval(timer);
+  }, [lastUpdated]);
+
+  const rateDate = activeRate?.date || "";
 
   return (
     <div className="flex-1 bg-[#f1f5f9] flex flex-col h-full overflow-hidden select-none">
@@ -158,11 +170,12 @@ export default function RatesPanel() {
             <div className="w-5 h-5 rounded-lg bg-teal-400/20 flex items-center justify-center">
               <TrendingUp className="w-3 h-3 text-teal-300" />
             </div>
-            <h3 className="text-xs font-black tracking-tight">Tasas y Calculadora</h3>
+            <h3 className="text-xs font-black tracking-tight">Tasas BCV Oficiales</h3>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="text-[7px] bg-teal-500/20 text-teal-200 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border border-teal-400/20">
-              {rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV")) ? "BCV" : "Paralelo"}
+            <span className="text-[7px] bg-emerald-500/20 text-emerald-200 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border border-emerald-400/20 flex items-center gap-0.5">
+              <ShieldCheck className="w-2.5 h-2.5" />
+              BCV Oficial
             </span>
             <button
               onClick={fetchRates}
@@ -176,20 +189,34 @@ export default function RatesPanel() {
         </div>
         <div className="flex items-center justify-between mt-1">
           <p className="text-[7px] text-teal-100/70 font-mono">
-            {rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV"))
-              ? "BCV — tasa oficial del Banco Central de Venezuela"
-              : "Mercado Paralelo — tasa en tiempo real"}
+            Fuente: Banco Central de Venezuela — {rateDate}
           </p>
           {lastUpdated && (
-            <span className="text-[6px] text-teal-300/40 font-mono">
-              {new Date(lastUpdated).toLocaleTimeString("es-VE", { hour: "2-digit", minute: "2-digit" })}
-            </span>
+            <div className="flex items-center gap-1">
+              <span className={`w-1.5 h-1.5 rounded-full ${
+                Date.now() - new Date(lastUpdated).getTime() < 5 * 60000
+                  ? "bg-emerald-400 animate-pulse"
+                  : Date.now() - new Date(lastUpdated).getTime() < 15 * 60000
+                    ? "bg-amber-400"
+                    : "bg-red-400"
+              }`} />
+              <span className="text-[6px] text-teal-300/40 font-mono">
+                {timeAgo || ""}
+              </span>
+            </div>
           )}
         </div>
       </div>
 
       {/* BODY */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 text-left">
+
+        {/* ERROR */}
+        {error && (
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-2.5 text-center">
+            <p className="text-[8px] font-bold text-rose-600">{error}</p>
+          </div>
+        )}
 
         {/* RATE SELECTOR */}
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-3 space-y-2 border border-white/60">
@@ -241,13 +268,6 @@ export default function RatesPanel() {
                     }`}>
                       {rate.value.toFixed(2)} Bs.
                     </span>
-                    <span className={`text-[6px] font-mono font-bold px-1 rounded ${
-                      isSelected
-                        ? "bg-white/15 text-white/80"
-                        : rate.isUp ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
-                    }`}>
-                      {rate.change}
-                    </span>
                   </div>
                   <div className={`text-[5px] font-mono mt-0.5 ${
                     isSelected ? "text-white/50" : "text-slate-400"
@@ -260,19 +280,12 @@ export default function RatesPanel() {
           </div>
 
           {/* Source indicator */}
-          {rates.some(r => r.id.includes("paralelo")) && (
-            <div className="flex items-center justify-center gap-1 pt-1">
-              <span className={`w-1.5 h-1.5 rounded-full ${
-                rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV"))
-                  ? "bg-teal-500" : "bg-amber-500"
-              }`} />
-              <span className="text-[7px] text-slate-400 font-mono">
-                {rates.some(r => r.id === "usd_bcv" && r.source?.includes("BCV"))
-                  ? "Tasa BCV oficial — Fuente: Banco Central de Venezuela"
-                  : "Tasa del mercado paralelo"}
-              </span>
-            </div>
-          )}
+          <div className="flex items-center justify-center gap-1 pt-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="text-[7px] text-slate-400 font-mono">
+              Tasa oficial BCV — Fuente: Banco Central de Venezuela
+            </span>
+          </div>
         </div>
 
         {/* CALCULATOR */}
@@ -284,7 +297,7 @@ export default function RatesPanel() {
                 Monto en {activeRate?.symbol || "$"}
               </span>
               <span className="text-[7px] font-mono text-teal-300/50">
-                Tasa: {(rateValue).toFixed(2)} Bs.
+                Tasa: {rateValue.toFixed(4)} Bs.
               </span>
             </div>
             <div className="flex items-baseline gap-1">
@@ -324,9 +337,9 @@ export default function RatesPanel() {
 
         {/* Disclaimer */}
         <div className="bg-slate-50/80 rounded-2xl p-2.5 border border-slate-200/30 flex gap-2 items-start">
-          <ShieldAlert className="w-3 h-3 text-teal-600 shrink-0 mt-0.5" />
+          <ShieldCheck className="w-3 h-3 text-emerald-600 shrink-0 mt-0.5" />
           <p className="text-[7px] text-slate-500 leading-relaxed font-medium">
-            Tasas del mercado venezolano actualizadas periódicamente. Usa la calculadora para convertir entre divisas y bolívares.
+            Tasas oficiales del Banco Central de Venezuela (BCV). Solo tasas oficiales, sin mercado paralelo.
           </p>
         </div>
 

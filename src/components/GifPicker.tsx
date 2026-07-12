@@ -99,6 +99,7 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<GiphyResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const searchTimer = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -114,11 +115,18 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
       loadContent();
       return;
     }
+    setError(null);
     setLoading(true);
     searchTimer.current = window.setTimeout(async () => {
-      const fn = tab === "gif" ? searchGifs : searchStickers;
-      const results = await fn(query).catch(() => []);
-      setItems(results);
+      try {
+        const fn = tab === "gif" ? searchGifs : searchStickers;
+        const results = await fn(query);
+        setItems(results);
+        setError(null);
+      } catch {
+        setItems([]);
+        setError("Error al buscar. Intenta de nuevo.");
+      }
       setLoading(false);
       gridRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     }, 400);
@@ -129,9 +137,16 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
 
   async function loadContent() {
     setLoading(true);
-    const fn = tab === "gif" ? getTrendingGifs : getTrendingStickers;
-    const results = await fn(30).catch(() => []);
-    setItems(results);
+    setError(null);
+    try {
+      const fn = tab === "gif" ? getTrendingGifs : getTrendingStickers;
+      const results = await fn(30);
+      setItems(results);
+      setError(null);
+    } catch {
+      setItems([]);
+      setError("No se pudieron cargar los GIFs. Verifica tu conexión.");
+    }
     setLoading(false);
   }
 
@@ -289,12 +304,14 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
             <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center">
               <TrendingUp className="w-5 h-5 text-slate-300" />
             </div>
-            <p className="text-[10px] text-slate-400 font-medium">Sin resultados</p>
+            <p className="text-[10px] text-slate-400 font-medium">
+              {error || "Sin resultados"}
+            </p>
             <button
               onClick={() => { setQuery(""); loadContent(); }}
               className="text-[9px] text-teal-600 font-bold hover:underline cursor-pointer"
             >
-              Ver tendencias
+              {error ? "Reintentar" : "Ver tendencias"}
             </button>
           </div>
         )}

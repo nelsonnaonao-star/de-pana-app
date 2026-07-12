@@ -99,3 +99,44 @@ body {
   background: #4b5563;
 }
 
+/* Audio message player range slider */
+input[type="range"].audio-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 9999px;
+  outline: none;
+}
+
+input[type="range"].audio-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.06);
+  cursor: pointer;
+  margin-top: -5px;
+  transition: transform 0.15s ease;
+}
+
+input[type="range"].audio-slider::-webkit-slider-thumb:active {
+  transform: scale(1.2);
+}
+
+input[type="range"].audio-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.25), 0 0 0 1px rgba(0,0,0,0.06);
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+input[type="range"].audio-slider::-moz-range-thumb:active {
+  transform: scale(1.2);
+}
+

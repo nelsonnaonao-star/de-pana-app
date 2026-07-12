@@ -4,7 +4,7 @@ export type Call = {
   id: string;
   caller_id: string;
   callee_id: string;
-  status: "missed" | "ended" | "ongoing";
+  status: "ringing" | "missed" | "ended" | "ongoing" | "accepted";
   type: "audio" | "video";
   call_type?: "audio" | "video";
   started_at: string;
@@ -43,7 +43,7 @@ export async function startCall(call: Partial<Call>): Promise<Call> {
     .insert({
       caller_id: call.caller_id,
       callee_id: call.callee_id,
-      status: "ongoing",
+      status: "ringing",
       type: call.type || "audio",
       call_type: call.type || "audio",
       started_at: new Date().toISOString(),
@@ -55,6 +55,14 @@ export async function startCall(call: Partial<Call>): Promise<Call> {
 
   if (error) throw error;
   return data as Call;
+}
+
+export async function updateCallStatus(callId: string, status: "ringing" | "ongoing" | "accepted" | "ended" | "missed") {
+  const { error } = await supabase
+    .from("calls")
+    .update({ status })
+    .eq("id", callId);
+  if (error) throw error;
 }
 
 export async function endCall(callId: string) {

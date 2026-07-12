@@ -3,7 +3,7 @@ export interface Message {
   sender: "me" | "other";
   text?: string;
   timestamp: string;
-  type: "text" | "image" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
+  type: "text" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   mediaUrl?: string;
   fileName?: string;
   fileSize?: string;
@@ -14,7 +14,7 @@ export interface Message {
   latitude?: number;
   longitude?: number;
   locationName?: string;
-  status?: "sent" | "delivered" | "read";
+  status?: "sending" | "sent" | "delivered" | "read";
   forwarded?: boolean;
   replyToId?: string;
   replyToText?: string;
@@ -39,7 +39,7 @@ export interface ActiveCall {
   contactName: string;
   contactAvatar: string;
   type: "audio" | "video";
-  status: "incoming" | "outgoing" | "connected" | "disconnected";
+  status: "incoming" | "outgoing" | "connecting" | "connected" | "disconnected";
   durationSeconds: number;
   isMuted: boolean;
   isVideoOff: boolean;

@@ -1,7 +1,8 @@
-import React from "react";
-import { Mic, Play, Pause, VideoIcon, BarChart2, Forward, MapPin } from "lucide-react";
+import React, { useState } from "react";
+import { Mic, Play, Pause, VideoIcon, BarChart2, Forward, MapPin, Loader2 } from "lucide-react";
 import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
+import AudioMessagePlayer from "./AudioMessagePlayer";
 
 interface MessageBubbleProps {
   msg: Message;
@@ -19,6 +20,54 @@ interface MessageBubbleProps {
   bubbleColorThemId: string;
 }
 
+function ImageMessage({ msg, isMe, isSticker }: { msg: Message; isMe: boolean; isSticker: boolean }) {
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const isSending = msg.status === "sending";
+
+  return (
+    <div className="relative max-w-[85%] cursor-pointer" onClick={() => {}}>
+      {/* Skeleton placeholder while image loads */}
+      {!imgLoaded && (
+        <div className={`${isSticker ? "w-[140px] h-[140px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
+          <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
+        </div>
+      )}
+
+      <img
+        src={msg.mediaUrl}
+        alt={isSticker ? "Sticker" : "Image"}
+        onLoad={() => setImgLoaded(true)}
+        className={`${isSticker
+          ? "max-w-[160px] max-h-[160px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
+          : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
+        } ${!imgLoaded ? "hidden" : ""}`}
+      />
+
+      {/* Sending spinner overlay (emisor) */}
+      {isSending && imgLoaded && (
+        <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center pointer-events-none">
+          <div className="bg-white/90 rounded-full p-2">
+            <Loader2 className="w-5 h-5 text-[#0a4d52] animate-spin" />
+          </div>
+        </div>
+      )}
+
+      {/* Timestamp + checkmarks */}
+      <div className="absolute bottom-1 right-1 bg-black/50 text-white/90 text-[10px] px-1.5 py-0.5 rounded-full backdrop-blur-xs font-medium pointer-events-none flex items-center gap-1">
+        <span>{msg.timestamp}</span>
+        {isMe && (
+          <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
+            {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
+            {msg.status === "sent" && "✓"}
+            {msg.status === "delivered" && "✓✓"}
+            {msg.status === "read" && "✓✓"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
   isPlayingAudio, setIsPlayingAudio,
@@ -27,33 +76,14 @@ export default React.memo(function MessageBubble({
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
   const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
+  const isGlass = isMe ? bubbleColorMeId === "glass" : bubbleColorThemId === "glass";
 
   const isMediaType = msg.type === "sticker" || msg.type === "image";
   if (isMediaType) {
     const isSticker = msg.type === "sticker";
     return (
       <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
-        <div className="relative max-w-[85%] cursor-pointer" onClick={() => setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id)}>
-          <img
-            src={msg.mediaUrl}
-            alt={isSticker ? "Sticker" : "Image"}
-            className={isSticker
-              ? "max-w-[160px] max-h-[160px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
-              : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
-            }
-          />
-          <div className="absolute bottom-1 right-1 bg-black/50 text-white/90 text-[10px] px-1.5 py-0.5 rounded-full backdrop-blur-xs font-medium pointer-events-none flex items-center gap-1">
-            <span>{msg.timestamp}</span>
-            {isMe && (
-              <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
-                {msg.status === "sent" && "✓"}
-                {msg.status === "delivered" && "✓✓"}
-                {msg.status === "read" && "✓✓"}
-                {!msg.status && "✓"}
-              </span>
-            )}
-          </div>
-        </div>
+        <ImageMessage msg={msg} isMe={isMe} isSticker={isSticker} />
         {msg.reactions && Object.keys(msg.reactions).length > 0 && (
           <div className={`flex gap-1 mt-[-6px] z-10 ${isMe ? "mr-2" : "ml-2"}`}>
             {Object.entries(msg.reactions).map(([emo, count]) => (
@@ -88,17 +118,17 @@ export default React.memo(function MessageBubble({
       >
         {msg.forwarded && (
           <div className="flex items-center gap-1 mb-1">
-            <Forward className="w-3 h-3 text-slate-400" />
-            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Reenviado</span>
+            <Forward className={`w-3 h-3 ${isGlass ? "text-gray-500" : "text-slate-400"}`} />
+            <span className={`text-[9px] font-bold uppercase tracking-wider ${isGlass ? "text-gray-500" : "text-slate-400"}`}>Reenviado</span>
           </div>
         )}
         {msg.replyToId && (
           <div className={`mb-1.5 pl-2 border-l-2 ${isMe ? "border-teal-300" : "border-teal-500"} bg-black/5 dark:bg-white/5 rounded-r-md py-1 px-2`}>
-            <p className="text-[9px] font-bold opacity-70">{msg.replyToSender || "Desconocido"}</p>
-            <p className="text-[10px] opacity-60 truncate">{msg.replyToText}</p>
+            <p className={`text-[9px] font-bold opacity-70 ${isGlass ? "text-gray-700" : ""}`}>{msg.replyToSender || "Desconocido"}</p>
+            <p className={`text-[10px] opacity-60 truncate ${isGlass ? "text-gray-600" : ""}`}>{msg.replyToText}</p>
           </div>
         )}
-        {msg.type === "text" && <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>}
+        {msg.type === "text" && <p className={`leading-relaxed whitespace-pre-wrap ${isGlass ? "text-gray-900" : ""}`}>{msg.text}</p>}
 
         {msg.type === "video" && (
           <div className="space-y-1.5 w-44">
@@ -110,44 +140,39 @@ export default React.memo(function MessageBubble({
         )}
 
         {msg.type === "audio" && (
-          <div className="flex items-center gap-2.5 p-1 bg-black/5 dark:bg-white/5 rounded-xl min-w-[180px]">
+          <div className={`flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? "bg-black/5" : "bg-black/5 dark:bg-white/5"}`}>
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 setIsPlayingAudio(isPlayingAudio === msg.id ? null : msg.id);
               }}
-              className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white shrink-0 hover:bg-white/30"
+              className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                isGlass ? "bg-gray-800/10 text-gray-800 hover:bg-gray-800/20" : "bg-white/20 text-white hover:bg-white/30"
+              }`}
             >
               {isPlayingAudio === msg.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
             </button>
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-semibold truncate text-slate-100">{msg.fileName}</p>
-              <span className="text-[9px] opacity-70 block font-mono">{msg.fileSize} • {msg.duration}</span>
+              <p className={`text-[10px] font-semibold truncate ${isGlass ? "text-gray-800" : "text-slate-100"}`}>{msg.fileName}</p>
+              <span className={`text-[9px] opacity-70 block font-mono ${isGlass ? "text-gray-500" : ""}`}>{msg.fileSize} • {msg.duration}</span>
             </div>
           </div>
         )}
 
-        {msg.type === "voice_note" && (
-          <div
-            className="flex items-center gap-2 w-44 cursor-pointer active:scale-95 transition-transform"
-            onClick={() => {
-              if (msg.mediaUrl) {
-                const audio = new Audio(msg.mediaUrl);
-                audio.play();
-              }
-            }}
-          >
-            <Mic className="w-4 h-4 shrink-0" />
-            <div className="flex-1 flex items-center gap-1.5">
-              <div className="flex-1 h-3 flex items-center gap-0.5">
-                <span className="h-2 w-1 bg-white/40 rounded-full animate-pulse"></span>
-                <span className="h-3 w-1 bg-white/60 rounded-full"></span>
-                <span className="h-1.5 w-1 bg-white/40 rounded-full"></span>
-                <span className="h-2.5 w-1 bg-white/60 rounded-full"></span>
-                <span className="h-3 w-1 bg-white/65 rounded-full"></span>
-              </div>
-              <span className="text-[9px] font-mono whitespace-nowrap">{msg.duration || "0:12"}</span>
-            </div>
+        {msg.type === "voice_note" && msg.mediaUrl && (
+          <AudioMessagePlayer
+            audioUrl={msg.mediaUrl}
+            msgId={msg.id}
+            isMe={isMe}
+            isGlass={isGlass}
+            duration={msg.duration}
+          />
+        )}
+
+        {msg.type === "voice_note" && !msg.mediaUrl && (
+          <div className="flex items-center gap-2 w-44">
+            <Mic className={`w-4 h-4 shrink-0 ${isGlass ? "text-gray-500 opacity-60" : "opacity-50"}`} />
+            <span className={`text-[10px] ${isGlass ? "text-gray-500" : "opacity-50"}`}>Audio no disponible</span>
           </div>
         )}
 
@@ -170,7 +195,7 @@ export default React.memo(function MessageBubble({
               <div className="absolute inset-0 bg-gradient-to-tr from-teal-500/20 to-transparent"></div>
               <VideoIcon className="w-8 h-8 text-white/85 animate-pulse" />
             </div>
-            <span className="text-[9px] font-bold tracking-tight opacity-90">📹 Nota de Video ({msg.duration || "0:08"})</span>
+            <span className={`text-[9px] font-bold tracking-tight opacity-90 ${isGlass ? "text-gray-800" : ""}`}>📹 Nota de Video ({msg.duration || "0:08"})</span>
           </div>
         )}
 
@@ -228,11 +253,11 @@ export default React.memo(function MessageBubble({
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-1 mt-1 text-[8px] opacity-70">
+        <div className={`flex items-center justify-end gap-1 mt-1 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
           <span>{msg.timestamp}</span>
           {isMe && (
             <span className={`text-[10px] leading-none ${
-              msg.status === "read" ? "text-teal-400" : msg.status === "delivered" ? "text-slate-400" : "text-slate-400"
+              msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"
             }`}>
               {msg.status === "sent" && "✓"}
               {msg.status === "delivered" && "✓✓"}

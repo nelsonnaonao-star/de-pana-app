@@ -1,5 +1,6 @@
 package com.redon.app;
 
+import android.app.ActivityManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -13,6 +14,7 @@ import androidx.core.app.NotificationCompat;
 import com.capacitorjs.plugins.pushnotifications.PushNotificationsPlugin;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
+import java.util.List;
 
 public class CallFcmService extends FirebaseMessagingService {
 
@@ -34,15 +36,43 @@ public class CallFcmService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
-        Log.d(TAG, "Message received: " + message.getData());
+        Log.d(TAG, "onMessageReceived: " + message.getData());
 
         String type = message.getData().get("type");
 
-        if ("call".equals(type)) {
-            showCallNotification(message);
+        if (isAppInForeground()) {
+            // App is open: bridge to JS via Capacitor plugin.
+            // This fires 'pushNotificationReceived' event in JS,
+            // which pushCapacitor.ts handles to dispatch 'incoming-call' / 'new-message-received' CustomEvents.
+            // PhoneSimulator.tsx listens for those events and shows the call overlay / handles messages.
+            try {
+                PushNotificationsPlugin.sendRemoteMessage(message);
+                Log.d(TAG, "Bridged to Capacitor JS via PushNotificationsPlugin.onMessageReceived");
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to bridge to Capacitor JS", e);
+            }
         } else {
-            showMessageNotification(message);
+            // App is in background: show native notification
+            if ("call".equals(type)) {
+                showCallNotification(message);
+            } else {
+                showMessageNotification(message);
+            }
         }
+    }
+
+    private boolean isAppInForeground() {
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return false;
+        List<ActivityManager.RunningAppProcessInfo> processes = am.getRunningAppProcesses();
+        if (processes == null) return false;
+        for (ActivityManager.RunningAppProcessInfo p : processes) {
+            if (getPackageName().equals(p.processName)) {
+                return p.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                    || p.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE;
+            }
+        }
+        return false;
     }
 
     private void showCallNotification(RemoteMessage message) {
