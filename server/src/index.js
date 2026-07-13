@@ -208,6 +208,25 @@ async function main() {
   app.listen(PORT, () => {
     const url = process.env.APP_URL || `http://localhost:${PORT}`;
     console.log(`RED ON corriendo en ${url}`);
+
+    // ─── Self-ping keep-alive (anti-sleep para Render free tier) ──
+    const SERVER_URL = process.env.SERVER_URL;
+    if (SERVER_URL && isProduction) {
+      const pingUrl = `${SERVER_URL}/api/health`;
+      console.log(`[KEEP-ALIVE] Ping cada 14 min → ${pingUrl}`);
+      setInterval(async () => {
+        try {
+          const res = await fetch(pingUrl, { signal: AbortSignal.timeout(10000) });
+          console.log(`[KEEP-ALIVE] ${res.ok ? '✓' : '✗'} ${res.status}`);
+        } catch (err) {
+          console.error('[KEEP-ALIVE] Ping failed:', err.message);
+        }
+      }, 14 * 60 * 1000);
+    } else if (!isProduction) {
+      console.log('[KEEP-ALIVE] Deshabilitado (no es producción)');
+    } else {
+      console.warn('[KEEP-ALIVE] SERVER_URL no configurado, keep-alive deshabilitado');
+    }
   });
 }
 

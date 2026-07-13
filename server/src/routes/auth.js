@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../db.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { sendResetSMS } from '../smsService.js';
 
 const router = Router();
 
@@ -85,9 +86,11 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
       ? profile.phone_number.slice(0, -4).replace(/\d/g, '*') + profile.phone_number.slice(-4)
       : profile.phone_number;
 
-    // In production: integrate Twilio/SMS service here
-    // For now we log the code server-side only
-    console.log(`[SMS-RECOVERY] Code sent to ${maskedPhone}`);
+    try {
+      await sendResetSMS(profile.phone_number, code);
+    } catch (smsErr) {
+      console.error('[SMS-RECOVERY] SMS send failed, code logged for debug:', code, smsErr.message);
+    }
 
     res.json({
       message: 'Código enviado por SMS',
