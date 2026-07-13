@@ -111,8 +111,10 @@ async function main() {
   app.use('/api/media', uploadLimiter, authMiddleware, mediaRoutes);
 
   // ─── GIPHY proxy (hides API key from client) ───────────────────
-  const GIPHY_API_KEY = process.env.GIPHY_API_KEY || 'bd36d0j4ju5xmnkLKzGwe6X1wFTURLGB';
+  const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
+  if (!GIPHY_API_KEY) console.warn('[GIPHY] GIPHY_API_KEY no está configurada en variables de entorno');
   app.get('/api/giphy/:action', async (req, res) => {
+    if (!GIPHY_API_KEY) return res.status(503).json({ error: 'GIPHY no configurado' });
     try {
       const { action } = req.params;
       const { q, limit = 30, type = 'gifs' } = req.query;

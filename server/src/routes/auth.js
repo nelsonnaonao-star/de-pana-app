@@ -49,7 +49,7 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
     const { data: profiles, error } = await supabaseAdmin
       .from('profiles')
       .select('id, phone_number, username')
-      .ilike('phone_number', `%${cleanPhone}%`)
+      .eq('phone_digits', cleanPhone)
       .limit(1);
 
     if (error) {
@@ -243,11 +243,10 @@ router.post('/lookup-profile', profileLimiter, async (req, res) => {
       if (last7.length >= 4) {
         const { data: phoneProfiles } = await supabaseAdmin
           .from('profiles')
-          .select('id, username, email, name, phone_number, avatar, avatar_url');
-        profiles = (phoneProfiles || []).filter((p) => {
-          const phoneDigits = (p.phone_number || '').replace(/\D/g, '');
-          return phoneDigits.slice(-7) === last7;
-        });
+          .select('id, username, email, name, phone_number, avatar, avatar_url')
+          .like('phone_digits', `%${last7}`)
+          .limit(5);
+        profiles = phoneProfiles;
       }
     }
 

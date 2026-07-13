@@ -120,15 +120,23 @@ router.post('/lookup-profile', async (req, res) => {
       query = query.eq('username', sanitizeInput(username));
     } else if (phone) {
       const cleanPhone = phone.replace(/\D/g, '').trim();
-      const { data: allProfiles, error: allError } = await supabaseAdmin
+      const { data: match, error: matchError } = await supabaseAdmin
         .from('profiles')
-        .select('id, name, username, phone_number, avatar, avatar_url, bio');
-      if (allError) throw allError;
-      const match = (allProfiles || []).find((p) => {
-        const pd = (p.phone_number || '').replace(/\D/g, '');
-        return pd === cleanPhone || pd.slice(-7) === cleanPhone.slice(-7);
-      });
-      if (!match) return res.status(404).json({ error: 'Usuario no encontrado' });
+        .select('id, name, username, phone_number, avatar, avatar_url, bio')
+        .eq('phone_digits', cleanPhone)
+        .maybeSingle();
+      if (matchError) throw matchError;
+      if (!match) {
+        const last7 = cleanPhone.slice(-7);
+        const { data: match7 } = await supabaseAdmin
+          .from('profiles')
+          .select('id, name, username, phone_number, avatar, avatar_url, bio')
+          .like('phone_digits', `%${last7}`)
+          .limit(1)
+          .maybeSingle();
+        if (!match7) return res.status(404).json({ error: 'Usuario no encontrado' });
+        return res.json(match7);
+      }
       return res.json(match);
     }
 
@@ -149,25 +157,33 @@ router.post('/check-phone', async (req, res) => {
 
     const cleanPhone = phone.replace(/\D/g, '').trim();
 
-    const { data: allProfiles, error: allError } = await supabaseAdmin
+    const { data: match, error: matchError } = await supabaseAdmin
       .from('profiles')
-      .select('id, name, username, phone_number, avatar, avatar_url');
-    if (allError) throw allError;
+      .select('id, name, username, phone_number, avatar, avatar_url')
+      .eq('phone_digits', cleanPhone)
+      .maybeSingle();
+    if (matchError) throw matchError;
 
-    const match = (allProfiles || []).find((p) => {
-      const pd = (p.phone_number || '').replace(/\D/g, '');
-      return pd === cleanPhone || pd.slice(-10) === cleanPhone.slice(-10);
-    });
+    const found = match || await (async () => {
+      const last10 = cleanPhone.slice(-10);
+      const { data } = await supabaseAdmin
+        .from('profiles')
+        .select('id, name, username, phone_number, avatar, avatar_url')
+        .like('phone_digits', `%${last10}`)
+        .limit(1)
+        .maybeSingle();
+      return data;
+    })();
 
-    if (!match) return res.json({ exists: false });
+    if (!found) return res.json({ exists: false });
 
     res.json({
       exists: true,
       profile: {
-        id: match.id,
-        name: match.name,
-        username: match.username,
-        avatar_url: match.avatar || match.avatar_url || '',
+        id: found.id,
+        name: found.name,
+        username: found.username,
+        avatar_url: found.avatar || found.avatar_url || '',
       },
     });
   } catch (err) {

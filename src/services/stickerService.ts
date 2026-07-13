@@ -1,4 +1,4 @@
-const GIPHY_API_KEY = "bd36d0j4ju5xmnkLKzGwe6X1wFTURLGB";
+import { apiUrl } from "../lib/api";
 
 export interface GiphyResult {
   id: string;
@@ -15,12 +15,11 @@ type Endpoint = "gifs" | "stickers";
 
 async function giphyFetch(endpoint: Endpoint, action: string, query: string, limit = 30): Promise<GiphyResult[]> {
   const params = new URLSearchParams({
-    api_key: GIPHY_API_KEY,
     limit: String(limit),
-    rating: "g",
+    type: endpoint,
   });
   if (query) params.set("q", query);
-  const url = `https://api.giphy.com/v1/${endpoint}/${action}?${params.toString()}`;
+  const url = apiUrl(`/api/giphy/${action}?${params.toString()}`);
 
   const res = await fetch(url);
   if (!res.ok) throw new Error(`GIPHY error ${res.status}`);
