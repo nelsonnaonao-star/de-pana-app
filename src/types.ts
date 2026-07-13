@@ -16,6 +16,7 @@ export interface Message {
   locationName?: string;
   status?: "sending" | "sent" | "delivered" | "read";
   forwarded?: boolean;
+  edited?: boolean;
   replyToId?: string;
   replyToText?: string;
   replyToSender?: string;

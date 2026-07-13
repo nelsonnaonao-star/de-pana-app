@@ -37,7 +37,6 @@ export default function RatesPanel() {
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [timeAgo, setTimeAgo] = useState<string>("");
-  const [error, setError] = useState<string>("");
 
   const [amount, setAmount] = useState<string>("");
   const [selectedRateId, setSelectedRateId] = useState<string>("usd_bcv");
@@ -62,7 +61,6 @@ export default function RatesPanel() {
 
   async function fetchRates() {
     setLoading(true);
-    setError("");
     const serverUrl = import.meta.env.VITE_SERVER_URL;
     const apiUrl = serverUrl
       ? `${serverUrl}/api/rates/dollar`
@@ -127,7 +125,6 @@ export default function RatesPanel() {
       }
     } catch (e) {
       console.warn("Failed to fetch BCV rates:", e);
-      setError("No se pudieron cargar las tasas del BCV");
     } finally {
       setLoading(false);
     }
@@ -210,13 +207,6 @@ export default function RatesPanel() {
 
       {/* BODY */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 text-left">
-
-        {/* ERROR */}
-        {error && (
-          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-2.5 text-center">
-            <p className="text-[8px] font-bold text-rose-600">{error}</p>
-          </div>
-        )}
 
         {/* RATE SELECTOR */}
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-3 space-y-2 border border-white/60">

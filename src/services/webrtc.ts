@@ -39,7 +39,6 @@ async function fetchTurnCredentials(): Promise<RTCConfiguration["iceServers"]> {
     console.warn("[WebRTC] Failed to fetch TURN credentials, using STUN fallback:", err);
   }
 
-  // Fallback to public STUN servers
   return [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -55,6 +54,12 @@ export class WebRTCService {
   private userId: string;
   private iceServers: RTCConfiguration["iceServers"] | null = null;
   private subscribedPromise: Promise<void> | null = null;
+  private pendingCandidates: RTCIceCandidateInit[] = [];
+  private pendingOffer: RTCSessionDescriptionInit | null = null;
+  private remoteDescSet = false;
+  private disconnectedTimer: ReturnType<typeof setTimeout> | null = null;
+  private iceRestartCount = 0;
+  private MAX_ICE_RESTARTS = 3;
 
   onRemoteStream: ((stream: MediaStream) => void) | null = null;
   onCallEnded: (() => void) | null = null;
@@ -79,7 +84,11 @@ export class WebRTCService {
   }
 
   async startLocalStream(audio: boolean, video: boolean): Promise<MediaStream> {
-    this.localStream = await navigator.mediaDevices.getUserMedia({ audio, video });
+    const constraints: MediaStreamConstraints = {
+      audio,
+      video: video ? { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } } : false,
+    };
+    this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
     return this.localStream;
   }
 
@@ -94,11 +103,32 @@ export class WebRTCService {
     }
 
     this.remoteStream = new MediaStream();
+    this.remoteDescSet = false;
+    this.pendingCandidates = [];
+
     this.pc.ontrack = (event) => {
-      for (const track of event.streams[0].getTracks()) {
-        this.remoteStream!.addTrack(track);
+      if (!event.streams || !event.streams[0]) {
+        console.warn("[WebRTC] ontrack event with no streams, track kind:", event.track.kind);
+        if (event.track && this.remoteStream) {
+          this.remoteStream.addTrack(event.track);
+          event.track.onmute = () => console.warn("[WebRTC] Remote track muted:", event.track.kind);
+          event.track.onunmute = () => console.log("[WebRTC] Remote track unmuted:", event.track.kind);
+          console.log("[WebRTC] ontrack (no streams) — total tracks:", this.remoteStream.getTracks().length);
+          this.onRemoteStream?.(new MediaStream(this.remoteStream.getTracks()));
+        }
+        return;
       }
-      this.onRemoteStream?.(this.remoteStream);
+      const remoteTracks = this.remoteStream!.getTracks();
+      for (const track of event.streams[0].getTracks()) {
+        if (!remoteTracks.some((t) => t.id === track.id)) {
+          track.onmute = () => console.warn("[WebRTC] Remote track muted:", track.kind);
+          track.onunmute = () => console.log("[WebRTC] Remote track unmuted:", track.kind);
+          track.onended = () => console.warn("[WebRTC] Remote track ended:", track.kind);
+          this.remoteStream!.addTrack(track);
+          console.log("[WebRTC] Added remote track:", track.kind, "— total tracks:", this.remoteStream!.getTracks().length);
+        }
+      }
+      this.onRemoteStream?.(new MediaStream(this.remoteStream!.getTracks()));
     };
 
     this.pc.onicecandidate = (event) => {
@@ -120,12 +150,82 @@ export class WebRTCService {
     this.pc.oniceconnectionstatechange = () => {
       const state = this.pc?.iceConnectionState || "";
       this.onConnectionStateChange?.(state);
-      if (state === "disconnected" || state === "failed") {
+
+      if (state === "failed") {
+        this.clearDisconnectedTimer();
         this.onCallEnded?.();
+      } else if (state === "disconnected") {
+        this.startDisconnectedTimer();
+      } else if (state === "connected" || state === "completed") {
+        this.clearDisconnectedTimer();
+        this.iceRestartCount = 0;
       }
     };
 
+    // Process any offer that arrived before PeerConnection was ready
+    if (this.pendingOffer) {
+      console.log("[WebRTC] Processing buffered offer after PC creation");
+      const bufferedOffer = this.pendingOffer;
+      this.pendingOffer = null;
+      this.handleOffer(JSON.stringify(bufferedOffer)).catch((e) =>
+        console.error("[WebRTC] Error processing buffered offer:", e)
+      );
+    }
+
     return this.pc;
+  }
+
+  private startDisconnectedTimer() {
+    this.clearDisconnectedTimer();
+    this.disconnectedTimer = setTimeout(async () => {
+      if (this.pc && this.pc.iceConnectionState === "disconnected") {
+        if (this.iceRestartCount < this.MAX_ICE_RESTARTS) {
+          this.iceRestartCount++;
+          console.warn(`[WebRTC] ICE disconnected for 10s — attempting restart #${this.iceRestartCount}`);
+          try {
+            await this.performIceRestart();
+          } catch (e) {
+            console.error("[WebRTC] ICE restart failed:", e);
+            this.onCallEnded?.();
+          }
+        } else {
+          console.warn("[WebRTC] Max ICE restarts reached — ending call");
+          this.onCallEnded?.();
+        }
+      }
+    }, 10000);
+  }
+
+  private clearDisconnectedTimer() {
+    if (this.disconnectedTimer) {
+      clearTimeout(this.disconnectedTimer);
+      this.disconnectedTimer = null;
+    }
+  }
+
+  private async performIceRestart() {
+    if (!this.pc) return;
+    this.pc.restartIce();
+    const offer = await this.pc.createOffer({ iceRestart: true });
+    await this.pc.setLocalDescription(offer);
+    await this.sendSignal({
+      type: "offer",
+      sdp: JSON.stringify(offer),
+      from: this.userId,
+    });
+    console.log("[WebRTC] ICE restart offer sent");
+  }
+
+  private async flushPendingCandidates() {
+    if (!this.pc || !this.remoteDescSet) return;
+    while (this.pendingCandidates.length > 0) {
+      const c = this.pendingCandidates.shift()!;
+      try {
+        await this.pc.addIceCandidate(new RTCIceCandidate(c));
+      } catch (err) {
+        console.warn("[WebRTC] Error adding buffered candidate:", err);
+      }
+    }
   }
 
   private async sendSignal(signal: SignalPayload) {
@@ -141,7 +241,6 @@ export class WebRTCService {
     if (!this.pc) throw new Error("PeerConnection not created. Call createPeerConnection() first.");
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
-    console.log('[WEBRTC SIGNALING] 📤 Sending offer via Supabase Realtime channel:', this.callId);
     await this.sendSignal({
       type: "offer",
       sdp: JSON.stringify(offer),
@@ -150,49 +249,54 @@ export class WebRTCService {
     return offer;
   }
 
-  async handleOffer(offerSdp: string): Promise<RTCSessionDescriptionInit> {
-    if (!this.pc) throw new Error("PeerConnection not created.");
-    console.log('[WEBRTC CRÍTICO] 📩 Receptor recibió SDP Offer — signalingState:', this.pc.signalingState);
+  async handleOffer(offerSdp: string): Promise<RTCSessionDescriptionInit | null> {
+    if (!this.pc) {
+      console.warn("[WebRTC] handleOffer: PC not ready, buffering offer");
+      this.pendingOffer = JSON.parse(offerSdp) as RTCSessionDescriptionInit;
+      return null;
+    }
     try {
       const offer = JSON.parse(offerSdp) as RTCSessionDescriptionInit;
       await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
-      console.log('[WEBRTC CRÍTICO] ✅ Receptor aplicó offer remoteDescription — signalingState:', this.pc.signalingState);
+      this.remoteDescSet = true;
+      await this.flushPendingCandidates();
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
-      console.log('[WEBRTC CRÍTICO] ✅ Receptor creó answer — signalingState:', this.pc.signalingState);
-      console.log('[WEBRTC CRÍTICO] 📤 Receptor enviando answer via broadcast, from:', this.userId);
       await this.sendSignal({
         type: "answer",
         sdp: JSON.stringify(answer),
         from: this.userId,
       });
-      console.log('[WEBRTC CRÍTICO] ✅ Receptor answer enviado exitosamente');
       return answer;
     } catch (err) {
-      console.error('[WEBRTC CRÍTICO] ❌ Error en Receptor handleOffer:', err);
+      console.error("[WebRTC] Error in handleOffer:", err);
       throw err;
     }
   }
 
   async handleAnswer(answerSdp: string) {
     if (!this.pc) {
-      console.error('[WEBRTC CRÍTICO] ❌ handleAnswer: NO PeerConnection exists!');
+      console.error("[WebRTC] handleAnswer: NO PeerConnection exists!");
       return;
     }
-    console.log('[WEBRTC CRÍTICO] 📩 Emisor recibió SDP Answer — aplicando setRemoteDescription...');
-    console.log('[WEBRTC CRÍTICO] PC signalingState ANTES de setRemoteDescription:', this.pc.signalingState);
     try {
       const answer = JSON.parse(answerSdp) as RTCSessionDescriptionInit;
       await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
-      console.log('[WEBRTC CRÍTICO] ✅ Emisor aplicó RemoteDescription con éxito — signalingState DESPUÉS:', this.pc.signalingState);
-      console.log('[WEBRTC CRÍTICO] ✅ ICE connection state:', this.pc.iceConnectionState);
+      this.remoteDescSet = true;
+      await this.flushPendingCandidates();
     } catch (err) {
-      console.error('[WEBRTC CRÍTICO] ❌ Error en setRemoteDescription:', err);
+      console.error("[WebRTC] Error in handleAnswer:", err);
     }
   }
 
   async addIceCandidate(candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) {
     if (!this.pc) return;
+
+    if (!this.remoteDescSet) {
+      this.pendingCandidates.push({ candidate, sdpMid: sdpMid ?? undefined, sdpMLineIndex: sdpMLineIndex ?? undefined });
+      return;
+    }
+
     try {
       await this.pc.addIceCandidate(new RTCIceCandidate({ candidate, sdpMid, sdpMLineIndex }));
     } catch (err) {
@@ -205,8 +309,11 @@ export class WebRTCService {
       return this.subscribedPromise;
     }
 
-    this.subscribedPromise = new Promise((resolve) => {
-      console.log('[WEBRTC SIGNALING] 📡 Creating signal channel:', this.callId);
+    this.subscribedPromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Signal channel subscribe timeout (15s)"));
+      }, 15000);
+
       this.channel = supabase.channel(`call-signal:${this.callId}`, {
         config: { broadcast: { ack: false, self: false } },
       });
@@ -214,15 +321,12 @@ export class WebRTCService {
       this.channel.on("broadcast", { event: "signal" }, async (payload) => {
         const signal = payload.payload as SignalPayload;
         if (signal.from === this.userId) return;
-        console.log('[WEBRTC CRÍTICO] 📩 Señal recibida tipo:', signal.type, 'from:', signal.from.substring(0, 8));
 
         switch (signal.type) {
           case "offer":
-            console.log('[WEBRTC CRÍTICO] 📩 Emisor/Receptor recibió OFFER — procesando...');
             await this.handleOffer(signal.sdp!);
             break;
           case "answer":
-            console.log('[WEBRTC CRÍTICO] 📩 Emisor/Receptor recibió ANSWER — procesando...');
             await this.handleAnswer(signal.sdp!);
             break;
           case "ice-candidate":
@@ -233,19 +337,17 @@ export class WebRTCService {
             );
             break;
           case "call-ended":
-            console.log('[WEBRTC SIGNALING] 📞 Call-ended signal received');
             this.onCallEnded?.();
             break;
           case "callee-ready":
-            console.log('[WEBRTC SIGNALING] 📞 Callee-ready signal received');
             this.onCalleeReady?.();
             break;
         }
       });
 
       this.channel.subscribe((status) => {
-        console.log('[WEBRTC SIGNALING] 📡 Signal channel status:', status, 'for call:', this.callId);
         if (status === "SUBSCRIBED") {
+          clearTimeout(timeout);
           resolve();
         }
       });
@@ -256,28 +358,45 @@ export class WebRTCService {
 
   async resendOffer(): Promise<void> {
     if (!this.pc) {
-      console.log('[WEBRTC CRÍTICO] ⚠️ resendOffer: no PeerConnection, creating one first');
       await this.createPeerConnection();
+    }
+
+    if (!this.channel) {
       await this.subscribeToSignals();
     }
-    console.log('[WEBRTC CRÍTICO] 📤 resendOffer: signalingState=', this.pc?.signalingState, 'channel state=', this.channel?.state);
+
+    if (this.pc!.signalingState === "have-local-offer") {
+      await this.pc!.setLocalDescription({ type: "rollback" });
+    }
+
     const offer = await this.pc!.createOffer();
     await this.pc!.setLocalDescription(offer);
-    console.log('[WEBRTC CRÍTICO] 📤 Re-sending offer to receiver after callee-ready');
     await this.sendSignal({
       type: "offer",
       sdp: JSON.stringify(offer),
       from: this.userId,
     });
-    console.log('[WEBRTC CRÍTICO] ✅ Offer resent successfully');
   }
 
   async signalCalleeReady(): Promise<void> {
-    console.log('[WEBRTC SIGNALING] 📤 Sending callee-ready signal');
     await this.sendSignal({
       type: "callee-ready",
       from: this.userId,
     });
+  }
+
+  setMuted(muted: boolean) {
+    if (!this.localStream) return;
+    for (const track of this.localStream.getAudioTracks()) {
+      track.enabled = !muted;
+    }
+  }
+
+  setVideoEnabled(enabled: boolean) {
+    if (!this.localStream) return;
+    for (const track of this.localStream.getVideoTracks()) {
+      track.enabled = enabled;
+    }
   }
 
   async endCall() {
@@ -286,6 +405,7 @@ export class WebRTCService {
   }
 
   cleanup() {
+    this.clearDisconnectedTimer();
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.pc?.close();
     this.channel?.unsubscribe();
@@ -294,6 +414,9 @@ export class WebRTCService {
     this.pc = null;
     this.channel = null;
     this.subscribedPromise = null;
+    this.pendingCandidates = [];
+    this.remoteDescSet = false;
+    this.iceRestartCount = 0;
   }
 
   async waitForSubscribed(): Promise<void> {

@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
+import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { 
   ArrowLeft, Phone, Video, Send, Smile, Paperclip, 
   Mic, Music, VideoIcon, 
   BarChart2, X, Check, Palette,
-  Film, MoreVertical, Camera, Image, File, Search, ChevronUp, ChevronDown, MapPin
+  Film, MoreVertical, Camera as CameraIcon, Image, File, Search, ChevronUp, ChevronDown, MapPin
 } from "lucide-react";
 import { Chat, Message } from "../types";
 import GifPicker from "./GifPicker";
@@ -12,10 +13,12 @@ import MessageBubble from "./chat/MessageBubble";
 import ChatCustomizer from "./chat/ChatCustomizer";
 import ChatPatternBackground from "./chat/ChatPatternBackground";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, clearMessages } from "../services/messages";
+import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, clearMessages } from "../services/messages";
+import { deleteChat as apiDeleteChat } from "../services/chats";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../services/storage";
 import { CHAT_BACKGROUNDS } from "./chat/chatConstants";
+import { useOfflineQueue } from "../hooks/useOfflineQueue";
 
 interface ChatRoomProps {
   chat: Chat;
@@ -23,15 +26,21 @@ interface ChatRoomProps {
   onSendMessage: (msg: Message) => void;
   onTriggerCall: (type: "audio" | "video") => void;
   onForwardMessage?: (msg: Message) => void;
+  onChatDeleted?: (chatId: string) => void;
   currentUserId?: string;
   currentUserName?: string;
   refetchTrigger?: number;
+  onRegisterBackHandler?: (handler: (() => boolean) | null) => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, currentUserId, currentUserName, refetchTrigger }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, onChatDeleted, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler }: ChatRoomProps) {
   const { user, profile } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
+
+  const { isOnline, queueMessage, isPending } = useOfflineQueue(chat.id, uid, (tempId, savedId) => {
+    setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: savedId, status: "sent" } : m));
+  });
 
   const [inputText, setInputText] = useState("");
   const [showAttachments, setShowAttachments] = useState(false);
@@ -52,6 +61,32 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     ? visibleMessages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
     : visibleMessages;
 
+  const mapApiMsg = (m: any): Message => {
+    const durNum = m.audio_duration ? Number(m.audio_duration) : 0;
+    const durStr = durNum > 0 ? `${Math.floor(durNum / 60)}:${String(Math.floor(durNum % 60)).padStart(2, "0")}` : undefined;
+    return {
+      id: m.id,
+      sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
+      text: m.text,
+      timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+      type: (m.type as Message["type"]) || "text",
+      mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
+      duration: durStr,
+      reactions: m.reactions,
+      status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
+      forwarded: m.forwarded || false,
+      edited: m.edited || false,
+      replyToId: m.reply_to_id,
+      replyToText: m.reply_to_text,
+      replyToSender: m.reply_to_sender,
+      pollQuestion: m.poll_question,
+      pollOptions: m.poll_options,
+      latitude: m.latitude,
+      longitude: m.longitude,
+      locationName: m.location_name,
+    };
+  };
+
   // Fetch real messages from API on mount
   useEffect(() => {
     console.log('[CHAT] useEffect [chat.id, uid] — chat.id:', chat.id, 'uid:', uid);
@@ -59,25 +94,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       getMessages(chat.id).then(apiMessages => {
         console.log('[CHAT] getMessages result count:', apiMessages?.length);
         if (apiMessages && apiMessages.length > 0) {
-          const mapped = apiMessages.map(m => ({
-            id: m.id,
-            sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
-            text: m.text,
-            timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
-            type: (m.type as Message["type"]) || "text",
-            mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
-            reactions: m.reactions,
-            status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
-            forwarded: m.forwarded || false,
-            replyToId: m.reply_to_id,
-            replyToText: m.reply_to_text,
-            replyToSender: m.reply_to_sender,
-            pollQuestion: m.poll_question,
-            pollOptions: m.poll_options,
-            latitude: m.latitude,
-            longitude: m.longitude,
-            locationName: m.location_name,
-          }));
+          const mapped = apiMessages.map(mapApiMsg);
           setMessages(mapped);
           console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
         } else {
@@ -94,25 +111,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     if (chat.id && refetchTrigger && refetchTrigger > 0) {
       getMessages(chat.id).then(apiMessages => {
         if (apiMessages && apiMessages.length > 0) {
-          const mapped = apiMessages.map(m => ({
-            id: m.id,
-            sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
-            text: m.text,
-            timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
-            type: (m.type as Message["type"]) || "text",
-            mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
-            reactions: m.reactions,
-            status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
-            forwarded: m.forwarded || false,
-            replyToId: m.reply_to_id,
-            replyToText: m.reply_to_text,
-            replyToSender: m.reply_to_sender,
-            pollQuestion: m.poll_question,
-            pollOptions: m.poll_options,
-            latitude: m.latitude,
-            longitude: m.longitude,
-            locationName: m.location_name,
-          }));
+          const mapped = apiMessages.map(mapApiMsg);
           setMessages(mapped);
         }
       }).catch(() => {});
@@ -125,22 +124,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       if (isActive && chat.id) {
         getMessages(chat.id).then(apiMessages => {
           if (apiMessages && apiMessages.length > 0) {
-            const mapped = apiMessages.map(m => ({
-              id: m.id,
-              sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
-              text: m.text,
-              timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
-              type: (m.type as Message["type"]) || "text",
-              mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
-              reactions: m.reactions,
-              status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
-              forwarded: m.forwarded || false,
-              replyToId: m.reply_to_id,
-              replyToText: m.reply_to_text,
-              replyToSender: m.reply_to_sender,
-              pollQuestion: m.poll_question,
-              pollOptions: m.poll_options,
-            }));
+            const mapped = apiMessages.map(mapApiMsg);
             setMessages(mapped);
           }
         }).catch(() => {});
@@ -162,6 +146,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const [showCustomizer, setShowCustomizer] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [groupMembers, setGroupMembers] = useState<Array<{profile_id: string; name?: string; avatar?: string}>>([]);
 
   // Synchronize style choices with localStorage
   useEffect(() => {
@@ -190,10 +177,35 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const sendingRecordingRef = useRef(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Fetch group members when group info panel opens
+  useEffect(() => {
+    if (!showGroupInfo || !chat.isGroup) return;
+    (async () => {
+      try {
+        const { data: rows } = await supabase
+          .from("chat_participants")
+          .select("profile_id, profiles(name, avatar_url)")
+          .eq("chat_id", chat.id);
+        if (rows) {
+          const mapped = rows.map((r: any) => ({
+            profile_id: r.profile_id,
+            name: r.profiles?.name,
+            avatar: r.profiles?.avatar_url,
+          }));
+          setGroupMembers(mapped);
+        }
+      } catch (e) {
+        console.error("[CHAT] Error fetching group members:", e);
+      }
+    })();
+  }, [showGroupInfo, chat.isGroup, chat.id]);
 
   // Real MediaRecorder + timer
   useEffect(() => {
@@ -208,6 +220,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           const stream = await navigator.mediaDevices.getUserMedia(constraints);
           mediaStreamRef.current = stream;
           chunksRef.current = [];
+          if (recordingType === "video" && videoPreviewRef.current) {
+            videoPreviewRef.current.srcObject = stream;
+            videoPreviewRef.current.play().catch(() => {});
+          }
           const recorder = new MediaRecorder(stream, {
             audioBitsPerSecond: 128000,
             videoBitsPerSecond: 2500000,
@@ -240,7 +256,18 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     };
   }, [recordingType]);
 
-  // Supabase Realtime subscription for new messages
+  // Attach video stream to preview element
+  useEffect(() => {
+    if (recordingType === "video" && mediaStreamRef.current && videoPreviewRef.current) {
+      videoPreviewRef.current.srcObject = mediaStreamRef.current;
+      videoPreviewRef.current.play().catch(() => {});
+    }
+    return () => {
+      if (videoPreviewRef.current) {
+        videoPreviewRef.current.srcObject = null;
+      }
+    };
+  }, [recordingType]);
   const messagesChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   useEffect(() => {
@@ -296,6 +323,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       if (updated.sender_id === uid && updated.status === "read") {
         setMessages(prev => prev.map(m =>
           m.id === updated.id ? { ...m, status: "read" as const } : m
+        ));
+      }
+      if (updated.edited) {
+        setMessages(prev => prev.map(m =>
+          m.id === updated.id ? { ...m, text: updated.text, edited: true } : m
         ));
       }
     });
@@ -373,7 +405,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           latitude,
           longitude,
           locationName: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
-          status: "sent",
+          status: "sending",
         };
         setMessages(prev => [...prev, newMsg]);
         onSendMessage(newMsg);
@@ -390,16 +422,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
               longitude,
               location_name: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
             });
-            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m));
+          } else {
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sent" } : m));
           }
         } catch (e) {
           console.error("[CHAT] Error sending location:", e);
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sending" } : m));
         }
       },
       (err) => {
-        console.warn("[CHAT] Geolocation error:", err);
+        console.warn("[CHAT] Geolocation error:", err.message, err.code);
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
@@ -413,28 +448,30 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       text: inputText,
       timestamp,
       type: "text",
-      status: "sent",
+      status: isOnline ? "sent" : "sending",
       replyToId: replyTo?.id,
       replyToText: replyTo?.text,
       replyToSender: replyTo?.sender === "me" ? "Tú" : chat.name,
     };
 
-    // Optimistic add
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);
     setInputText("");
     setReplyTo(null);
 
-    // Stop typing indicator
     emitTyping(false);
     if (typingTimerRef.current) {
       clearTimeout(typingTimerRef.current);
     }
 
+    if (!isOnline) {
+      queueMessage(newMsg);
+      return;
+    }
+
     try {
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
       if (isLocalChat) {
-        // If it is a local-only chat, skip the insert to Supabase
         setMessages(prev => prev.map((m) => m.id === tempId ? { ...m, id: `local_${Date.now()}` } : m));
       } else {
         const saved = await apiSendMessage({
@@ -447,12 +484,13 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           reply_to_sender: replyTo?.sender === "me" ? "Tú" : chat.name,
         });
         setMessages(prev => prev.map((m) =>
-          m.id === tempId ? { ...m, id: saved.id } : m
+          m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m
         ));
       }
     } catch (e) {
       console.error("[CHAT] Error al enviar mensaje:", e);
-      setMessages(prev => prev.filter((m) => m.id !== tempId));
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sending" } : m));
+      queueMessage(newMsg);
     }
   };
 
@@ -466,12 +504,13 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         timestamp,
         type: "text",
         text: value,
-        status: "sent"
+        status: isOnline ? "sent" : "sending"
       };
       setMessages(prev => [...prev, newMsg]);
       onSendMessage(newMsg);
       setShowGifPicker(false);
       setShowAttachments(false);
+      if (!isOnline) { queueMessage(newMsg); return; }
       try {
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
         if (!isLocalChat) {
@@ -484,7 +523,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         }
       } catch (e) {
         console.error("[CHAT] Error al enviar emoji:", e);
-        setMessages(prev => prev.filter((m) => m.id !== tempId));
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sending" } : m));
+        queueMessage(newMsg);
       }
       return;
     }
@@ -498,7 +538,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       type: type === "sticker" ? "sticker" : "image",
       mediaUrl: url,
       fileName: type === "gif" ? "GIF.gif" : "Sticker.png",
-      status: "sent"
+      status: isOnline ? "sent" : "sending"
     };
 
     setMessages(prev => [...prev, newMsg]);
@@ -506,6 +546,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     setShowGifPicker(false);
     setShowAttachments(false);
 
+    if (!isOnline) { queueMessage(newMsg); return; }
     try {
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
       if (isLocalChat) {
@@ -520,16 +561,62 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           image_url: url,
         });
         setMessages(prev => prev.map((m) =>
-          m.id === tempId ? { ...m, id: saved.id } : m
+          m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m
         ));
       }
     } catch (e) {
       console.error("[CHAT] Error al enviar sticker:", e);
-      setMessages(prev => prev.filter((m) => m.id !== tempId));
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sending" } : m));
+      queueMessage(newMsg);
     }
   };
 
-  const triggerFilePick = (accept: string, type: Message["type"]) => {
+  const triggerFilePick = async (accept: string, type: Message["type"]) => {
+    // For images and videos, use Capacitor Camera plugin on mobile
+    if (type === "image" || type === "video") {
+      try {
+        const isCapacitor = !!(window as any).Capacitor;
+        if (isCapacitor) {
+          const photo = await CapacitorCamera.getPhoto({
+            quality: 90,
+            source: CameraSource.Photos,
+            resultType: CameraResultType.Uri,
+          });
+          if (!photo.webPath) return;
+          const resp = await fetch(photo.webPath);
+          const blob = await resp.blob();
+          const ext = photo.format || (type === "video" ? "mp4" : "jpeg");
+          const mimeType = type === "video" ? "video/mp4" : "image/jpeg";
+          const fileBlob = new Blob([await blob.arrayBuffer()], { type: mimeType });
+          const tempId = "msg_" + Date.now();
+          const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          const localUrl = URL.createObjectURL(fileBlob);
+          const sendingMsg: Message = {
+            id: tempId, sender: "me", timestamp, type, mediaUrl: localUrl,
+            fileName: `${type}_${Date.now()}.${ext}`, fileSize: `${(blob.size / 1024 / 1024).toFixed(1)} MB`,
+            status: "sending",
+          };
+          setMessages(prev => [...prev, sendingMsg]);
+          onSendMessage(sendingMsg);
+          const url = await uploadChatMedia(fileBlob, type === "video" ? "video" : "image");
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
+          const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+          if (!isLocalChat) {
+            const payload: any = { chat_id: chat.id, sender_id: uid, type, text: type === "image" ? "Imagen" : "Video" };
+            if (type === "image") payload.image_url = url;
+            else payload.video_url = url;
+            const saved = await apiSendMessage(payload);
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m));
+          }
+          return;
+        }
+      } catch (e: any) {
+        if (e?.message?.includes("cancelled") || e?.message?.includes("User")) return;
+        console.warn("Capacitor Camera failed, falling back to input:", e);
+      }
+    }
+
+    // Fallback: HTML file input (works on web / some devices)
     const input = document.createElement("input");
     input.type = "file";
     input.accept = accept;
@@ -539,13 +626,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       const tempId = "msg_" + Date.now();
       const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const sendingMsg: Message = {
-        id: tempId,
-        sender: "me",
-        timestamp,
-        type,
+        id: tempId, sender: "me", timestamp, type,
         mediaUrl: URL.createObjectURL(new Blob([await file.arrayBuffer()], { type: file.type })),
-        fileName: file.name,
-        fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
+        fileName: file.name, fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
         status: "sending",
       };
       setMessages(prev => [...prev, sendingMsg]);
@@ -555,27 +638,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         const blob = new Blob([file], { type: file.type });
         const url = await uploadChatMedia(blob, "files");
         setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
-
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
         if (!isLocalChat) {
-          const payload: any = {
-            chat_id: chat.id,
-            sender_id: uid,
-            type,
-            text: file.name,
-          };
-          if (type === "image") {
-            payload.image_url = url;
-            payload.text = "Imagen";
-          } else if (type === "video") {
-            payload.video_url = url;
-            payload.text = "Video";
-          } else if (type === "audio") {
-            payload.audio_url = url;
-            payload.text = "Audio";
-          } else {
-            payload.text = file.name;
-          }
+          const payload: any = { chat_id: chat.id, sender_id: uid, type, text: file.name };
+          if (type === "image") { payload.image_url = url; payload.text = "Imagen"; }
+          else if (type === "video") { payload.video_url = url; payload.text = "Video"; }
+          else if (type === "audio") { payload.audio_url = url; payload.text = "Audio"; }
           const saved = await apiSendMessage(payload);
           setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m));
         } else {
@@ -695,8 +763,37 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     }
   };
 
+  const [editingMessage, setEditingMessage] = useState<{ id: string; text: string } | null>(null);
+
+  // Register Android back handler for ChatRoom internal overlays
+  useEffect(() => {
+    if (!onRegisterBackHandler) return;
+    const handler = (): boolean => {
+      if (editingMessage) { setEditingMessage(null); return true; }
+      if (replyTo) { setReplyTo(null); return true; }
+      if (showAttachments) { setShowAttachments(false); return true; }
+      if (activeReactionMenu) { setActiveReactionMenu(null); return true; }
+      if (showSearch) { setShowSearch(false); setSearchQuery(""); return true; }
+      return false;
+    };
+    onRegisterBackHandler(handler);
+    return () => { onRegisterBackHandler(null); };
+  }, [editingMessage, replyTo, showAttachments, activeReactionMenu, showSearch, onRegisterBackHandler]);
+
+  const handleEditMessage = async (messageId: string, newText: string) => {
+    setActiveReactionMenu(null);
+    setEditingMessage(null);
+    try {
+      await apiEditMessage(messageId, newText);
+      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: newText, edited: true } : m));
+    } catch (e) {
+      console.error("[CHAT] Edit error:", e);
+    }
+  };
+
   const handleFinishVoiceNote = async () => {
-    if (!recordingType || !mediaRecorderRef.current) return;
+    if (!recordingType || !mediaRecorderRef.current || sendingRecordingRef.current) return;
+    sendingRecordingRef.current = true;
     const recordingDone = new Promise<void>((resolve) => {
       const r = mediaRecorderRef.current!;
       if (r.state !== "inactive") {
@@ -707,7 +804,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       }
     });
     await recordingDone;
-    const blob = new Blob(chunksRef.current, {
+    const buffers = await Promise.all(chunksRef.current.map(c => c.arrayBuffer()));
+    const blob = new Blob(buffers, {
       type: recordingType === "voice" ? "audio/webm" : "video/webm",
     });
     const durStr = `${Math.floor(recordingSeconds / 60)}:${(recordingSeconds % 60).toString().padStart(2, "0")}`;
@@ -733,6 +831,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           type: recordingType === "voice" ? "voice_note" : "video_note",
           audio_url: recordingType === "voice" ? url : undefined,
           video_url: recordingType === "video" ? url : undefined,
+          audio_duration: recordingSeconds,
           text: recordingType === "voice" ? "Nota de voz" : "Nota de video",
         });
         setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
@@ -746,6 +845,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     }
     mediaRecorderRef.current = null;
     setRecordingType(null);
+    sendingRecordingRef.current = false;
   };
 
   const bgPreset = CHAT_BACKGROUNDS.find(bg => bg.id === selectedBgId);
@@ -927,6 +1027,31 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                       <Palette className="w-3.5 h-3.5 text-teal-600" />
                       Personalizar chat
                     </button>
+                    {chat.isGroup && (
+                      <button
+                        onClick={() => { setShowGroupInfo(true); setShowDropdown(false); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-purple-600 hover:bg-purple-50 transition-colors cursor-pointer"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                          <circle cx="9" cy="7" r="4" />
+                          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                        </svg>
+                        Info del grupo
+                      </button>
+                    )}
+                    <div className="border-t border-slate-100 my-1"></div>
+                    <button
+                      onClick={() => { setShowDeleteConfirm(true); setShowDropdown(false); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      </svg>
+                      Eliminar chat
+                    </button>
                   </div>
                 </>
               )}
@@ -947,6 +1072,125 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         setBubbleColorThemId={setBubbleColorThemId}
         chatName={chat.name}
       />
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-[280px] p-5 text-center animate-fade-in">
+            <div className="w-12 h-12 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-3">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+            </div>
+            <h3 className="text-sm font-bold text-slate-800 mb-1">
+              {chat.isGroup ? "Eliminar grupo" : "Eliminar chat"}
+            </h3>
+            <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
+              {chat.isGroup
+                ? "Se eliminarán todos los mensajes y el grupo desaparecerá de tu lista."
+                : "Se eliminarán todos los mensajes. Esta acción no se puede deshacer."}
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  setShowDeleteConfirm(false);
+                  try {
+                    if (user?.id) {
+                      await apiDeleteChat(chat.id, user.id);
+                    }
+                    onChatDeleted?.(chat.id);
+                    onBack();
+                  } catch (e) {
+                    console.error("[CHAT] deleteChat error:", e);
+                    onChatDeleted?.(chat.id);
+                    onBack();
+                  }
+                }}
+                className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 transition-colors cursor-pointer"
+              >
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GROUP INFO PANEL */}
+      {showGroupInfo && (
+        <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-[420px] rounded-t-3xl shadow-2xl animate-slide-up max-h-[70vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-100 shrink-0">
+              <h3 className="text-sm font-bold text-slate-800">Info del grupo</h3>
+              <button
+                onClick={() => setShowGroupInfo(false)}
+                className="p-1.5 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+            {/* Group avatar + name */}
+            <div className="flex flex-col items-center py-5 border-b border-slate-100 shrink-0">
+              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center mb-3">
+                <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+              </div>
+              <p className="text-sm font-bold text-slate-800">{chat.name}</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">{groupMembers.length} miembros</p>
+            </div>
+            {/* Members list */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Miembros</p>
+              <div className="space-y-2">
+                {groupMembers.map(m => (
+                  <div key={m.profile_id} className="flex items-center gap-3 py-1.5">
+                    {m.avatar ? (
+                      <img src={m.avatar} className="w-8 h-8 rounded-full object-cover" alt="" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                        <span className="text-white font-bold text-[10px]">
+                          {m.name ? m.name.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?"}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-semibold text-slate-800 truncate">{m.name || "Usuario"}</p>
+                      <p className="text-[9px] text-slate-400">
+                        {m.profile_id === uid ? "Tú" : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+                {groupMembers.length === 0 && (
+                  <p className="text-[11px] text-slate-400 text-center py-4">Cargando miembros...</p>
+                )}
+              </div>
+            </div>
+            {/* Delete group button (visible to all) */}
+            <div className="p-4 border-t border-slate-100 shrink-0">
+              <button
+                onClick={() => { setShowGroupInfo(false); setShowDeleteConfirm(true); }}
+                className="w-full py-2.5 text-[11px] font-bold text-rose-500 bg-rose-50 rounded-xl hover:bg-rose-100 transition-colors cursor-pointer"
+              >
+                Eliminar grupo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SEARCH BAR */}
       {showSearch && (
@@ -1035,6 +1279,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                   handleReplyMessage={handleReplyMessage}
                   bubbleColorMeId={bubbleColorMeId}
                   bubbleColorThemId={bubbleColorThemId}
+                  isPending={isPending}
+                  onEdit={(m) => setEditingMessage({ id: m.id, text: m.text || "" })}
                 />
               </div>
             );
@@ -1113,7 +1359,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
             className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
           >
             <div className="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center text-purple-600 group-hover:scale-110 transition-transform shadow-sm">
-              <Camera className="w-5 h-5" />
+              <CameraIcon className="w-5 h-5" />
             </div>
             <span className="text-[9px] font-semibold text-slate-600">Cámara</span>
           </button>
@@ -1211,26 +1457,40 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       <div className="px-3 pb-4 pt-2 bg-transparent relative z-10 shrink-0 flex items-center gap-1.5 overflow-hidden">
         {recordingType ? (
           // ACTIVE RECORDING MODE
-          <div className="flex-1 flex items-center justify-between bg-teal-900/95 backdrop-blur-md px-4 py-2.5 rounded-full border border-teal-800/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] text-white animate-fade-in">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
-              <span className="text-[10px] font-bold tracking-wide">
-                {recordingType === "voice" ? "Grabando voz" : "Grabando video circular"} • <span className="text-teal-300 font-mono">{recordingSeconds}s</span>
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button 
-                onClick={() => setRecordingType(null)}
-                className="px-2.5 py-1 text-[10px] font-semibold text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-all cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button 
-                onClick={handleFinishVoiceNote}
-                className="px-3 py-1 text-[10px] font-bold text-teal-950 bg-teal-300 hover:bg-teal-200 rounded-full flex items-center gap-1 transition-all shadow-md active:scale-95 cursor-pointer"
-              >
-                <Check className="w-3 h-3 stroke-[3]" /> Enviar
-              </button>
+          <div className="flex-1 bg-teal-900/95 backdrop-blur-md rounded-2xl border border-teal-800/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] text-white animate-fade-in overflow-hidden">
+            {recordingType === "video" && (
+              <div className="w-full aspect-square max-h-[200px] bg-black flex items-center justify-center overflow-hidden rounded-t-2xl">
+                <video
+                  ref={videoPreviewRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                  style={{ transform: "scaleX(-1)" }}
+                />
+              </div>
+            )}
+            <div className="flex items-center justify-between px-4 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping"></span>
+                <span className="text-[10px] font-bold tracking-wide">
+                  {recordingType === "voice" ? "Grabando voz" : "Grabando video"} • <span className="text-teal-300 font-mono">{recordingSeconds}s</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button 
+                  onClick={() => setRecordingType(null)}
+                  className="px-2.5 py-1 text-[10px] font-semibold text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={handleFinishVoiceNote}
+                  className="px-3 py-1 text-[10px] font-bold text-teal-950 bg-teal-300 hover:bg-teal-200 rounded-full flex items-center gap-1 transition-all shadow-md active:scale-95 cursor-pointer"
+                >
+                  <Check className="w-3 h-3 stroke-[3]" /> Enviar
+                </button>
+              </div>
             </div>
           </div>
         ) : (
@@ -1311,6 +1571,50 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
             )}
           </>
         )}
+      </div>
+
+      {/* EDIT MESSAGE MODAL */}
+      {editingMessage && (
+        <EditMessageOverlay
+          initialText={editingMessage.text}
+          onSave={(newText) => handleEditMessage(editingMessage.id, newText)}
+          onCancel={() => setEditingMessage(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditMessageOverlay({ initialText, onSave, onCancel }: { initialText: string; onSave: (text: string) => void; onCancel: () => void }) {
+  const [text, setText] = useState(initialText);
+  return (
+    <div className="absolute inset-0 bg-black/60 z-40 flex items-center justify-center p-4" onClick={onCancel}>
+      <div className="bg-white rounded-2xl p-4 w-full max-w-xs space-y-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+          <h3 className="text-xs font-bold text-slate-800">✏️ Editar mensaje</h3>
+          <button onClick={onCancel} className="text-slate-400 hover:text-slate-600">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={3}
+          className="w-full text-xs border border-slate-200 rounded-xl p-2.5 outline-none focus:border-[#0a4d52] resize-none"
+          autoFocus
+        />
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="px-3 py-1.5 text-[10px] font-semibold text-slate-500 hover:bg-slate-100 rounded-lg">
+            Cancelar
+          </button>
+          <button
+            onClick={() => { if (text.trim() && text.trim() !== initialText) onSave(text.trim()); }}
+            disabled={!text.trim() || text.trim() === initialText}
+            className="px-3 py-1.5 text-[10px] font-bold text-white bg-[#0a4d52] hover:bg-[#10646a] rounded-lg disabled:opacity-40"
+          >
+            Guardar
+          </button>
+        </div>
       </div>
     </div>
   );

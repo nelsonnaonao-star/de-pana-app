@@ -37,7 +37,19 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
     audioRef.current = audio;
 
     const onLoadedMetadata = () => {
-      setDurationSec(audio.duration);
+      const metaDur = audio.duration;
+      // Parse the expected duration from the "m:ss" prop as a fallback
+      let expectedSec = 0;
+      if (duration) {
+        const parts = duration.split(":");
+        if (parts.length === 2) expectedSec = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+      }
+      // If metadata duration is suspiciously longer than expected (>50% more), cap it
+      if (expectedSec > 0 && metaDur > expectedSec * 1.5) {
+        setDurationSec(expectedSec);
+      } else {
+        setDurationSec(metaDur);
+      }
       setIsLoading(false);
     };
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);

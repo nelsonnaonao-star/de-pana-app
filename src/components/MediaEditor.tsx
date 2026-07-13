@@ -193,17 +193,17 @@ export default function MediaEditor({
   const buildCombinedFilterCss = () => {
     let filterString = "";
 
-    // Base preset classes mapped to CSS native variables
-    if (selectedFilterId === "caribe") filterString += "saturate-[1.50] contrast-[1.10] brightness-[1.05] ";
-    else if (selectedFilterId === "retro") filterString += "sepia-[0.40] saturate-[1.15] contrast-[0.90] hue-rotate-[15deg] ";
-    else if (selectedFilterId === "cine") filterString += "contrast-[1.30] brightness-[0.95] saturate-[1.20] ";
-    else if (selectedFilterId === "polar") filterString += "hue-rotate-[180deg] saturate-[1.20] contrast-[1.05] ";
-    else if (selectedFilterId === "bw") filterString += "grayscale-[1.00] contrast-[1.30] ";
-    else if (selectedFilterId === "sunset") filterString += "sepia-[0.30] saturate-[1.35] hue-rotate-[340deg] brightness-[1.05] ";
-    else if (selectedFilterId === "cyber") filterString += "hue-rotate-[290deg] saturate-[2.00] brightness-[1.10] contrast-[1.25] ";
-    else if (selectedFilterId === "dream") filterString += "brightness-[1.10] contrast-[0.95] saturate-[1.25] blur-[0.5px] ";
-    else if (selectedFilterId === "drama") filterString += "contrast-[1.60] brightness-[0.90] saturate-[0.75] ";
-    else if (selectedFilterId === "forest") filterString += "hue-rotate-[90deg] saturate-[1.10] brightness-[0.95] ";
+    // Base preset mapped to native CSS filter() syntax
+    if (selectedFilterId === "caribe") filterString += "saturate(1.5) contrast(1.1) brightness(1.05) ";
+    else if (selectedFilterId === "retro") filterString += "sepia(0.4) saturate(1.15) contrast(0.9) hue-rotate(15deg) ";
+    else if (selectedFilterId === "cine") filterString += "contrast(1.3) brightness(0.95) saturate(1.2) ";
+    else if (selectedFilterId === "polar") filterString += "hue-rotate(180deg) saturate(1.2) contrast(1.05) ";
+    else if (selectedFilterId === "bw") filterString += "grayscale(1) contrast(1.3) ";
+    else if (selectedFilterId === "sunset") filterString += "sepia(0.3) saturate(1.35) hue-rotate(340deg) brightness(1.05) ";
+    else if (selectedFilterId === "cyber") filterString += "hue-rotate(290deg) saturate(2) brightness(1.1) contrast(1.25) ";
+    else if (selectedFilterId === "dream") filterString += "brightness(1.1) contrast(0.95) saturate(1.25) blur(0.5px) ";
+    else if (selectedFilterId === "drama") filterString += "contrast(1.6) brightness(0.9) saturate(0.75) ";
+    else if (selectedFilterId === "forest") filterString += "hue-rotate(90deg) saturate(1.1) brightness(0.95) ";
 
     // Sliders overlay values (multiplied or added to preset style safely)
     filterString += `brightness(${adjustments.brightness}%) `;

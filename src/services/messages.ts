@@ -312,6 +312,15 @@ export async function deleteMessage(messageId: string) {
   if (error) throw error;
 }
 
+export async function editMessage(messageId: string, newText: string) {
+  const { error } = await supabase
+    .from("messages")
+    .update({ text: newText, edited: true })
+    .eq("id", messageId);
+
+  if (error) throw error;
+}
+
 export async function clearMessages(chatId: string) {
   const { error } = await supabase
     .from("messages")

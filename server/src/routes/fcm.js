@@ -365,7 +365,7 @@ router.post('/webhook', async (req, res) => {
     return res.json({ ok: true, ...results });
 
   } else if (table === 'calls') {
-    const { chat_id, caller_id, callee_id, call_type } = record;
+    const { id: recordId, chat_id, caller_id, callee_id, call_type } = record;
 
     if (!chat_id || !caller_id || !callee_id) {
       return res.status(200).json({ ok: true, skipped: 'missing ids' });
@@ -406,6 +406,7 @@ router.post('/webhook', async (req, res) => {
                 chatId: chat_id, type: 'call',
                 callerId: caller_id, callerName,
                 callType: call_type || 'audio',
+                callId: recordId,
               },
               android: {
                 priority: 'high', ttl: 86400000,
@@ -428,7 +429,7 @@ router.post('/webhook', async (req, res) => {
           const subscription = JSON.parse(t.token);
           await webpush.sendNotification(subscription, JSON.stringify({
             title: callerName, body: 'Llamada entrante...',
-            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callType: call_type || 'audio' },
+            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callType: call_type || 'audio', callId: recordId },
             icon: '/icon.png', badge: '/badge.png', requireInteraction: true,
           }));
           results.web++;
