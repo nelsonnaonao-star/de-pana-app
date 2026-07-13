@@ -250,9 +250,21 @@ export async function getCurrentProfile(): Promise<Profile | null> {
 }
 
 export async function updateProfile(id: string, updates: Partial<Profile>) {
+  const ALLOWED_FIELDS = [
+    "name", "bio", "avatar", "avatar_url", "username",
+    "bubble_color", "partner_bubble_color", "notif_config", "status"
+  ];
+  const safeUpdates: Record<string, any> = {};
+  for (const key of ALLOWED_FIELDS) {
+    if (key in updates) {
+      safeUpdates[key] = (updates as any)[key];
+    }
+  }
+  if (Object.keys(safeUpdates).length === 0) return;
+  safeUpdates.updated_at = new Date().toISOString();
   const { error } = await supabase
     .from("profiles")
-    .update({ ...updates, updated_at: new Date().toISOString() })
+    .update(safeUpdates)
     .eq("id", id);
   if (error) throw error;
 }

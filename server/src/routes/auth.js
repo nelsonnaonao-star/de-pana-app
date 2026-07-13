@@ -187,8 +187,11 @@ router.post('/update-password', verifyLimiter, async (req, res) => {
   }
 });
 
-// ─── Auto-confirm user after registration ──────────────────────────
+// ─── Auto-confirm user (DEVELOPMENT ONLY) ─────────────────────────
 router.post('/auto-confirm', profileLimiter, async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Endpoint no disponible en producción' });
+  }
   try {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId requerido' });
