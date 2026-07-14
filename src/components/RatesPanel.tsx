@@ -133,7 +133,7 @@ export default function RatesPanel() {
   useEffect(() => {
     fetchRates();
 
-    const interval = setInterval(fetchRates, 5 * 60 * 1000);
+    const interval = setInterval(fetchRates, 30 * 60 * 1000);
 
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
@@ -191,9 +191,9 @@ export default function RatesPanel() {
           {lastUpdated && (
             <div className="flex items-center gap-1">
               <span className={`w-1.5 h-1.5 rounded-full ${
-                Date.now() - new Date(lastUpdated).getTime() < 5 * 60000
+                Date.now() - new Date(lastUpdated).getTime() < 30 * 60000
                   ? "bg-emerald-400 animate-pulse"
-                  : Date.now() - new Date(lastUpdated).getTime() < 15 * 60000
+                  : Date.now() - new Date(lastUpdated).getTime() < 60 * 60000
                     ? "bg-amber-400"
                     : "bg-red-400"
               }`} />
