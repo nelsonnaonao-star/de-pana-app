@@ -796,6 +796,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const handleFinishVoiceNote = async () => {
     if (!recordingType || !mediaRecorderRef.current || sendingRecordingRef.current) return;
     sendingRecordingRef.current = true;
+    const currentRecordingType = recordingType;
+    const currentDuration = recordingSeconds;
+
+    setRecordingType(null);
+    if (recordingTimer.current) clearInterval(recordingTimer.current);
+
     const recordingDone = new Promise<void>((resolve) => {
       const r = mediaRecorderRef.current!;
       if (r.state !== "inactive") {
@@ -808,45 +814,48 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     await recordingDone;
     const buffers = await Promise.all(chunksRef.current.map(c => c.arrayBuffer()));
     const blob = new Blob(buffers, {
-      type: recordingType === "voice" ? "audio/webm" : "video/webm",
+      type: currentRecordingType === "voice" ? "audio/webm" : "video/webm",
     });
-    const durStr = `${Math.floor(recordingSeconds / 60)}:${(recordingSeconds % 60).toString().padStart(2, "0")}`;
+    const durStr = `${Math.floor(currentDuration / 60)}:${(currentDuration % 60).toString().padStart(2, "0")}`;
+    const tempId = "msg_" + Date.now();
+    const newMsg: Message = {
+      id: tempId,
+      sender: "me",
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      type: currentRecordingType === "voice" ? "voice_note" : "video_note",
+      duration: durStr,
+      mediaUrl: URL.createObjectURL(blob),
+    };
+    setMessages(prev => [...prev, newMsg]);
+    onSendMessage(newMsg);
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(t => t.stop());
+      mediaStreamRef.current = null;
+    }
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+
     try {
-      const url = await uploadChatMedia(blob, recordingType === "voice" ? "voice" : "video");
-      const tempId = "msg_" + Date.now();
-      const newMsg: Message = {
-        id: tempId,
-        sender: "me",
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        type: recordingType === "voice" ? "voice_note" : "video_note",
-        duration: durStr,
-        mediaUrl: url,
-      };
-      setMessages(prev => [...prev, newMsg]);
-      onSendMessage(newMsg);
+      const url = await uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video");
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
 
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
       if (!isLocalChat) {
         const saved = await apiSendMessage({
           chat_id: chat.id,
           sender_id: uid,
-          type: recordingType === "voice" ? "voice_note" : "video_note",
-          audio_url: recordingType === "voice" ? url : undefined,
-          video_url: recordingType === "video" ? url : undefined,
-          audio_duration: recordingSeconds,
-          text: recordingType === "voice" ? "Nota de voz" : "Nota de video",
+          type: currentRecordingType === "voice" ? "voice_note" : "video_note",
+          audio_url: currentRecordingType === "voice" ? url : undefined,
+          video_url: currentRecordingType === "video" ? url : undefined,
+          audio_duration: currentDuration,
+          text: currentRecordingType === "voice" ? "Nota de voz" : "Nota de video",
         });
         setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
       }
     } catch (err) {
       console.error("[CHAT] Upload recording error:", err);
     }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(t => t.stop());
-      mediaStreamRef.current = null;
-    }
-    mediaRecorderRef.current = null;
-    setRecordingType(null);
     sendingRecordingRef.current = false;
   };
 
