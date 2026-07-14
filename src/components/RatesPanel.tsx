@@ -61,70 +61,103 @@ export default function RatesPanel() {
 
   async function fetchRates() {
     setLoading(true);
-    const serverUrl = import.meta.env.VITE_SERVER_URL;
-    const apiUrl = serverUrl
-      ? `${serverUrl}/api/rates/dollar`
-      : "https://bcv.today/api/v1/rate.json";
 
-    try {
-      const res = await fetch(apiUrl, {
+    // Source 1: Server (has DB cache + multi-source fallback)
+    async function tryServer(): Promise<RateItem[]> {
+      const serverUrl = import.meta.env.VITE_SERVER_URL;
+      if (!serverUrl) throw new Error("No server URL");
+      const res = await fetch(`${serverUrl}/api/rates/dollar`, {
         cache: "no-cache",
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(10000),
       });
-
-      if (!res.ok) throw new Error(`API error ${res.status}`);
-
+      if (!res.ok) throw new Error(`Server ${res.status}`);
       const data = await res.json();
-      const newRates: RateItem[] = [];
-
-      // Server format: { usd: { name, symbol, value, source, time }, eur: {...}, dataSource }
-      // Fallback format (bcv.today): { USD: number, EUR: number, effective_date: string }
-      if (data.usd && data.usd.value) {
-        newRates.push({
-          id: "usd_bcv",
-          name: data.usd.name || "Dólar BCV",
-          symbol: "$",
-          value: data.usd.value,
-          source: data.usd.source || "Banco Central de Venezuela",
+      const rates: RateItem[] = [];
+      if (data.usd?.value) {
+        rates.push({
+          id: "usd_bcv", name: data.usd.name || "Dólar BCV", symbol: "$",
+          value: data.usd.value, source: data.usd.source || "BCV",
           date: data.usd.time || data.updatedAt || "",
         });
-      } else if (data.USD) {
-        newRates.push({
-          id: "usd_bcv",
-          name: "Dólar BCV",
-          symbol: "$",
-          value: data.USD,
-          source: "Banco Central de Venezuela",
-          date: data.effective_date || data.date || "",
-        });
       }
-
-      if (data.eur && data.eur.value) {
-        newRates.push({
-          id: "eur_bcv",
-          name: data.eur.name || "Euro BCV",
-          symbol: "€",
-          value: data.eur.value,
-          source: data.eur.source || "Banco Central de Venezuela",
+      if (data.eur?.value) {
+        rates.push({
+          id: "eur_bcv", name: data.eur.name || "Euro BCV", symbol: "€",
+          value: data.eur.value, source: data.eur.source || "BCV",
           date: data.eur.time || data.updatedAt || "",
         });
-      } else if (data.EUR) {
-        newRates.push({
-          id: "eur_bcv",
-          name: "Euro BCV",
-          symbol: "€",
-          value: data.EUR,
-          source: "Banco Central de Venezuela",
-          date: data.effective_date || data.date || "",
+      }
+      if (rates.length === 0) throw new Error("No rates from server");
+      return rates;
+    }
+
+    // Source 2: ve.dolarapi.com (direct, no server needed)
+    async function tryDirectApi(): Promise<RateItem[]> {
+      const [usdRes, eurRes] = await Promise.all([
+        fetch("https://ve.dolarapi.com/v1/dolares/oficial", { signal: AbortSignal.timeout(8000) }),
+        fetch("https://ve.dolarapi.com/v1/euros/oficial", { signal: AbortSignal.timeout(8000) }),
+      ]);
+      if (!usdRes.ok) throw new Error(`dolarapi ${usdRes.status}`);
+      const usdData = await usdRes.json();
+      const eurData = eurRes.ok ? await eurRes.json() : null;
+      const rates: RateItem[] = [];
+      if (usdData.promedio) {
+        rates.push({
+          id: "usd_bcv", name: "Dólar BCV", symbol: "$",
+          value: usdData.promedio, source: "Banco Central de Venezuela",
+          date: usdData.fechaActualizacion || "",
         });
       }
+      if (eurData?.promedio) {
+        rates.push({
+          id: "eur_bcv", name: "Euro BCV", symbol: "€",
+          value: eurData.promedio, source: "Banco Central de Venezuela",
+          date: eurData.fechaActualizacion || "",
+        });
+      }
+      if (rates.length === 0) throw new Error("No rates from dolarapi");
+      return rates;
+    }
 
+    // Source 3: bcv.today (last resort)
+    async function tryBcvToday(): Promise<RateItem[]> {
+      const res = await fetch("https://bcv.today/api/v1/rate.json", {
+        cache: "no-cache", signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) throw new Error(`bcv.today ${res.status}`);
+      const data = await res.json();
+      const rates: RateItem[] = [];
+      if (data.USD) {
+        rates.push({
+          id: "usd_bcv", name: "Dólar BCV", symbol: "$",
+          value: data.USD, source: "Banco Central de Venezuela",
+          date: data.effective_date || "",
+        });
+      }
+      if (data.EUR) {
+        rates.push({
+          id: "eur_bcv", name: "Euro BCV", symbol: "€",
+          value: data.EUR, source: "Banco Central de Venezuela",
+          date: data.effective_date || "",
+        });
+      }
+      if (rates.length === 0) throw new Error("No rates from bcv.today");
+      return rates;
+    }
+
+    try {
+      let newRates: RateItem[] = [];
+      try { newRates = await tryServer(); } catch {
+        try { newRates = await tryDirectApi(); } catch {
+          try { newRates = await tryBcvToday(); } catch (e) {
+            console.warn("All rate sources failed:", e);
+          }
+        }
+      }
       if (newRates.length > 0) {
         setRates(newRates);
         setLastUpdated(new Date().toISOString());
       }
-    } catch (e) {
-      console.warn("Failed to fetch BCV rates:", e);
     } finally {
       setLoading(false);
     }
