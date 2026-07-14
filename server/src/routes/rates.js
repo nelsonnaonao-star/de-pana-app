@@ -7,47 +7,42 @@ let memoryCache = { data: null, timestamp: 0 };
 const MEMORY_TTL = 5 * 60 * 1000;
 const DB_TTL = 30 * 60 * 1000;
 
-function parseVesNumber(str) {
-  if (!str) return null;
-  const cleaned = str.replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
-}
-
 async function fetchFromVeDolarApi() {
-  const res = await fetch('https://ve.dolarapi.com/v1/dolares', {
-    signal: AbortSignal.timeout(10000),
-    headers: { 'Accept': 'application/json' },
-  });
-  if (!res.ok) throw new Error(`ve.dolarapi HTTP ${res.status}`);
-  const data = await res.json();
-
-  let usd = null, eur = null;
-
-  const oficial = data.find(d => d.fuente === 'BCV' || d.nombre?.toLowerCase().includes('oficial'));
-  if (oficial && oficial.precio) {
-    usd = oficial.precio;
-  } else if (data.length > 0 && data[0].precio) {
-    usd = data[0].precio;
-  }
-
-  try {
-    const eurRes = await fetch('https://ve.dolarapi.com/v1/euros', {
+  const [usdRes, eurRes] = await Promise.all([
+    fetch('https://ve.dolarapi.com/v1/dolares/oficial', {
       signal: AbortSignal.timeout(10000),
-    });
-    if (eurRes.ok) {
-      const eurData = await eurRes.json();
-      const eurOficial = eurData.find(d => d.fuente === 'BCV' || d.nombre?.toLowerCase().includes('oficial'));
-      if (eurOficial && eurOficial.precio) {
-        eur = eurOficial.precio;
-      } else if (eurData.length > 0 && eurData[0].precio) {
-        eur = eurData[0].precio;
-      }
-    }
-  } catch {}
+    }),
+    fetch('https://ve.dolarapi.com/v1/euros/oficial', {
+      signal: AbortSignal.timeout(10000),
+    }),
+  ]);
 
-  if (!usd) throw new Error('No USD rate found in ve.dolarapi');
-  return { usd, eur, date: new Date().toISOString(), source: 've.dolarapi.com' };
+  if (!usdRes.ok) throw new Error(`ve.dolarapi USD HTTP ${usdRes.status}`);
+
+  const usdData = await usdRes.json();
+  const eurData = eurRes.ok ? await eurRes.json() : null;
+
+  const usd = usdData.promedio || usdData.precio;
+  if (!usd) throw new Error('No USD rate in ve.dolarapi response');
+
+  return {
+    usd: {
+      name: 'Dólar BCV',
+      symbol: '$',
+      value: usd,
+      source: 'Banco Central de Venezuela',
+      time: usdData.fechaActualizacion || new Date().toISOString(),
+    },
+    eur: eurData ? {
+      name: 'Euro BCV',
+      symbol: '€',
+      value: eurData.promedio || eurData.precio,
+      source: 'Banco Central de Venezuela',
+      time: eurData.fechaActualizacion || new Date().toISOString(),
+    } : null,
+    dataSource: 've.dolarapi.com',
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 async function fetchBcvToday() {
@@ -57,12 +52,25 @@ async function fetchBcvToday() {
   });
   if (!res.ok) throw new Error(`bcv.today HTTP ${res.status}`);
   const data = await res.json();
-  if (!data.USD) throw new Error('No USD in bcv.today response');
+  if (!data.USD) throw new Error('No USD in bcv.today');
+
   return {
-    usd: data.USD,
-    eur: data.EUR || null,
-    date: data.effective_date || data.date || new Date().toISOString(),
-    source: 'bcv.today',
+    usd: {
+      name: 'Dólar BCV',
+      symbol: '$',
+      value: data.USD,
+      source: 'Banco Central de Venezuela',
+      time: data.effective_date || data.date || new Date().toISOString(),
+    },
+    eur: data.EUR ? {
+      name: 'Euro BCV',
+      symbol: '€',
+      value: data.EUR,
+      source: 'Banco Central de Venezuela',
+      time: data.effective_date || data.date || new Date().toISOString(),
+    } : null,
+    dataSource: 'bcv.today',
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -78,15 +86,38 @@ async function scrapeBCV() {
   if (!res.ok) throw new Error(`BCV HTTP ${res.status}`);
   const html = await res.text();
 
+  function parseVesNumber(str) {
+    if (!str) return null;
+    const cleaned = str.replace(/\s/g, '').replace(/\./g, '').replace(',', '.');
+    return isNaN(parseFloat(cleaned)) ? null : parseFloat(cleaned);
+  }
+
   let usd = null, eur = null;
   const usdMatch = html.match(/id="dolar"[\s\S]*?<strong[^>]*>([\s\S]*?)<\/strong>/i);
   if (usdMatch) usd = parseVesNumber(usdMatch[1]);
   const eurMatch = html.match(/id="euro"[\s\S]*?<strong[^>]*>([\s\S]*?)<\/strong>/i);
   if (eurMatch) eur = parseVesNumber(eurMatch[1]);
-  const dateMatch = html.match(/content="([\d]{4}-[\d]{2}-[\d]{2}T[\d:+\-Z]+)"/i);
 
   if (!usd && !eur) throw new Error('Could not parse BCV HTML');
-  return { usd, eur, date: dateMatch?.[1] || new Date().toISOString(), source: 'bcv.org.ve' };
+
+  return {
+    usd: usd ? {
+      name: 'Dólar BCV',
+      symbol: '$',
+      value: usd,
+      source: 'Banco Central de Venezuela',
+      time: new Date().toISOString(),
+    } : null,
+    eur: eur ? {
+      name: 'Euro BCV',
+      symbol: '€',
+      value: eur,
+      source: 'Banco Central de Venezuela',
+      time: new Date().toISOString(),
+    } : null,
+    dataSource: 'bcv.org.ve',
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 async function fetchFreshRates() {
@@ -98,26 +129,9 @@ async function fetchFreshRates() {
 
   for (const source of sources) {
     try {
-      const rates = await source.fn();
-      console.log(`[RATES] Fetched from ${rates.source || source.name}`);
-      return {
-        usd: rates.usd ? {
-          name: 'Dólar BCV',
-          symbol: '$',
-          value: rates.usd,
-          source: 'Banco Central de Venezuela',
-          time: rates.date,
-        } : null,
-        eur: rates.eur ? {
-          name: 'Euro BCV',
-          symbol: '€',
-          value: rates.eur,
-          source: 'Banco Central de Venezuela',
-          time: rates.date,
-        } : null,
-        dataSource: rates.source || source.name,
-        updatedAt: new Date().toISOString(),
-      };
+      const result = await source.fn();
+      console.log(`[RATES] OK from ${result.dataSource || source.name}`);
+      return result;
     } catch (e) {
       console.warn(`[RATES] ${source.name} failed:`, e.message);
     }
@@ -151,7 +165,7 @@ async function saveRatesToDB(result) {
       updated_at: new Date().toISOString(),
     });
   } catch (e) {
-    console.warn('[RATES] Failed to save to DB:', e.message);
+    console.warn('[RATES] DB save failed:', e.message);
   }
 }
 
