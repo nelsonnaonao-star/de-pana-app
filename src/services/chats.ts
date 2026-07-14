@@ -20,11 +20,12 @@ export type Chat = {
 };
 
 export async function getChats(userId: string): Promise<Chat[]> {
-  // Get chats where user is a direct participant (profile_id/admin_id)
+  // Get chats where user is a direct participant (profile_id/admin_id), excluding deleted
   const { data: directChats, error } = await supabase
     .from("chats")
     .select("*")
     .or(`profile_id.eq.${userId},admin_id.eq.${userId}`)
+    .is("deleted_at", null)
     .order("updated_at", { ascending: false });
 
   if (error) throw error;
@@ -49,6 +50,7 @@ export async function getChats(userId: string): Promise<Chat[]> {
       .from("chats")
       .select("*")
       .in("id", groupChatIds)
+      .is("deleted_at", null)
       .order("updated_at", { ascending: false });
     groupChats = (gc || []) as Chat[];
   }

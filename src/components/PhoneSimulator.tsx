@@ -1076,20 +1076,28 @@ export default function PhoneSimulator({
   };
 
   const handleDeleteChat = async (chatId: string) => {
-    deletedChatIdsRef.current.add(chatId);
-    setChats(prev => prev.filter(c => c.id !== chatId));
     setSwipedChatId(null);
     setContextMenuChat(null);
     setContextMenuPos(null);
-    if (selectedChatId === chatId) {
-      setSelectedChatId(null);
-      setCurrentScreen("chats");
-    }
     if (user?.id && !chatId.startsWith("chat_biz_") && !chatId.startsWith("chat_state_")) {
       try {
         await apiDeleteChat(chatId, user.id);
+        deletedChatIdsRef.current.add(chatId);
+        setChats(prev => prev.filter(c => c.id !== chatId));
+        if (selectedChatId === chatId) {
+          setSelectedChatId(null);
+          setCurrentScreen("chats");
+        }
       } catch (e) {
         console.warn("[CHAT] Delete chat API error:", e);
+        showToast("Error al eliminar chat");
+      }
+    } else {
+      deletedChatIdsRef.current.add(chatId);
+      setChats(prev => prev.filter(c => c.id !== chatId));
+      if (selectedChatId === chatId) {
+        setSelectedChatId(null);
+        setCurrentScreen("chats");
       }
     }
   };

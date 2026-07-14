@@ -37,6 +37,7 @@ router.get('/chats/:userId', async (req, res) => {
       .from('chats')
       .select('*')
       .or(`profile_id.eq.${userId},admin_id.eq.${userId}`)
+      .is('deleted_at', null)
       .order('updated_at', { ascending: false, nullsFirst: false });
     if (error) throw error;
     res.json(data || []);
@@ -91,7 +92,7 @@ router.get('/all/:userId', async (req, res) => {
     }
     const [profile, chats, contacts, calls] = await Promise.all([
       supabaseAdmin.from('profiles').select('*').eq('id', userId).maybeSingle(),
-      supabaseAdmin.from('chats').select('*').or(`profile_id.eq.${userId},admin_id.eq.${userId}`).order('updated_at', { ascending: false, nullsFirst: false }),
+      supabaseAdmin.from('chats').select('*').or(`profile_id.eq.${userId},admin_id.eq.${userId}`).is('deleted_at', null).order('updated_at', { ascending: false, nullsFirst: false }),
       supabaseAdmin.from('contacts').select('*').eq('user_id', userId),
       supabaseAdmin.from('calls').select('*').or(`caller_id.eq.${userId},receiver_id.eq.${userId}`).order('created_at', { ascending: false }),
     ]);
@@ -302,7 +303,7 @@ router.delete('/chats/:chatId', async (req, res) => {
 
     await supabaseAdmin
       .from('chats')
-      .delete()
+      .update({ deleted_at: new Date().toISOString() })
       .eq('id', chatId);
 
     res.json({ success: true });

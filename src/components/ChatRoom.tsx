@@ -1113,8 +1113,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                     onBack();
                   } catch (e) {
                     console.error("[CHAT] deleteChat error:", e);
-                    onChatDeleted?.(chat.id);
-                    onBack();
                   }
                 }}
                 className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 transition-colors cursor-pointer"
