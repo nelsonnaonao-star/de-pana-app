@@ -111,28 +111,31 @@ export class WebRTCService {
 
     this.pc.ontrack = (event) => {
       console.log(`[WebRTC] ontrack: kind=${event.track.kind}, enabled=${event.track.enabled}, readyState=${event.track.readyState}, streams=${event.streams.length}`);
-      if (!event.streams || !event.streams[0]) {
-        console.warn("[WebRTC] ontrack event with no streams, track kind:", event.track.kind);
-        if (event.track && this.remoteStream) {
-          this.remoteStream.addTrack(event.track);
-          event.track.onmute = () => console.warn("[WebRTC] Remote track muted:", event.track.kind);
-          event.track.onunmute = () => console.log("[WebRTC] Remote track unmuted:", event.track.kind);
-          console.log("[WebRTC] ontrack (no streams) — total tracks:", this.remoteStream.getTracks().length);
-          this.onRemoteStream?.(new MediaStream(this.remoteStream.getTracks()));
-        }
-        return;
-      }
-      const remoteTracks = this.remoteStream!.getTracks();
-      for (const track of event.streams[0].getTracks()) {
-        if (!remoteTracks.some((t) => t.id === track.id)) {
+
+      const addTrackToRemote = (track: MediaStreamTrack) => {
+        const existing = this.remoteStream!.getTracks();
+        if (!existing.some((t) => t.id === track.id)) {
           track.onmute = () => console.warn("[WebRTC] Remote track muted:", track.kind);
           track.onunmute = () => console.log("[WebRTC] Remote track unmuted:", track.kind);
           track.onended = () => console.warn("[WebRTC] Remote track ended:", track.kind);
           this.remoteStream!.addTrack(track);
           console.log("[WebRTC] Added remote track:", track.kind, "— total tracks:", this.remoteStream!.getTracks().length);
         }
+      };
+
+      if (!event.streams || !event.streams[0]) {
+        console.warn("[WebRTC] ontrack event with no streams, track kind:", event.track.kind);
+        if (event.track && this.remoteStream) {
+          addTrackToRemote(event.track);
+          this.onRemoteStream?.(this.remoteStream);
+        }
+        return;
       }
-      this.onRemoteStream?.(new MediaStream(this.remoteStream!.getTracks()));
+
+      for (const track of event.streams[0].getTracks()) {
+        addTrackToRemote(track);
+      }
+      this.onRemoteStream?.(this.remoteStream!);
     };
 
     this.pc.onicecandidate = (event) => {

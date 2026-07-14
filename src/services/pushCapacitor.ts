@@ -96,9 +96,9 @@ export async function setupCapacitorPush(userId: string) {
 
     PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
       const data = notification.data;
-      console.log('[WEBRTC SIGNALING] 📱 pushNotificationReceived:', JSON.stringify(data));
+      console.log('[PUSH] pushNotificationReceived:', JSON.stringify(data));
       if (data?.type === 'call' && data?.chatId) {
-        console.log('[WEBRTC SIGNALING] 📱 Dispatching incoming-call CustomEvent from FCM');
+        console.log('[PUSH] Dispatching incoming-call CustomEvent from FCM');
         try { new Audio('/sounds/ringtone.mp3').play().catch(() => {}); } catch {}
         window.dispatchEvent(new CustomEvent('incoming-call', {
           detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio', callId: data.callId },
@@ -108,6 +108,14 @@ export async function setupCapacitorPush(userId: string) {
         window.dispatchEvent(new CustomEvent('new-message-received', {
           detail: { chatId: data.chatId, contactId: data.contactId, title: data.title, body: data.body },
         }));
+        PushNotifications.displayNotification({
+          title: data.title || 'RED ON',
+          body: data.body || 'Nuevo mensaje',
+          id: String(Date.now()),
+          channelId: 'redon-messages',
+          smallIcon: 'ic_dialog_info',
+          largeIcon: 'ic_dialog_info',
+        }).catch(() => {});
       }
     });
 

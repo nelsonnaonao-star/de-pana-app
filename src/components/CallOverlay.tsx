@@ -69,27 +69,27 @@ export default function CallOverlay({
     }
   }, [localStream]);
 
-  useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      const v = remoteVideoRef.current;
-      v.srcObject = null;
-      v.srcObject = remoteStream;
-      v.play().catch(() => {});
-      const onLoaded = () => { v.play().catch(() => {}); };
-      v.addEventListener("loadeddata", onLoaded);
-      console.log("[CALL OVERLAY] remoteStream attached — tracks:", remoteStream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.enabled}`).join(", "));
-      return () => v.removeEventListener("loadeddata", onLoaded);
-    }
-  }, [remoteStream]);
+  const attachRemoteStream = useCallback((videoEl: HTMLVideoElement, stream: MediaStream) => {
+    if (videoEl.srcObject === stream) return;
+    videoEl.srcObject = stream;
+    videoEl.play().catch(() => {
+      const resume = () => { videoEl.play().catch(() => {}); document.removeEventListener('touchstart', resume); };
+      document.addEventListener('touchstart', resume, { once: true });
+    });
+  }, []);
 
-  // Re-attach srcObject when video element mounts (handles conditional render swap)
   const remoteVideoCallback = useCallback((node: HTMLVideoElement | null) => {
     remoteVideoRef.current = node;
     if (node && remoteStream) {
-      node.srcObject = remoteStream;
-      node.play().catch(() => {});
+      attachRemoteStream(node, remoteStream);
     }
-  }, [remoteStream]);
+  }, [remoteStream, attachRemoteStream]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      attachRemoteStream(remoteVideoRef.current, remoteStream);
+    }
+  }, [remoteStream, attachRemoteStream]);
 
   const localVideoCallback = useCallback((node: HTMLVideoElement | null) => {
     localVideoRef.current = node;
@@ -197,11 +197,10 @@ export default function CallOverlay({
 
           <div className="absolute inset-0 flex items-center justify-center">
             <video
-              key={remoteStream ? "has-stream" : "no-stream"}
               ref={remoteVideoCallback}
               autoPlay playsInline
               className="absolute inset-0 w-full h-full object-cover"
-              style={{ display: remoteStream ? "block" : "none" }}
+              style={{ visibility: remoteStream ? "visible" : "hidden" }}
             />
             {!remoteStream && (
               <img

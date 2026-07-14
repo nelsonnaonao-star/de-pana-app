@@ -41,10 +41,12 @@ public class CallFcmService extends FirebaseMessagingService {
         String type = message.getData().get("type");
 
         if (isAppInForeground()) {
-            // App is open: bridge to JS via Capacitor plugin.
-            // This fires 'pushNotificationReceived' event in JS,
-            // which pushCapacitor.ts handles to dispatch 'incoming-call' / 'new-message-received' CustomEvents.
-            // PhoneSimulator.tsx listens for those events and shows the call overlay / handles messages.
+            // App is open: show native heads-up notification AND bridge to JS
+            if ("call".equals(type)) {
+                showCallNotification(message);
+            } else {
+                showForegroundMessageNotification(message);
+            }
             try {
                 PushNotificationsPlugin.sendRemoteMessage(message);
                 Log.d(TAG, "Bridged to Capacitor JS via PushNotificationsPlugin.onMessageReceived");
@@ -236,6 +238,56 @@ public class CallFcmService extends FirebaseMessagingService {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
             nm.notify(notificationId, builder.build());
+        }
+    }
+
+    private void showForegroundMessageNotification(RemoteMessage message) {
+        String title = message.getData().get("title");
+        String body = message.getData().get("body");
+        String chatId = message.getData().get("chatId");
+        String contactId = message.getData().get("contactId");
+
+        if (title == null) title = "RED ON";
+        if (body == null) body = "Nuevo mensaje";
+
+        int notificationId = (chatId != null ? chatId.hashCode() : (int) System.currentTimeMillis());
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel chan = new NotificationChannel(
+                CHANNEL_MESSAGES, "Mensajes", NotificationManager.IMPORTANCE_HIGH
+            );
+            chan.setDescription("Notificaciones de mensajes");
+            chan.enableVibration(true);
+            chan.enableLights(true);
+            NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nmgr != null) nmgr.createNotificationChannel(chan);
+        }
+
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setAction("OPEN_CHAT");
+        intent.putExtra("chatId", chatId);
+        intent.putExtra("contactId", contactId);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+            this, notificationId, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_MESSAGES)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setVibrate(new long[]{0, 300, 200, 300})
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setColor(Color.parseColor("#1E88E5"));
+
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) {
+            nm.notify(notificationId + 100000, builder.build());
         }
     }
 }
