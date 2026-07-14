@@ -866,17 +866,6 @@ export default function PhoneSimulator({
         cleanupCall();
       };
 
-      webrtc.onCalleeReady = async () => {
-        console.log('[WEBRTC SIGNALING] ✅ Callee is ready — re-sending offer');
-        stopRingbackTone();
-        try {
-          await webrtc.resendOffer();
-          console.log('[WEBRTC SIGNALING] ✅ Offer re-sent after callee-ready');
-        } catch (e) {
-          console.error('[WEBRTC SIGNALING] ❌ Failed to re-send offer:', e);
-        }
-      };
-
       console.log('[WEBRTC SIGNALING] 📞 Getting local stream...');
       const local = await webrtc.startLocalStream(true, type === "video");
       setLocalStream(local);
@@ -902,10 +891,8 @@ export default function PhoneSimulator({
         targetUserId: partnerId
       });
 
-      // Play ringback tone for outgoing call
       playRingbackTone();
 
-      // Send FCM push with the stable callId
       if (partnerId) {
         console.log('[WEBRTC SIGNALING] 📞 Sending FCM push to:', partnerId);
         sendFcmPush(partnerId, profile?.name || 'RED ON', 'Llamada entrante...', {
@@ -914,19 +901,37 @@ export default function PhoneSimulator({
         });
       }
 
-      // ICE connection timeout: auto-cleanup after 45s (uses ref to avoid stale closure)
-      const timeoutId = setTimeout(() => {
+      // ICE connection timeout: auto-cleanup after 45s
+      const iceTimeoutRef = { current: setTimeout(() => {
         if (webrtcRef.current && activeCallRef.current?.status === "outgoing") {
           console.warn('[WEBRTC SIGNALING] ⏰ ICE timeout — no connection after 45s');
           stopRingbackTone();
           cleanupCall();
         }
-      }, 45000);
+      }, 45000) };
 
-      // Store timeout ID so we can clear it when connected
+      // When callee-ready signal arrives: cancel timeout + only resend if not yet connected
+      webrtc.onCalleeReady = async () => {
+        console.log('[WEBRTC SIGNALING] ✅ Callee is ready');
+        clearTimeout(iceTimeoutRef.current);
+        const remoteTracks = webrtcRef.current?.getRemoteStream()?.getTracks().length ?? 0;
+        if (remoteTracks > 0) {
+          console.log('[WEBRTC SIGNALING] ℹ️ Remote stream already has tracks, skipping resendOffer');
+          return;
+        }
+        stopRingbackTone();
+        try {
+          await webrtc.resendOffer();
+          console.log('[WEBRTC SIGNALING] ✅ Offer re-sent after callee-ready');
+        } catch (e) {
+          console.error('[WEBRTC SIGNALING] ❌ Failed to re-send offer:', e);
+        }
+      };
+
+      // Clear timeout when remote stream arrives
       const origOnRemoteStream = webrtc.onRemoteStream;
       webrtc.onRemoteStream = (stream) => {
-        clearTimeout(timeoutId);
+        clearTimeout(iceTimeoutRef.current);
         origOnRemoteStream?.(stream);
       };
     } catch (err) {

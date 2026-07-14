@@ -42,6 +42,9 @@ async function fetchTurnCredentials(): Promise<RTCConfiguration["iceServers"]> {
   return [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
   ];
 }
 
@@ -107,6 +110,7 @@ export class WebRTCService {
     this.pendingCandidates = [];
 
     this.pc.ontrack = (event) => {
+      console.log(`[WebRTC] ontrack: kind=${event.track.kind}, enabled=${event.track.enabled}, readyState=${event.track.readyState}, streams=${event.streams.length}`);
       if (!event.streams || !event.streams[0]) {
         console.warn("[WebRTC] ontrack event with no streams, track kind:", event.track.kind);
         if (event.track && this.remoteStream) {
@@ -148,15 +152,18 @@ export class WebRTCService {
     };
 
     this.pc.oniceconnectionstatechange = () => {
-      const state = this.pc?.iceConnectionState || "";
-      this.onConnectionStateChange?.(state);
+      const iceState = this.pc?.iceConnectionState || "";
+      const sigState = this.pc?.signalingState || "";
+      const trackCount = this.remoteStream?.getTracks().length ?? 0;
+      console.log(`[WebRTC] ICE: ${iceState} | Signaling: ${sigState} | Remote tracks: ${trackCount}`);
+      this.onConnectionStateChange?.(iceState);
 
-      if (state === "failed") {
+      if (iceState === "failed") {
         this.clearDisconnectedTimer();
         this.onCallEnded?.();
-      } else if (state === "disconnected") {
+      } else if (iceState === "disconnected") {
         this.startDisconnectedTimer();
-      } else if (state === "connected" || state === "completed") {
+      } else if (iceState === "connected" || iceState === "completed") {
         this.clearDisconnectedTimer();
         this.iceRestartCount = 0;
       }
