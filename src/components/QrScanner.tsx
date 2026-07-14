@@ -266,7 +266,7 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
           </div>
         </div>
         {status === "scanning" && !cameraError && (
-          <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 w-56 h-0.5 bg-teal-400 shadow-[0_0_12px_#14b8a6] animate-scan-line" />
+          <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 w-56 h-0.5 bg-teal-400 shadow-[0_0_12px_theme(colors.teal.400)] animate-scan-line" />
         )}
       </div>
 
@@ -300,7 +300,7 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
 
       {status === "found" && foundProfile && (
         <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center p-6">
-          <div className="bg-white rounded-2xl p-5 w-full max-w-xs shadow-2xl animate-fade-in space-y-4">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-xs shadow-lg animate-fade-in space-y-4">
             <div className="flex flex-col items-center text-center gap-2">
               <div className="w-14 h-14 rounded-full bg-teal-100 flex items-center justify-center overflow-hidden">
                 {foundProfile.avatar_url ? (

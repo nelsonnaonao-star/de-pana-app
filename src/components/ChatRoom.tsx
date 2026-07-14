@@ -27,13 +27,14 @@ interface ChatRoomProps {
   onTriggerCall: (type: "audio" | "video") => void;
   onForwardMessage?: (msg: Message) => void;
   onChatDeleted?: (chatId: string) => void;
+  onMessageDeleted?: (chatId: string, messageId: string) => void;
   currentUserId?: string;
   currentUserName?: string;
   refetchTrigger?: number;
   onRegisterBackHandler?: (handler: (() => boolean) | null) => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, onChatDeleted, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, onChatDeleted, onMessageDeleted, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler }: ChatRoomProps) {
   const { user, profile } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -758,6 +759,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     try {
       await apiDeleteMessage(messageId);
       setMessages(prev => prev.filter((m) => m.id !== messageId));
+      onMessageDeleted?.(chat.id, messageId);
     } catch (e) {
       console.error("[CHAT] Delete error:", e);
     }
@@ -1076,7 +1078,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       {/* DELETE CONFIRMATION MODAL */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-[280px] p-5 text-center animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-lg w-[280px] p-5 text-center animate-fade-in">
             <div className="w-12 h-12 rounded-full bg-rose-100 flex items-center justify-center mx-auto mb-3">
               <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="3 6 5 6 21 6" />
@@ -1127,7 +1129,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       {/* GROUP INFO PANEL */}
       {showGroupInfo && (
         <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-[420px] rounded-t-3xl shadow-2xl animate-slide-up max-h-[70vh] flex flex-col">
+          <div className="bg-white w-full max-w-[420px] rounded-t-3xl shadow-lg animate-slide-up max-h-[70vh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-slate-100 shrink-0">
               <h3 className="text-sm font-bold text-slate-800">Info del grupo</h3>
@@ -1379,7 +1381,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       {/* POLL FORM SCREEN OVERLAY */}
       {showPollForm && (
         <div className="absolute inset-0 bg-black/60 z-40 flex items-center justify-center p-4">
-          <form onSubmit={handleCreatePoll} className="bg-white rounded-2xl p-4 w-full max-w-xs space-y-3 shadow-2xl">
+          <form onSubmit={handleCreatePoll} className="bg-white rounded-2xl p-4 w-full max-w-xs space-y-3 shadow-lg">
             <div className="flex justify-between items-center border-b border-slate-100 pb-2">
               <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1">
                 <BarChart2 className="w-4 h-4 text-emerald-600" /> Nueva Encuesta
@@ -1589,7 +1591,7 @@ function EditMessageOverlay({ initialText, onSave, onCancel }: { initialText: st
   const [text, setText] = useState(initialText);
   return (
     <div className="absolute inset-0 bg-black/60 z-40 flex items-center justify-center p-4" onClick={onCancel}>
-      <div className="bg-white rounded-2xl p-4 w-full max-w-xs space-y-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl p-4 w-full max-w-xs space-y-3 shadow-lg" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center border-b border-slate-100 pb-2">
           <h3 className="text-xs font-bold text-slate-800">✏️ Editar mensaje</h3>
           <button onClick={onCancel} className="text-slate-400 hover:text-slate-600">

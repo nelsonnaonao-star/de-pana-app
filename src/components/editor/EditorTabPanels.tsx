@@ -75,7 +75,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
             </span>
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="bg-[#14b8a6] hover:bg-[#1bc3bd] text-white text-[8px] font-black px-2 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer shadow-sm"
+              className="bg-teal-400 hover:bg-teal-500 text-white text-[8px] font-black px-2 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer shadow-sm"
             >
               <Upload className="w-3 h-3" /> Subir de mi Celular
             </button>
@@ -120,13 +120,13 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
                 <button
                   key={filt.id} onClick={() => setSelectedFilterId(filt.id)}
                   className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
-                    isSelected ? "bg-teal-950/60 border-[#14b8a6] shadow-sm text-white" : "bg-black/20 border-white/5 text-slate-300 hover:bg-black/35 hover:border-white/10"
+                    isSelected ? "bg-teal-950/60 border-teal-400 shadow-sm text-white" : "bg-black/20 border-white/5 text-slate-300 hover:bg-black/35 hover:border-white/10"
                   }`}
                 >
                   <div className="flex items-center justify-between w-full">
                     <span className="text-[9.5px] font-bold leading-none truncate">{filt.name}</span>
                     {isSelected && (
-                      <div className="w-2.5 h-2.5 bg-[#14b8a6] rounded-full flex items-center justify-center">
+                      <div className="w-2.5 h-2.5 bg-teal-400 rounded-full flex items-center justify-center">
                         <Check className="w-1.5 h-1.5 text-white stroke-[4]" />
                       </div>
                     )}
@@ -163,7 +163,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
                 </div>
                 <input type="range" min={min} max={max} step={step} value={adjustments[key as keyof typeof adjustments]}
                   onChange={(e) => setAdjustments((prev: any) => ({ ...prev, [key]: Number(e.target.value) }))}
-                  className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800" />
+                  className="w-full accent-teal-400 cursor-pointer bg-slate-800" />
               </div>
             ))}
             <div className="space-y-1">
@@ -173,7 +173,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
               </div>
               <input type="range" min="0" max="8" step="1" value={adjustments.blur}
                 onChange={(e) => setAdjustments((prev: any) => ({ ...prev, blur: Number(e.target.value) }))}
-                className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800" />
+                className="w-full accent-teal-400 cursor-pointer bg-slate-800" />
             </div>
             <div className="space-y-1">
               <div className="flex justify-between items-center text-[8px] font-bold">
@@ -182,7 +182,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
               </div>
               <input type="range" min="0" max="360" step="5" value={adjustments.hue}
                 onChange={(e) => setAdjustments((prev: any) => ({ ...prev, hue: Number(e.target.value) }))}
-                className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800" />
+                className="w-full accent-teal-400 cursor-pointer bg-slate-800" />
             </div>
             <div className="space-y-1">
               <div className="flex justify-between items-center text-[8px] font-bold">
@@ -191,7 +191,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
               </div>
               <input type="range" min="0" max="100" step="5" value={adjustments.sharpness}
                 onChange={(e) => setAdjustments((prev: any) => ({ ...prev, sharpness: Number(e.target.value) }))}
-                className="w-full accent-[#14b8a6] cursor-pointer bg-slate-800" />
+                className="w-full accent-teal-400 cursor-pointer bg-slate-800" />
             </div>
           </div>
         </div>
@@ -235,7 +235,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
               return (
                 <button key={anim.id} type="button" onClick={() => setTextAnimation(anim.id)}
                   className={`py-2 px-2.5 rounded-xl text-left border text-[8.5px] font-bold transition-all cursor-pointer ${
-                    isSelected ? "bg-teal-950/60 border-[#14b8a6] text-white" : "bg-black/20 border-white/5 text-slate-400 hover:bg-black/35"
+                    isSelected ? "bg-teal-950/60 border-teal-400 text-white" : "bg-black/20 border-white/5 text-slate-400 hover:bg-black/35"
                   }`}>
                   {anim.name}
                 </button>
@@ -254,7 +254,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
               return (
                 <button key={st.id} type="button" onClick={() => setSelectedStickerIdx(isSelected ? -1 : idx)}
                   className={`p-3 rounded-2xl border text-center transition-all cursor-pointer relative overflow-hidden flex flex-col justify-center items-center ${
-                    isSelected ? "bg-teal-950/60 border-[#14b8a6] text-white scale-102" : "bg-black/20 border-white/5 text-slate-300 hover:bg-black/35 hover:border-white/10"
+                    isSelected ? "bg-teal-950/60 border-teal-400 text-white scale-102" : "bg-black/20 border-white/5 text-slate-300 hover:bg-black/35 hover:border-white/10"
                   }`}>
                   <span className={`text-[8px] px-2 py-1.5 rounded-full ${st.bg} scale-95`}>{st.text}</span>
                   <span className="text-[6.5px] text-slate-400 font-mono mt-2">
@@ -292,7 +292,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
               <input type="text" required placeholder="Ej: REDON2026" value={activationCodeInput}
                 onChange={(e) => setActivationCodeInput(e.target.value)}
                 className="flex-1 bg-slate-950 border border-white/10 text-[9.5px] px-3.5 py-2.5 rounded-xl outline-none focus:border-teal-500 text-center font-mono font-bold tracking-widest text-teal-300 placeholder-slate-600" />
-              <button type="submit" className="bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-extrabold text-[9px] px-4 rounded-xl transition-all cursor-pointer shadow-sm shrink-0">Verificar</button>
+              <button type="submit" className="bg-teal-400 hover:bg-teal-500 text-white font-extrabold text-[9px] px-4 rounded-xl transition-all cursor-pointer shadow-sm shrink-0">Verificar</button>
             </div>
           </form>
           {codeFeedback.message && (
@@ -315,7 +315,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
       {editorMode === "video" && (
         <div className="bg-black/30 p-2.5 rounded-xl border border-white/5 space-y-2 text-left pt-2.5 mt-2">
           <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider flex items-center gap-1 leading-none">
-            <Music className="w-3 h-3 text-[#14b8a6]" /> Banda Sonora & Transiciones
+            <Music className="w-3 h-3 text-teal-400" /> Banda Sonora & Transiciones
           </span>
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">

@@ -31,12 +31,12 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
     return (
       <div className="flex-1 bg-gradient-to-b from-[#073337] via-[#0a4d52] to-[#041a1c] text-white flex flex-col justify-between p-6 select-none relative overflow-hidden">
         {/* Abstract lights in background */}
-        <div className="absolute top-[-10%] right-[-10%] w-56 h-56 rounded-full bg-[#14b8a6]/20 blur-3xl pointer-events-none"></div>
+        <div className="absolute top-[-10%] right-[-10%] w-56 h-56 rounded-full bg-teal-400/20 blur-3xl pointer-events-none"></div>
         <div className="absolute bottom-[20%] left-[-20%] w-48 h-48 rounded-full bg-[#3ab3b8]/15 blur-2xl pointer-events-none"></div>
 
         {/* Top Spacer / logo */}
         <div className="flex flex-col items-center mt-12 relative z-10">
-          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-[#14b8a6] to-[#3ab3b8] flex items-center justify-center shadow-lg shadow-[#14b8a6]/30 mb-4 animate-pulse">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-teal-400 to-[#3ab3b8] flex items-center justify-center shadow-lg shadow-teal-400/30 mb-4 animate-pulse">
             <span className="text-2xl font-black tracking-tight text-white">R</span>
           </div>
           <h1 className="text-3xl font-extrabold tracking-tight drop-shadow-md">Red On</h1>
@@ -48,7 +48,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
         {/* Dynamic Wave in the middle */}
         <div className="flex flex-col items-center my-6 relative z-10">
           <div className="w-full h-[100px] flex items-center justify-center">
-            <svg viewBox="0 0 100 20" className="w-4/5 h-full opacity-60 text-[#14b8a6]">
+            <svg viewBox="0 0 100 20" className="w-4/5 h-full opacity-60 text-teal-400">
               <path
                 d="M0 10 Q25 0, 50 10 T100 10"
                 fill="none"
@@ -70,7 +70,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
         <div className="relative z-10 mb-6">
           <button
             onClick={() => setStep("register")}
-            className="w-full bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-bold text-xs py-3.5 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-[#14b8a6]/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+            className="w-full bg-teal-400 hover:bg-teal-500 text-white font-bold text-xs py-3.5 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-teal-400/20 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
           >
             Comenzar Ahora
             <ArrowRight className="w-4 h-4" />
@@ -121,9 +121,9 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
               Selecciona tu Avatar
             </label>
             <div className="flex items-center gap-3">
-              <div className="relative w-14 h-14 rounded-2xl overflow-hidden border-2 border-[#14b8a6] p-0.5 shrink-0">
+              <div className="relative w-14 h-14 rounded-2xl overflow-hidden border-2 border-teal-400 p-0.5 shrink-0">
                 <img src={avatar} alt="Selected" className="w-full h-full object-cover rounded-xl" />
-                <span className="absolute bottom-1 right-1 bg-[#14b8a6] text-white p-0.5 rounded-full">
+                <span className="absolute bottom-1 right-1 bg-teal-400 text-white p-0.5 rounded-full">
                   <CheckCircle className="w-3 h-3" />
                 </span>
               </div>
@@ -134,7 +134,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
                     type="button"
                     onClick={() => setAvatar(av)}
                     className={`w-9 h-9 rounded-xl overflow-hidden border transition-all hover:scale-105 ${
-                      avatar === av ? "border-[#14b8a6] scale-105" : "border-slate-200"
+                      avatar === av ? "border-teal-400 scale-105" : "border-slate-200"
                     }`}
                   >
                     <img src={av} alt="Avatar option" className="w-full h-full object-cover" />
@@ -155,7 +155,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
               placeholder="Ej: Nelson Castro"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#14b8a6] focus:bg-white text-xs px-4 py-3 rounded-xl outline-none transition-all text-slate-800 font-medium"
+              className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-teal-400 focus:bg-white text-xs px-4 py-3 rounded-xl outline-none transition-all text-slate-800 font-medium"
             />
           </div>
 
@@ -170,7 +170,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
               placeholder="Ej: +58 412 1234567"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-[#14b8a6] focus:bg-white text-xs px-4 py-3 rounded-xl outline-none transition-all text-slate-800 font-mono font-medium"
+              className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-teal-400 focus:bg-white text-xs px-4 py-3 rounded-xl outline-none transition-all text-slate-800 font-mono font-medium"
             />
           </div>
         </div>

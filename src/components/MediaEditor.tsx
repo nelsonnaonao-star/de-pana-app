@@ -452,7 +452,7 @@ export default function MediaEditor({
 
           {/* Selected Background Music Badge Indicator */}
           {editorMode === "video" && selectedMusicId !== "none" && (
-            <div className="absolute top-2.5 right-2.5 z-10 bg-[#14b8a6] px-2 py-0.5 rounded-full text-[6px] font-bold flex items-center gap-1 text-white shadow animate-pulse">
+            <div className="absolute top-2.5 right-2.5 z-10 bg-teal-400 px-2 py-0.5 rounded-full text-[6px] font-bold flex items-center gap-1 text-white shadow animate-pulse">
               <Music className="w-2.5 h-2.5 text-white animate-spin" />
               <span>{activeMusic?.name.split(" ")[0]}...</span>
             </div>
@@ -502,7 +502,7 @@ export default function MediaEditor({
               onClick={() => setEditorTab(tab.id as any)}
               className={`flex-1 py-2 flex flex-col items-center justify-center gap-1 transition-all rounded-md cursor-pointer ${
                 isActive 
-                  ? "bg-[#14b8a6] text-white shadow-sm" 
+                  ? "bg-teal-400 text-white shadow-sm" 
                   : "text-slate-400 hover:text-slate-200"
               }`}
             >
@@ -562,7 +562,7 @@ export default function MediaEditor({
         </button>
         <button
           onClick={handleExportAndPublishFlyer}
-          className="flex-1 bg-gradient-to-r from-teal-500 to-[#14b8a6] hover:from-teal-400 hover:to-teal-500 text-white font-extrabold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-lg active:scale-98 cursor-pointer"
+          className="flex-1 bg-gradient-to-r from-teal-500 to-teal-400 hover:from-teal-400 hover:to-teal-500 text-white font-extrabold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-lg active:scale-98 cursor-pointer"
         >
           <Check className="w-4 h-4 stroke-[3]" /> {isStateMode ? "PUBLICAR EN MI ESTADO" : "EXPORTAR & PUBLICAR"}
         </button>

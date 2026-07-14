@@ -24,7 +24,7 @@ export default function ChatCustomizer({
   if (!showCustomizer) return null;
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60" onClick={() => setShowCustomizer(false)}>
-      <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 text-white space-y-3 w-[90vw] max-w-[360px] max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 text-white space-y-3 w-[90vw] max-w-[360px] max-h-[80vh] overflow-y-auto shadow-lg" onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between border-b border-slate-800 pb-2">
         <span className="text-[10px] font-black uppercase tracking-wider text-teal-400 flex items-center gap-1">
           <Palette className="w-3.5 h-3.5 text-teal-400 animate-pulse" /> Personalización del Chat
@@ -173,7 +173,7 @@ export default function ChatCustomizer({
                   </span>
                 )}
                 {isSelected && (
-                  <div className="w-4 h-4 rounded-full bg-[#14b8a6] flex items-center justify-center shadow-lg absolute">
+                  <div className="w-4 h-4 rounded-full bg-teal-400 flex items-center justify-center shadow-lg absolute">
                     <Check className="w-2.5 h-2.5 text-white stroke-[4]" />
                   </div>
                 )}

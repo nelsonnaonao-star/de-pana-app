@@ -206,6 +206,32 @@ router.post('/delete', async (req, res) => {
 
     if (error) throw error;
 
+    if (msg.chat_id) {
+      const { data: chat } = await supabaseAdmin
+        .from('chats')
+        .select('last_message')
+        .eq('id', msg.chat_id)
+        .single();
+      if (chat && (chat.last_message === msg.text || !chat.last_message)) {
+        const { data: prevMsg } = await supabaseAdmin
+          .from('messages')
+          .select('text, created_at')
+          .eq('chat_id', msg.chat_id)
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        await supabaseAdmin
+          .from('chats')
+          .update({
+            last_message: prevMsg?.text || '',
+            last_message_time: prevMsg?.created_at || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', msg.chat_id);
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error('[MESSAGES] delete error:', err);

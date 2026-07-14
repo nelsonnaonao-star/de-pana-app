@@ -71,9 +71,14 @@ export default function CallOverlay({
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(() => {});
-      console.log("[CALL OVERLAY] remoteStream attached to video — tracks:", remoteStream.getTracks().map(t => `${t.kind}:${t.readyState}`).join(", "));
+      const v = remoteVideoRef.current;
+      v.srcObject = null;
+      v.srcObject = remoteStream;
+      v.play().catch(() => {});
+      const onLoaded = () => { v.play().catch(() => {}); };
+      v.addEventListener("loadeddata", onLoaded);
+      console.log("[CALL OVERLAY] remoteStream attached — tracks:", remoteStream.getTracks().map(t => `${t.kind}:${t.readyState}:${t.enabled}`).join(", "));
+      return () => v.removeEventListener("loadeddata", onLoaded);
     }
   }, [remoteStream]);
 
@@ -141,7 +146,7 @@ export default function CallOverlay({
             <img
               src={call.contactAvatar}
               alt={call.contactName}
-              className="w-24 h-24 rounded-full object-cover border-4 border-teal-400 relative z-10 shadow-2xl"
+              className="w-24 h-24 rounded-full object-cover border-4 border-teal-400 relative z-10 shadow-lg"
             />
           </div>
           <h2 className="text-2xl font-black tracking-tight">{call.contactName}</h2>
@@ -181,7 +186,7 @@ export default function CallOverlay({
       <div ref={emojiContainerRef} className="absolute inset-0 pointer-events-none z-30 overflow-hidden" />
 
       {call.type === "video" && !call.isVideoOff ? (
-        <div className="absolute inset-0 w-full h-full z-0 bg-slate-900">
+        <div className="absolute inset-0 w-full h-full z-0 bg-black">
           {activeBg !== "none" ? (
             <img
               src={getBackgroundUrl()}
@@ -192,9 +197,11 @@ export default function CallOverlay({
 
           <div className="absolute inset-0 flex items-center justify-center">
             <video
+              key={remoteStream ? "has-stream" : "no-stream"}
               ref={remoteVideoCallback}
               autoPlay playsInline
-              className={`w-full h-full object-cover transition-all ${getFilterClass()} ${activeBg !== "none" ? "opacity-0" : ""} ${!remoteStream ? "hidden" : ""}`}
+              className="absolute inset-0 w-full h-full object-cover"
+              style={{ display: remoteStream ? "block" : "none" }}
             />
             {!remoteStream && (
               <img
@@ -208,7 +215,7 @@ export default function CallOverlay({
             </div>
           </div>
 
-          <div className="absolute top-10 right-4 w-24 h-36 rounded-2xl overflow-hidden border-2 border-teal-400 shadow-2xl bg-slate-950 z-20">
+          <div className="absolute top-10 right-4 w-24 h-36 rounded-2xl overflow-hidden border-2 border-teal-400 shadow-lg bg-slate-950 z-20">
             {localStream ? (
               <video
                 ref={localVideoCallback}
@@ -238,7 +245,7 @@ export default function CallOverlay({
             <img
               src={call.contactAvatar}
               alt={call.contactName}
-              className="w-28 h-28 rounded-full object-cover border-4 border-[#14b8a6] relative z-10 shadow-2xl"
+              className="w-28 h-28 rounded-full object-cover border-4 border-teal-400 relative z-10 shadow-lg"
             />
           </div>
           <div className="text-center mt-6 space-y-1 relative z-10">

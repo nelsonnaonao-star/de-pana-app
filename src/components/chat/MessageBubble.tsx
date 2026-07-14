@@ -95,7 +95,7 @@ export default React.memo(function MessageBubble({
           </div>
         )}
         {activeReactionMenu === msg.id && (
-          <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/80 shadow-2xl overflow-hidden -top-8 ${isMe ? "right-2" : "left-2"}`}>
+          <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden -top-8 ${isMe ? "right-2" : "left-2"}`}>
             <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
               {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
                 <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-base hover:scale-125 transition-transform p-1">{emo}</button>
@@ -203,7 +203,7 @@ export default React.memo(function MessageBubble({
               }
             }}
           >
-            <div className="w-24 h-24 rounded-full border-4 border-[#14b8a6] overflow-hidden bg-teal-950 flex items-center justify-center relative shadow-inner">
+            <div className="w-24 h-24 rounded-full border-4 border-teal-400 overflow-hidden bg-teal-950 flex items-center justify-center relative shadow-inner">
               <div className="absolute inset-0 bg-gradient-to-tr from-teal-500/20 to-transparent"></div>
               <VideoIcon className="w-8 h-8 text-white/85 animate-pulse" />
             </div>
@@ -214,7 +214,7 @@ export default React.memo(function MessageBubble({
         {msg.type === "location" && (
           <div className="space-y-1.5 min-w-[180px]">
             <div
-              className="w-full h-28 rounded-xl overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 flex flex-col items-center justify-center cursor-pointer hover:opacity-85 transition-opacity border border-slate-200"
+              className="w-full h-28 rounded-xl overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 flex flex-col items-center justify-center cursor-pointer hover:opacity-85 transition-opacity border border-slate-100"
               onClick={() => {
                 const url = `https://www.openstreetmap.org/?mlat=${msg.latitude}&mlon=${msg.longitude}&zoom=15`;
                 window.open(url, "_blank");
@@ -249,7 +249,7 @@ export default React.memo(function MessageBubble({
                     }}
                     className={`w-full text-left p-2 rounded-lg border text-[10px] transition-all relative overflow-hidden flex items-center justify-between ${
                       hasVoted
-                        ? "border-[#14b8a6] bg-teal-50/50"
+                        ? "border-teal-400 bg-teal-50/50"
                         : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
                     }`}
                   >
@@ -296,7 +296,7 @@ export default React.memo(function MessageBubble({
       )}
 
       {activeReactionMenu === msg.id && (
-        <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-200/80 shadow-2xl overflow-hidden -top-8 ${
+        <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden -top-8 ${
           isMe ? "right-2" : "left-2"
         }`}>
           <div className="flex gap-1 px-3 py-2 border-b border-slate-100">

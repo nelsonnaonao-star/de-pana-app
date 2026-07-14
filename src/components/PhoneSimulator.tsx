@@ -180,6 +180,7 @@ export default function PhoneSimulator({
   const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [refetchTrigger, setRefetchTrigger] = useState(0);
+  const deletedChatIdsRef = useRef<Set<string>>(new Set());
 
   // Active Call Screen Overlay
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
@@ -511,7 +512,9 @@ export default function PhoneSimulator({
   // Load Supabase chats when available (dedup already done in getChats service)
   useEffect(() => {
     if (supabaseChats.length > 0 && user) {
-      const mapped = supabaseChats.map((sc: any) => ({
+      const mapped = supabaseChats
+        .filter((sc: any) => !deletedChatIdsRef.current.has(sc.id))
+        .map((sc: any) => ({
         id: sc.id,
         name: sc.name,
         avatar: sc.avatar || "",
@@ -1073,6 +1076,7 @@ export default function PhoneSimulator({
   };
 
   const handleDeleteChat = async (chatId: string) => {
+    deletedChatIdsRef.current.add(chatId);
     setChats(prev => prev.filter(c => c.id !== chatId));
     setSwipedChatId(null);
     setContextMenuChat(null);
@@ -1145,7 +1149,7 @@ export default function PhoneSimulator({
     <div className="relative w-screen h-screen bg-white flex flex-col overflow-hidden select-none">
       {/* Toast Alert Notification */}
       {toastMessage && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[100] bg-slate-950/90 backdrop-blur-md text-white text-[10px] font-black px-4 py-2 rounded-2xl border border-teal-500/30 flex items-center gap-2 shadow-2xl animate-fade-in pointer-events-none">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[100] bg-slate-950/90 backdrop-blur-md text-white text-[10px] font-black px-4 py-2 rounded-2xl border border-teal-500/30 flex items-center gap-2 shadow-lg animate-fade-in pointer-events-none">
           <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-ping"></span>
           {toastMessage}
         </div>
@@ -1257,9 +1261,20 @@ export default function PhoneSimulator({
               onTriggerCall={handleTriggerCallFromChat}
               onForwardMessage={setForwardingMessage}
               onChatDeleted={(chatId) => {
+                deletedChatIdsRef.current.add(chatId);
                 setChats(prev => prev.filter(c => c.id !== chatId));
                 setSelectedChatId(null);
                 setCurrentScreen("chats");
+              }}
+              onMessageDeleted={(chatId, messageId) => {
+                setChats(prev => prev.map(c => {
+                  if (c.id !== chatId) return c;
+                  const remaining = c.messages.filter(m => m.id !== messageId);
+                  const last = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+                  const newLastMsg = last ? (last.text || "Archivo multimedia") : "";
+                  const newLastTime = last ? last.timestamp : "";
+                  return { ...c, lastMessage: newLastMsg, lastMessageTime: newLastTime, messages: remaining };
+                }));
               }}
               currentUserId={user?.id}
               currentUserName={profile?.name}
@@ -1470,7 +1485,7 @@ export default function PhoneSimulator({
                     <div className="flex items-center gap-2.5">
                       <button 
                         onClick={() => setCurrentScreen("qr_scanner")}
-                        className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center border border-white/10 text-white transition-all cursor-pointer animate-pulse-subtle"
+                        className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center border border-white/10 text-white transition-all cursor-pointer"
                         title="Escanear QR"
                       >
                         <QrCode className="w-4 h-4" />
@@ -1496,7 +1511,7 @@ export default function PhoneSimulator({
                       placeholder="Search"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-white text-slate-800 placeholder-slate-400 text-xs pl-10 pr-4 py-2.5 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100 outline-none transition-all focus:ring-2 focus:ring-[#14b8a6]/20"
+                      className="w-full bg-white text-slate-800 placeholder-slate-400 text-xs pl-10 pr-4 py-2.5 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100 outline-none transition-all focus:ring-2 focus:ring-teal-400/20"
                     />
                   </div>
                 </div>
@@ -1692,11 +1707,11 @@ export default function PhoneSimulator({
                             
                             <div className="flex-1 min-w-0 pt-0.5">
                               <div className="flex justify-between items-baseline mb-0.5">
-                                <h4 className="text-xs font-bold text-slate-950 truncate">{chat.name}</h4>
-                                <span className="text-[9px] text-slate-400 font-medium">{chat.lastMessageTime}</span>
+                                <h4 className="text-sm font-bold text-slate-950 truncate">{chat.name}</h4>
+                                <span className="text-[10px] text-slate-400 font-medium">{chat.lastMessageTime}</span>
                               </div>
                               <div className="flex items-center justify-between gap-1">
-                                <p className="text-[11px] text-slate-500 truncate max-w-[180px]">{chat.lastMessage}</p>
+                                <p className="text-xs text-slate-500 truncate max-w-[180px]">{chat.lastMessage}</p>
                                 
                                 {chat.unreadCount > 0 ? (
                                   <span className="bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center shadow-sm shrink-0">
@@ -1726,7 +1741,7 @@ export default function PhoneSimulator({
                   <>
                     <div className="fixed inset-0 z-50" onClick={closeContextMenu} />
                     <div
-                      className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1 min-w-[200px] animate-fade-in"
+                      className="fixed z-50 bg-white rounded-xl shadow-lg border border-slate-200 py-1 min-w-[200px] animate-fade-in"
                       style={{
                         top: Math.min(contextMenuPos.y, window.innerHeight - 160),
                         left: Math.min(contextMenuPos.x, window.innerWidth - 220),
@@ -2150,7 +2165,7 @@ export default function PhoneSimulator({
                     {/* MODAL / DRAWER INTERACTIVE OVERLAYS */}
                     {activeSettingsModal && (
                       <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm z-30 flex flex-col justify-end animate-fade-in">
-                        <div className="bg-white rounded-t-3xl p-5 space-y-4 max-h-[85%] overflow-y-auto border-t border-slate-100 shadow-2xl text-left animate-slide-up">
+                        <div className="bg-white rounded-t-3xl p-5 space-y-4 max-h-[85%] overflow-y-auto border-t border-slate-100 shadow-lg text-left animate-slide-up">
                           {/* Header of Modal */}
                           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                             <h4 className="text-[10px] font-black text-[#0a4d52] uppercase tracking-wider">
@@ -2632,7 +2647,7 @@ export default function PhoneSimulator({
           {/* FORWARD MESSAGE MODAL */}
           {forwardingMessage && (
             <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60" onClick={() => setForwardingMessage(null)}>
-              <div className="bg-white rounded-2xl p-4 w-[90vw] max-w-[360px] max-h-[80vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+              <div className="bg-white rounded-2xl p-4 w-[90vw] max-w-[360px] max-h-[80vh] overflow-y-auto shadow-lg" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center gap-2 mb-3">
                   <Forward className="w-4 h-4 text-teal-600" />
                   <h3 className="text-sm font-extrabold text-slate-900">Reenviar mensaje</h3>

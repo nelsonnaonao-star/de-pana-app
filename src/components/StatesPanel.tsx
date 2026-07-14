@@ -313,7 +313,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
             <Clock className="w-4 h-4 text-teal-300" />
             <h3 className="text-xs font-black tracking-tight">Estados de Red On</h3>
           </div>
-          <span className="text-[8px] bg-[#14b8a6] text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+          <span className="text-[8px] bg-teal-400 text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
             Momentáneos (24h)
           </span>
         </div>
@@ -390,7 +390,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                       </div>
                       
                       <div>
-                        <h5 className="text-[10px] font-bold text-slate-800 leading-none group-hover:text-[#14b8a6]">
+                        <h5 className="text-[10px] font-bold text-slate-800 leading-none group-hover:text-teal-400">
                           Ver mis estados ({myStories.length})
                         </h5>
                         <span className="text-[8px] text-slate-400 font-mono mt-1 block">
@@ -410,7 +410,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                         className="flex items-center justify-between bg-slate-50 p-2 rounded-xl text-[9px] font-medium"
                       >
                         <div className="flex items-center gap-2 truncate max-w-[180px]">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#14b8a6]"></span>
+                          <span className="w-1.5 h-1.5 rounded-full bg-teal-400"></span>
                           <span className="text-slate-600 truncate italic">
                             {story.type === "text" ? story.content : `[Foto] ${story.caption || ""}`}
                           </span>
@@ -456,7 +456,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                       <div className="relative">
                         <div className={`absolute inset-0 rounded-full scale-110 border-2 ${
                           userState.hasUnseen 
-                            ? "border-[#14b8a6] animate-pulse" 
+                            ? "border-teal-400 animate-pulse" 
                             : "border-slate-200"
                         }`}></div>
                         <img
@@ -547,7 +547,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
             <button
               onClick={handlePublishText}
               disabled={!newTextContent.trim()}
-              className="w-full bg-[#14b8a6] hover:bg-[#1bc3bd] text-white disabled:opacity-50 disabled:pointer-events-none font-bold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
+              className="w-full bg-teal-400 hover:bg-teal-500 text-white disabled:opacity-50 disabled:pointer-events-none font-bold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
             >
               <Check className="w-4 h-4" /> Compartir en Mi Estado
             </button>
@@ -581,7 +581,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                     type="button"
                     onClick={() => setSelectedImageUrl(p.url)}
                     className={`aspect-square rounded-xl overflow-hidden border-2 relative hover:scale-105 transition-all cursor-pointer ${
-                      selectedImageUrl === p.url ? "border-[#14b8a6]" : "border-transparent opacity-75"
+                      selectedImageUrl === p.url ? "border-teal-400" : "border-transparent opacity-75"
                     }`}
                   >
                     <img src={p.url} alt="Option" className="w-full h-full object-cover" />
@@ -650,7 +650,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
             {/* Bottom Actions */}
             <button
               onClick={handlePublishImage}
-              className="w-full bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-bold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
+              className="w-full bg-teal-400 hover:bg-teal-500 text-white font-bold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
             >
               <Check className="w-4 h-4" /> Compartir en Mi Estado
             </button>
@@ -673,7 +673,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                 className="flex-1 h-1 bg-white/20 rounded-full overflow-hidden"
               >
                 <div 
-                  className="h-full bg-[#14b8a6] rounded-full transition-all duration-100 ease-linear"
+                  className="h-full bg-teal-400 rounded-full transition-all duration-100 ease-linear"
                   style={{
                     width: idx < activeStoryIdx ? "100%" : idx === activeStoryIdx ? `${storyProgress}%` : "0%"
                   }}
@@ -787,11 +787,11 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                 placeholder="Responder al estado de manera privada..."
                 value={storyReplyText}
                 onChange={(e) => setStoryReplyText(e.target.value)}
-                className="flex-1 bg-white/10 text-white placeholder-slate-400 text-[10px] px-3.5 py-2.5 rounded-xl border border-white/10 outline-none focus:border-[#14b8a6]"
+                className="flex-1 bg-white/10 text-white placeholder-slate-400 text-[10px] px-3.5 py-2.5 rounded-xl border border-white/10 outline-none focus:border-teal-400"
               />
               <button
                 type="submit"
-                className="w-9 h-9 bg-[#14b8a6] hover:bg-[#1bc3bd] text-white rounded-xl flex items-center justify-center shrink-0 transition-all cursor-pointer"
+                className="w-9 h-9 bg-teal-400 hover:bg-teal-500 text-white rounded-xl flex items-center justify-center shrink-0 transition-all cursor-pointer"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -812,7 +812,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
       {/* ========================================================= */}
       {showPublishDecisionModal && uploadedMedia && (
         <div className="absolute inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in text-left">
-          <div className="bg-slate-900 border border-slate-800/80 rounded-3xl w-full max-w-[280px] overflow-hidden shadow-2xl p-5 text-center space-y-4">
+          <div className="bg-slate-900 border border-slate-800/80 rounded-3xl w-full max-w-[280px] overflow-hidden shadow-lg p-5 text-center space-y-4">
             
             {/* Pulsing visual icon indicator */}
             <div className="relative mx-auto w-12 h-12 flex items-center justify-center bg-teal-500/10 border border-teal-500/30 rounded-2xl">

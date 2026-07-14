@@ -39,7 +39,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             <button
               // @ts-ignore
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="px-6 py-3 bg-gradient-to-r from-[#14b8a6] to-[#0a4d52] text-white font-bold rounded-xl active:scale-95 transition-transform"
+              className="px-6 py-3 bg-gradient-to-r from-teal-400 to-[#0a4d52] text-white font-bold rounded-xl active:scale-95 transition-transform"
             >
               Intentar de nuevo
             </button>

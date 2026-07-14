@@ -61,7 +61,7 @@ export default function AuthScreen() {
 
       <div className="w-full max-w-md relative z-10">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-[#14b8a6] to-[#0a4d52] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-teal-500/20">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-teal-400 to-[#0a4d52] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-teal-500/20">
             <span className="text-2xl font-black text-white">R</span>
           </div>
           <h1 className="text-3xl font-black text-white tracking-tight">Red On</h1>
@@ -247,7 +247,7 @@ export default function AuthScreen() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 bg-gradient-to-r from-[#14b8a6] to-[#0a4d52] hover:from-[#1bc3bd] hover:to-[#10646a] text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
+                  className="w-full py-3 bg-gradient-to-r from-teal-400 to-[#0a4d52] hover:from-teal-500 hover:to-[#10646a] text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {loading ? (
                     <span className="flex items-center gap-2">

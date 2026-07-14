@@ -233,7 +233,7 @@ export default function ChannelsPanel() {
             <Users className="w-4 h-4 text-teal-300 animate-pulse" />
             <h3 className="text-xs font-black tracking-tight">Canales Informativos</h3>
           </div>
-          <span className="text-[8px] bg-[#14b8a6] text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+          <span className="text-[8px] bg-teal-400 text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
             Unidireccional
           </span>
         </div>
@@ -260,7 +260,7 @@ export default function ChannelsPanel() {
               </div>
               <button
                 onClick={() => setCurrentView("create")}
-                className="bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-black text-[9px] px-3.5 py-2.5 rounded-xl transition-all shadow cursor-pointer flex items-center gap-1"
+                className="bg-teal-400 hover:bg-teal-500 text-white font-black text-[9px] px-3.5 py-2.5 rounded-xl transition-all shadow cursor-pointer flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5 stroke-[3]" /> Crear
               </button>
@@ -371,7 +371,7 @@ export default function ChannelsPanel() {
                   className={`text-[8px] font-black px-2.5 py-1.5 rounded-lg transition-all cursor-pointer ${
                     activeChannel.isJoined
                       ? "bg-slate-100 text-slate-400 border border-slate-200/50"
-                      : "bg-[#14b8a6] text-white shadow-sm"
+                      : "bg-teal-400 text-white shadow-sm"
                   }`}
                 >
                   {activeChannel.isJoined ? "Siguiendo" : "Seguir"}
@@ -470,7 +470,7 @@ export default function ChannelsPanel() {
                   placeholder="Publica un nuevo mensaje en tu canal..."
                   value={newUpdateText}
                   onChange={(e) => setNewUpdateText(e.target.value)}
-                  className="flex-1 bg-slate-50 border text-[9.5px] px-3.5 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                  className="flex-1 bg-slate-50 border text-[9.5px] px-3.5 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                 />
                 <button
                   type="submit"
@@ -514,7 +514,7 @@ export default function ChannelsPanel() {
                   placeholder="Ej: Emprendimientos CCS"
                   value={newChanName}
                   onChange={(e) => setNewChanName(e.target.value)}
-                  className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white font-semibold"
+                  className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white font-semibold"
                 />
               </div>
 
@@ -529,7 +529,7 @@ export default function ChannelsPanel() {
                   placeholder="Ej: Descuentos, promociones e información de comercio local..."
                   value={newChanDesc}
                   onChange={(e) => setNewChanDesc(e.target.value)}
-                  className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                  className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                 />
               </div>
 
@@ -545,7 +545,7 @@ export default function ChannelsPanel() {
                       type="button"
                       onClick={() => setSelectedAvatarIdx(idx)}
                       className={`aspect-square rounded-xl overflow-hidden border-2 relative hover:scale-105 transition-all cursor-pointer ${
-                        selectedAvatarIdx === idx ? "border-[#14b8a6]" : "border-transparent opacity-75"
+                        selectedAvatarIdx === idx ? "border-teal-400" : "border-transparent opacity-75"
                       }`}
                     >
                       <img src={avatarUrl} alt="Option" className="w-full h-full object-cover" />

@@ -316,7 +316,7 @@ export default function BusinessPanel({
           <button
             onClick={() => setActiveSubTab("feed")}
             className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
-              activeSubTab === "feed" ? "bg-[#14b8a6] text-white" : "text-slate-300 hover:text-white"
+              activeSubTab === "feed" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
             Feed
@@ -324,7 +324,7 @@ export default function BusinessPanel({
           <button
             onClick={() => setActiveSubTab("create")}
             className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
-              activeSubTab === "create" ? "bg-[#14b8a6] text-white" : "text-slate-300 hover:text-white"
+              activeSubTab === "create" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
             Publicar
@@ -332,7 +332,7 @@ export default function BusinessPanel({
           <button
             onClick={() => setActiveSubTab("editor")}
             className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
-              activeSubTab === "editor" ? "bg-[#14b8a6] text-white" : "text-slate-300 hover:text-white"
+              activeSubTab === "editor" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
             Editor Pro 🎨
@@ -340,7 +340,7 @@ export default function BusinessPanel({
           <button
             onClick={() => setActiveSubTab("stats")}
             className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
-              activeSubTab === "stats" ? "bg-[#14b8a6] text-white" : "text-slate-300 hover:text-white"
+              activeSubTab === "stats" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
 }`}
           >
             Mis Stats
@@ -364,7 +364,7 @@ export default function BusinessPanel({
                 placeholder="Buscar productos, negocios o ubicaciones..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-white text-slate-800 text-[10px] pl-8 pr-3 py-2 rounded-xl border border-slate-200 shadow-sm outline-none focus:border-[#14b8a6] transition-all"
+                className="w-full bg-white text-slate-800 text-[10px] pl-8 pr-3 py-2 rounded-xl border border-slate-200 shadow-sm outline-none focus:border-teal-400 transition-all"
               />
             </div>
 
@@ -401,7 +401,7 @@ export default function BusinessPanel({
                       {/* Views / Clicks statistics indicator */}
                       <div className="flex items-center gap-2 text-[9px] text-slate-500 font-mono">
                         <span className="flex items-center gap-0.5" title="Visualizaciones">
-                          <Eye className="w-3 h-3 text-[#14b8a6]" /> {flyer.views}
+                          <Eye className="w-3 h-3 text-teal-400" /> {flyer.views}
                         </span>
                         <span className="flex items-center gap-0.5" title="Clicks a Chat">
                           <MousePointerClick className="w-3 h-3 text-indigo-500" /> {flyer.clicks}
@@ -423,7 +423,7 @@ export default function BusinessPanel({
                             <span className="text-[8px] font-bold bg-white/20 border border-white/20 px-2 py-0.5 rounded-full uppercase">
                               Producto Destacado
                             </span>
-                            <span className="text-xs font-black bg-[#14b8a6] text-white px-2.5 py-0.5 rounded-lg shadow-md font-mono">
+                            <span className="text-xs font-black bg-teal-400 text-white px-2.5 py-0.5 rounded-lg shadow-md font-mono">
                               {flyer.price}
                             </span>
                           </div>
@@ -460,7 +460,7 @@ export default function BusinessPanel({
                               {flyer.description}
                             </p>
                             <span className="text-[8px] text-slate-300 flex items-center gap-1 mt-1 font-medium">
-                              <MapPin className="w-3 h-3 text-[#14b8a6]" /> {flyer.location}
+                              <MapPin className="w-3 h-3 text-teal-400" /> {flyer.location}
                             </span>
                           </div>
                         </>
@@ -560,7 +560,7 @@ export default function BusinessPanel({
             {createMode === "upload" && (
               <form onSubmit={handlePublishManual} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-4">
                 <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5 border-b pb-2">
-                  <ImageIcon className="w-4 h-4 text-[#14b8a6]" /> Datos del Negocio & Flyer
+                  <ImageIcon className="w-4 h-4 text-teal-400" /> Datos del Negocio & Flyer
                 </h4>
 
                 <div className="space-y-3.5">
@@ -575,7 +575,7 @@ export default function BusinessPanel({
                       placeholder="Ej: Burger House Premium"
                       value={upName}
                       onChange={(e) => setUpName(e.target.value)}
-                      className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                      className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                     />
                   </div>
 
@@ -590,7 +590,7 @@ export default function BusinessPanel({
                       placeholder="Ej: Las mejores hamburguesas gourmet con papas fritas y salsas de la casa en Caracas..."
                       value={upDesc}
                       onChange={(e) => setUpDesc(e.target.value)}
-                      className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                      className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                     />
                   </div>
 
@@ -605,7 +605,7 @@ export default function BusinessPanel({
                       placeholder="Ej: Altamira, Caracas, Venezuela"
                       value={upLoc}
                       onChange={(e) => setUpLoc(e.target.value)}
-                      className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                      className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                     />
                   </div>
 
@@ -621,7 +621,7 @@ export default function BusinessPanel({
                           type="button"
                           onClick={() => setUpFlyerUrl(sample)}
                           className={`aspect-square rounded-xl overflow-hidden border-2 relative hover:scale-105 transition-all ${
-                            upFlyerUrl === sample ? "border-[#14b8a6]" : "border-transparent opacity-75 hover:opacity-100"
+                            upFlyerUrl === sample ? "border-teal-400" : "border-transparent opacity-75 hover:opacity-100"
                           }`}
                         >
                           <img src={sample} alt="Option" className="w-full h-full object-cover" />
@@ -662,7 +662,7 @@ export default function BusinessPanel({
                       {uploadingImage ? "Subiendo imagen..." : "Subir tu propia imagen"}
                     </button>
                     {upFlyerUrl && !FLYER_SAMPLES.includes(upFlyerUrl) && (
-                      <div className="relative mt-2 rounded-xl overflow-hidden border-2 border-[#14b8a6]">
+                      <div className="relative mt-2 rounded-xl overflow-hidden border-2 border-teal-400">
                         <img src={upFlyerUrl} alt="Tu imagen" className="w-full h-28 object-cover" />
                         <button
                           type="button"
@@ -686,7 +686,7 @@ export default function BusinessPanel({
                     <select
                       value={upMusicId}
                       onChange={(e) => setUpMusicId(e.target.value)}
-                      className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-[#14b8a6] font-medium"
+                      className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-teal-400 font-medium"
                     >
                       {MUSIC_PRESETS.map((m) => (
                         <option key={m.id} value={m.id}>{m.name}</option>
@@ -698,7 +698,7 @@ export default function BusinessPanel({
                 <button
                   type="submit"
                   disabled={publishing}
-                  className="w-full bg-[#14b8a6] hover:bg-[#1bc3bd] text-white font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md mt-4 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-teal-400 hover:bg-teal-500 text-white font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md mt-4 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {publishing ? (
                     <>
@@ -727,7 +727,7 @@ export default function BusinessPanel({
                         onClick={() => setGenTemplateId(t.id as any)}
                         className={`p-2.5 text-center text-[10px] font-bold rounded-xl border transition-all cursor-pointer ${
                           genTemplateId === t.id 
-                            ? "border-[#14b8a6] bg-teal-50 text-[#0a4d52]" 
+                            ? "border-teal-400 bg-teal-50 text-[#0a4d52]" 
                             : "border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
                         }`}
                       >
@@ -755,7 +755,7 @@ export default function BusinessPanel({
                         placeholder="Ej: TechStore C.A."
                         value={genName}
                         onChange={(e) => setGenName(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                       />
                     </div>
 
@@ -770,7 +770,7 @@ export default function BusinessPanel({
                         placeholder="Ej: Smartwatch Pro Serie 9"
                         value={genProduct}
                         onChange={(e) => setGenProduct(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                       />
                     </div>
 
@@ -785,7 +785,7 @@ export default function BusinessPanel({
                         placeholder="Ej: $29.99"
                         value={genPrice}
                         onChange={(e) => setGenPrice(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                       />
                     </div>
 
@@ -800,7 +800,7 @@ export default function BusinessPanel({
                         placeholder="Ej: Resistente al agua, monitoreo de salud completo, batería de larga duración. ¡Garantía de 1 año!"
                         value={genDesc}
                         onChange={(e) => setGenDesc(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                        className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                       />
                     </div>
 
@@ -815,7 +815,7 @@ export default function BusinessPanel({
                         placeholder="Ej: CC Sambil Chacao, Caracas"
                         value={genLoc}
                         onChange={(e) => setGenLoc(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-[#14b8a6] focus:bg-white"
+                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                       />
                     </div>
 
@@ -827,7 +827,7 @@ export default function BusinessPanel({
                       <select
                         value={genMusicId}
                         onChange={(e) => setGenMusicId(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-[#14b8a6] font-medium"
+                        className="w-full bg-slate-50 border text-[10px] px-3 py-2 rounded-xl outline-none focus:border-teal-400 font-medium"
                       >
                         {MUSIC_PRESETS.map((m) => (
                           <option key={m.id} value={m.id}>{m.name}</option>
@@ -848,7 +848,7 @@ export default function BusinessPanel({
                         <span className="text-[7px] font-bold bg-white/20 border border-white/20 px-1.5 py-0.5 rounded uppercase">
                           {genName || "NOMBRE MARCA"}
                         </span>
-                        <span className="text-[10px] font-black bg-[#14b8a6] text-white px-2 py-0.5 rounded font-mono">
+                        <span className="text-[10px] font-black bg-teal-400 text-white px-2 py-0.5 rounded font-mono">
                           {genPrice || "$0.00"}
                         </span>
                       </div>
@@ -956,7 +956,7 @@ export default function BusinessPanel({
                       </span>
                     </div>
 
-                    <span className="text-[8px] font-extrabold bg-[#14b8a6]/10 text-[#0a4d52] px-2 py-0.5 rounded-full uppercase">
+                    <span className="text-[8px] font-extrabold bg-teal-400/10 text-[#0a4d52] px-2 py-0.5 rounded-full uppercase">
                       {flyer.isGenerated ? "Generado" : "Manual"}
                     </span>
                   </div>
@@ -980,7 +980,7 @@ export default function BusinessPanel({
                   <p className="text-xs font-semibold">Aún no has publicado ningún flyer</p>
                   <button
                     onClick={() => setActiveSubTab("create")}
-                    className="text-[10px] text-[#14b8a6] hover:underline font-bold"
+                    className="text-[10px] text-teal-400 hover:underline font-bold"
                   >
                     ¡Crea tu primer flyer ahora!
                   </button>
@@ -997,7 +997,7 @@ export default function BusinessPanel({
       {/* ======================================= */}
       {publishSuccess && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[200] flex items-center justify-center animate-fade-in">
-          <div className="bg-white rounded-3xl p-8 mx-6 text-center space-y-3 shadow-2xl scale-in-center">
+          <div className="bg-white rounded-3xl p-8 mx-6 text-center space-y-3 shadow-lg scale-in-center">
             <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
               <Check className="w-8 h-8 text-emerald-500" />
             </div>
@@ -1030,7 +1030,7 @@ export default function BusinessPanel({
                   <span className="text-[10px] font-bold bg-white/20 border border-white/20 px-3 py-1 rounded-full uppercase">
                     Producto Destacado
                   </span>
-                  <span className="text-lg font-black bg-[#14b8a6] text-white px-4 py-1 rounded-xl shadow-lg font-mono">
+                  <span className="text-lg font-black bg-teal-400 text-white px-4 py-1 rounded-xl shadow-lg font-mono">
                     {viewingFlyer.price}
                   </span>
                 </div>
@@ -1067,7 +1067,7 @@ export default function BusinessPanel({
               <img
                 src={viewingFlyer.ownerAvatar}
                 alt={viewingFlyer.ownerName}
-                className="w-10 h-10 rounded-full object-cover border-2 border-[#14b8a6]"
+                className="w-10 h-10 rounded-full object-cover border-2 border-teal-400"
               />
               <div className="flex-1">
                 <h3 className="text-sm font-black text-slate-900 leading-tight">
@@ -1089,13 +1089,13 @@ export default function BusinessPanel({
 
             {/* Location */}
             <div className="flex items-center gap-2 bg-slate-50 rounded-xl p-3">
-              <MapPin className="w-4 h-4 text-[#14b8a6]" />
+              <MapPin className="w-4 h-4 text-teal-400" />
               <span className="text-[10px] text-slate-600 font-medium">{viewingFlyer.location}</span>
             </div>
 
             {/* Price (if exists) */}
             {viewingFlyer.price && (
-              <div className="flex items-center gap-2 bg-[#14b8a6]/10 rounded-xl p-3">
+              <div className="flex items-center gap-2 bg-teal-400/10 rounded-xl p-3">
                 <Tag className="w-4 h-4 text-[#0a4d52]" />
                 <span className="text-[11px] text-[#0a4d52] font-black">{viewingFlyer.price}</span>
               </div>
@@ -1104,7 +1104,7 @@ export default function BusinessPanel({
             {/* Stats row */}
             <div className="grid grid-cols-2 gap-3">
               <div className="flex items-center justify-center gap-2 bg-slate-50 rounded-xl p-3">
-                <Eye className="w-4 h-4 text-[#14b8a6]" />
+                <Eye className="w-4 h-4 text-teal-400" />
                 <span className="text-[10px] font-bold text-slate-700">{viewingFlyer.views} vistas</span>
               </div>
               <div className="flex items-center justify-center gap-2 bg-slate-50 rounded-xl p-3">
