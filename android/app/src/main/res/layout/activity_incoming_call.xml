@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0A4D52">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center_horizontal">
+
+        <!-- Top label -->
+        <TextView
+            android:id="@+id/call_type_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="80dp"
+            android:text="Videollamada Entrante"
+            android:textColor="#80CBC4"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:background="#1A1E88E5"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="6dp" />
+
+        <!-- Avatar with pulse ring -->
+        <FrameLayout
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:layout_marginTop="40dp">
+
+            <View
+                android:id="@+id/pulse_ring"
+                android:layout_width="120dp"
+                android:layout_height="120dp"
+                android:background="#2026A69A" />
+
+            <ImageView
+                android:id="@+id/caller_avatar"
+                android:layout_width="100dp"
+                android:layout_height="100dp"
+                android:layout_gravity="center"
+                android:src="@mipmap/ic_launcher"
+                android:scaleType="centerCrop"
+                android:background="#37474F" />
+        </FrameLayout>
+
+        <!-- Caller name -->
+        <TextView
+            android:id="@+id/caller_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Llamada entrante"
+            android:textColor="@android:color/white"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <!-- Subtitle -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Red On Cifrado Extremo"
+            android:textColor="#80CBC4"
+            android:textSize="12sp" />
+
+        <!-- Encrypted badge -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="#1A000000"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="4dp"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🔒 "
+                android:textSize="10sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Cifrado Extremo a Extremo"
+                android:textColor="#B0BEC5"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- Bottom buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:layout_marginBottom="100dp"
+            android:paddingHorizontal="48dp">
+
+            <!-- Decline button -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <ImageButton
+                    android:id="@+id/btn_decline"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:src="@drawable/ic_call_decline"
+                    android:background="@drawable/bg_circle_red"
+                    android:scaleType="center"
+                    android:contentDescription="Rechazar" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Rechazar"
+                    android:textColor="#EF5350"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <!-- Answer button -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <ImageButton
+                    android:id="@+id/btn_answer"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
+                    android:src="@drawable/ic_call_answer"
+                    android:background="@drawable/bg_circle_green"
+                    android:scaleType="center"
+                    android:contentDescription="Aceptar" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Aceptar"
+                    android:textColor="#66BB6A"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- "Slide to answer" hint -->
+    <TextView
+        android:id="@+id/swipe_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="60dp"
+        android:text="Desliza para responder"
+        android:textColor="#40FFFFFF"
+        android:textSize="11sp" />
+
+</FrameLayout>

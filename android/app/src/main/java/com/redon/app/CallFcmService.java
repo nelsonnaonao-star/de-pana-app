@@ -52,9 +52,9 @@ public class CallFcmService extends FirebaseMessagingService {
                 Log.e(TAG, "Failed to bridge to Capacitor JS", e);
             }
         } else {
-            // App is in background: show native notification
+            // App is in background: show native notification OR full-screen activity
             if ("call".equals(type)) {
-                showCallNotification(message);
+                showIncomingCallActivity(message);
             } else {
                 showMessageNotification(message);
             }
@@ -73,6 +73,31 @@ public class CallFcmService extends FirebaseMessagingService {
             }
         }
         return false;
+    }
+
+    private void showIncomingCallActivity(RemoteMessage message) {
+        String chatId = message.getData().get("chatId");
+        String callerId = message.getData().get("callerId");
+        String callerName = message.getData().get("callerName");
+        String callType = message.getData().get("callType");
+        if (callType == null) callType = "audio";
+        if (callerName == null) callerName = "Llamada entrante";
+
+        int notificationId = ("call-" + (chatId != null ? chatId : "")).hashCode();
+
+        Intent intent = new Intent(this, IncomingCallActivity.class);
+        intent.putExtra("chatId", chatId);
+        intent.putExtra("callerId", callerId);
+        intent.putExtra("callerName", callerName);
+        intent.putExtra("callType", callType);
+        intent.putExtra("notificationId", notificationId);
+        intent.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK
+            | Intent.FLAG_ACTIVITY_NO_USER_ACTION
+        );
+
+        Log.d(TAG, "Launching IncomingCallActivity for: " + callerName);
+        startActivity(intent);
     }
 
     private void showCallNotification(RemoteMessage message) {
