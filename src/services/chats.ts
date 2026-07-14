@@ -173,15 +173,26 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
 }
 
 export async function deleteChat(chatId: string, userId: string) {
-  const { authFetch, apiUrl } = await import("../lib/api");
-  const res = await authFetch(apiUrl(`/api/data/chats/${chatId}?userId=${userId}`), {
-    method: "DELETE",
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || "Error al eliminar chat");
+  try {
+    const { authFetch, apiUrl } = await import("../lib/api");
+    const res = await authFetch(apiUrl(`/api/data/chats/${chatId}?userId=${userId}`), {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || "Error al eliminar chat");
+    }
+    return res.json();
+  } catch (serverErr) {
+    console.warn("[CHAT] Server delete failed, falling back to Supabase:", serverErr);
+    const { error } = await supabase
+      .from("chats")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", chatId);
+    if (error) throw error;
+    await supabase.from("chat_participants").delete().eq("chat_id", chatId);
+    return { success: true };
   }
-  return res.json();
 }
 
 export async function updateChat(chatId: string, updates: Partial<Chat>) {
