@@ -273,6 +273,8 @@ public class CallFcmService extends FirebaseMessagingService {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
+        Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/notificacion");
+
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_MESSAGES)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
@@ -281,6 +283,7 @@ public class CallFcmService extends FirebaseMessagingService {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
+            .setSound(soundUri)
             .setVibrate(new long[]{0, 300, 200, 300})
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setColor(Color.parseColor("#1E88E5"));

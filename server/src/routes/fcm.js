@@ -121,6 +121,7 @@ router.post('/send', async (req, res) => {
             const { callerAvatar, ...safeCallData } = callData;
             await admin.messaging().send({
               token: t.token,
+              notification: { title: title || 'RED ON', body: notifBody },
               data: {
                 title: title || 'RED ON', body: notifBody,
                 badge: '1', notificationCount: '1',
@@ -129,6 +130,11 @@ router.post('/send', async (req, res) => {
               },
               android: {
                 priority: 'high', ttl: 86400000,
+                notification: {
+                  channel_id: 'redon-calls', tag: 'call-' + (safeCallData.chatId || ''),
+                  click_action: 'ANSWER_CALL', notification_count: 1,
+                  visibility: 'public', sound: 'ringtone',
+                },
               },
             });
           } else {
@@ -393,6 +399,7 @@ router.post('/webhook', async (req, res) => {
           try {
             await admin.messaging().send({
               token: t.token,
+              notification: { title: callerName, body: 'Llamada entrante' },
               data: {
                 title: callerName, body: 'Llamada entrante',
                 badge: '1', notificationCount: '1',
@@ -403,6 +410,11 @@ router.post('/webhook', async (req, res) => {
               },
               android: {
                 priority: 'high', ttl: 86400000,
+                notification: {
+                  channel_id: 'redon-calls', tag: 'call-' + chat_id,
+                  click_action: 'ANSWER_CALL', notification_count: 1,
+                  visibility: 'public', sound: 'ringtone',
+                },
               },
             });
             results.android++;

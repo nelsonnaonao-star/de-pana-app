@@ -169,8 +169,9 @@ export default function PhoneSimulator({
         return;
       }
 
-      // 6. Root screen "chats" — let default behavior minimize the app
-      console.log("[BACK] Root screen — allowing app minimize");
+      // 6. Root screen "chats" — minimize the app
+      console.log("[BACK] Root screen — minimizing app");
+      CapacitorApp.exitApp();
     };
     const reg = CapacitorApp.addListener("backButton", handleBack);
     return () => { reg.then((h) => h.remove()); };
