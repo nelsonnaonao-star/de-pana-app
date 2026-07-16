@@ -48,16 +48,41 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       const userId = session?.user?.id;
-      if (userId && userId !== loadedUserId.current) {
-        setUser(session.user);
-        loadUserData(userId);
-      } else if (!userId && event !== "SIGNED_UP") {
-        setUser(null);
-        setProfile(null);
-        setChats([]);
-        setContacts([]);
-        setCalls([]);
-        setLoading(false);
+      console.log("[AUTH]", event, userId ? userId.slice(0, 8) + "..." : "null");
+
+      switch (event) {
+        case "SIGNED_IN":
+          if (userId) {
+            setUser(session.user);
+            loadUserData(userId);
+          }
+          break;
+
+        case "SIGNED_OUT":
+          loadedUserId.current = null;
+          setUser(null);
+          setProfile(null);
+          setChats([]);
+          setContacts([]);
+          setCalls([]);
+          setLoading(false);
+          break;
+
+        case "TOKEN_REFRESHED":
+          if (userId && session) {
+            setUser(session.user);
+          }
+          break;
+
+        case "INITIAL_SESSION":
+          if (userId && !loadedUserId.current) {
+            setUser(session.user);
+            loadUserData(userId);
+          }
+          break;
+
+        default:
+          break;
       }
     });
 
@@ -161,6 +186,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     await unregisterPushNotifications();
     await unregisterCapacitorPush();
     await authSignOut();
+    loadedUserId.current = null;
     setUser(null);
     setProfile(null);
     setChats([]);
