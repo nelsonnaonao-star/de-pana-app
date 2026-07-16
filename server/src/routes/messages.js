@@ -165,22 +165,29 @@ router.post('/send', sendLimiter, async (req, res) => {
 
     if (error) throw error;
 
-    await supabaseAdmin
-      .from('chats')
-      .update({
-        last_message: sanitizedText || 'Multimedia',
-        last_message_time: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', msg.chat_id);
+    try {
+      await supabaseAdmin
+        .from('chats')
+        .update({
+          last_message: sanitizedText || 'Multimedia',
+          last_message_time: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', msg.chat_id);
+    } catch (e) {
+      console.error('[MESSAGES] chat update failed:', e.message);
+    }
 
-    const { data: senderProfile } = await supabaseAdmin
-      .from('profiles')
-      .select('name')
-      .eq('id', msg.sender_id)
-      .maybeSingle();
-
-    sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, sanitizedText || 'Nuevo mensaje');
+    try {
+      const { data: senderProfile } = await supabaseAdmin
+        .from('profiles')
+        .select('name')
+        .eq('id', msg.sender_id)
+        .maybeSingle();
+      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, sanitizedText || 'Nuevo mensaje');
+    } catch (e) {
+      console.error('[MESSAGES] push/profile failed:', e.message);
+    }
 
     res.json(message);
   } catch (err) {
