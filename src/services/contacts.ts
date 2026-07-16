@@ -90,7 +90,34 @@ export async function getContacts(userId: string): Promise<Contact[]> {
     .order("name");
 
   if (error) throw error;
-  return data as Contact[];
+
+  const contacts = (data || []) as Contact[];
+
+  // Resolve current avatar from profiles for linked contacts
+  const linkedIds = contacts
+    .map(c => c.contact_user_id)
+    .filter((id): id is string => !!id);
+
+  if (linkedIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from("profiles")
+      .select("id, avatar_url, name")
+      .in("id", linkedIds);
+
+    if (profiles && profiles.length > 0) {
+      const profileMap = new Map(profiles.map((p: any) => [p.id, p]));
+      return contacts.map(c => {
+        const profile = c.contact_user_id ? profileMap.get(c.contact_user_id) : undefined;
+        return {
+          ...c,
+          avatar: (profile as any)?.avatar_url || c.avatar || "",
+          name: (profile as any)?.name || c.name,
+        };
+      });
+    }
+  }
+
+  return contacts;
 }
 
 export async function addContact(

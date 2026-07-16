@@ -1,4 +1,3 @@
-import { supabase } from "../lib/supabase";
 import { apiUrl, authFetch } from "../lib/api";
 
 export type Message = {
@@ -99,244 +98,113 @@ function toMessage(row: any): Message {
 
 export async function getMessages(chatId: string, options?: { limit?: number; before?: string; after?: string }): Promise<Message[]> {
   const limit = options?.limit || 200;
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (options?.before) params.set("before", options.before);
+  if (options?.after) params.set("after", options.after);
 
-  let query = supabase
-    .from("messages")
-    .select("*")
-    .eq("chat_id", chatId)
-    .eq("is_deleted", false);
-
-  if (options?.after) {
-    query = query.gt("created_at", options.after).order("created_at", { ascending: true }).limit(limit);
-  } else if (options?.before) {
-    query = query.lt("created_at", options.before).order("created_at", { ascending: false }).limit(limit);
-    const { data, error } = await query;
-    if (error) throw error;
-    return (data || []).map(toMessage).reverse();
-  } else {
-    query = query.order("created_at", { ascending: false }).limit(limit);
-    const { data, error } = await query;
-    if (error) throw error;
-    return (data || []).map(toMessage).reverse();
+  const res = await authFetch(apiUrl(`/api/messages/${chatId}?${params.toString()}`));
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al obtener mensajes");
   }
-
-  const { data, error } = await query;
-  if (error) throw error;
+  const data = await res.json();
   return (data || []).map(toMessage);
 }
 
 export async function sendMessage(message: Partial<Message>): Promise<Message> {
-  const payload = {
-    chat_id: message.chat_id,
-    sender_id: message.sender_id,
-    receiver_id: message.receiver_id || null,
-    text: message.text || "",
-    type: message.type || "text",
-    status: "sent",
-    created_at: new Date().toISOString(),
-    edited: false,
-    forwarded: !!message.forwarded,
-    has_image: !!message.image_url,
-    image_url: message.image_url || null,
-    image_alt: message.image_alt || null,
-    has_audio: !!message.audio_url,
-    audio_url: message.audio_url || null,
-    audio_duration: message.audio_duration || null,
-    mime_type: message.mime_type || null,
-    has_video: !!message.video_url,
-    video_url: message.video_url || null,
-    has_document: !!message.document_name,
-    document_name: message.document_name || null,
-    document_size: message.document_size || null,
-    document_type: message.document_type || null,
-    has_location: !!message.latitude,
-    latitude: message.latitude || null,
-    longitude: message.longitude || null,
-    location_name: message.location_name || null,
-    reply_to_id: message.reply_to_id || null,
-    reply_to_text: message.reply_to_text || null,
-    reply_to_sender: message.reply_to_sender || null,
-    sticker_url: message.sticker_url || null,
-    gif_url: message.gif_url || null,
-    is_animated: !!message.is_animated,
-    is_deleted: false,
-    is_ephemeral: false,
-    reactions: {},
-    read_by: [],
-  };
-
-  const { data, error } = await supabase
-    .from("messages")
-    .insert(payload)
-    .select()
-    .single();
-
-  if (error) throw error;
-
-  try {
-    await supabase
-      .from("chats")
-      .update({
-        last_message: message.text || "Multimedia",
-        last_message_time: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", message.chat_id);
-  } catch (e) {
-    // ignore chat update failure
+  const res = await authFetch(apiUrl("/api/messages/send"), {
+    method: "POST",
+    body: JSON.stringify({
+      chat_id: message.chat_id,
+      sender_id: message.sender_id,
+      receiver_id: message.receiver_id,
+      text: message.text,
+      type: message.type,
+      forwarded: message.forwarded,
+      image_url: message.image_url,
+      image_alt: message.image_alt,
+      audio_url: message.audio_url,
+      audio_duration: message.audio_duration,
+      mime_type: message.mime_type,
+      video_url: message.video_url,
+      document_name: message.document_name,
+      document_size: message.document_size,
+      document_type: message.document_type,
+      latitude: message.latitude,
+      longitude: message.longitude,
+      location_name: message.location_name,
+      reply_to_id: message.reply_to_id,
+      reply_to_text: message.reply_to_text,
+      reply_to_sender: message.reply_to_sender,
+      sticker_url: message.sticker_url,
+      gif_url: message.gif_url,
+      is_animated: message.is_animated,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al enviar mensaje");
   }
-
-  try {
-    const { data: chat } = await supabase
-      .from("chats")
-      .select("profile_id, admin_id, is_group")
-      .eq("id", message.chat_id)
-      .single();
-    if (chat) {
-      const { data: senderProfile } = await supabase
-        .from("profiles")
-        .select("name")
-        .eq("id", message.sender_id)
-        .single();
-
-      if (chat.is_group) {
-        const { data: participants } = await supabase
-          .from("chat_participants")
-          .select("profile_id")
-          .eq("chat_id", message.chat_id)
-          .neq("profile_id", message.sender_id);
-        if (participants) {
-          for (const p of participants) {
-            sendBackupPush(p.profile_id, senderProfile?.name || "RED ON", message.text || "Nuevo mensaje", message.chat_id, message.sender_id);
-          }
-        }
-      } else {
-        const receiverId = chat.profile_id === message.sender_id ? chat.admin_id : chat.profile_id;
-        if (receiverId) {
-          sendBackupPush(receiverId, senderProfile?.name || "RED ON", message.text || "Nuevo mensaje", message.chat_id, message.sender_id);
-        }
-      }
-    }
-  } catch {}
-
+  const data = await res.json();
   return toMessage(data);
 }
 
-async function sendBackupPush(receiverId: string, senderName: string, text: string, chatId: string, senderId: string) {
-  try {
-    const serverUrl = import.meta.env.VITE_SERVER_URL;
-    if (!serverUrl) return;
-    await authFetch(`${serverUrl}/api/fcm/send`, {
-      method: "POST",
-      body: JSON.stringify({
-        profile_id: receiverId,
-        title: senderName || "RED ON",
-        body: text || "Nuevo mensaje",
-        data: { type: "message", chatId, contactId: senderId },
-      }),
-    });
-  } catch {
-    // ignore push failures
-  }
-}
-
 export async function markAsRead(chatId: string, userId: string, userName: string) {
-  const name = userName || "Usuario";
-
-  const { data: messages, error: fetchError } = await supabase
-    .from("messages")
-    .select("id, read_by, status")
-    .eq("chat_id", chatId)
-    .neq("sender_id", userId)
-    .eq("is_deleted", false);
-
-  if (fetchError) throw fetchError;
-  if (!messages || messages.length === 0) return;
-
-  const now = new Date().toISOString();
-  const unreadIds = messages
-    .filter((m: any) => {
-      const readBy = m.read_by || [];
-      return !readBy.some((r: any) => r.userId === userId);
-    })
-    .map((m: any) => m.id);
-
-  if (unreadIds.length === 0) return;
-
-  const { error: batchError } = await supabase
-    .from("messages")
-    .update({ status: "read", read_at: now })
-    .in("id", unreadIds);
-
-  if (batchError) {
-    const unread = messages.filter((m: any) => {
-      const readBy = m.read_by || [];
-      return !readBy.some((r: any) => r.userId === userId);
-    });
-    for (const m of unread) {
-      const newReadBy = [...(m.read_by || []), { userId, name, readAt: now }];
-      await supabase
-        .from("messages")
-        .update({ read_by: newReadBy, status: "read", read_at: now })
-        .eq("id", m.id);
-    }
+  const res = await authFetch(apiUrl("/api/messages/mark-read"), {
+    method: "POST",
+    body: JSON.stringify({ chat_id: chatId, user_id: userId, reader_name: userName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al marcar como leído");
   }
+  return res.json();
 }
 
 export async function addReaction(messageId: string, emoji: string) {
-  const { data: msg, error: fetchError } = await supabase
-    .from("messages")
-    .select("reactions")
-    .eq("id", messageId)
-    .single();
-
-  if (fetchError) throw fetchError;
-
-  const current: Record<string, number> = msg?.reactions || {};
-  current[emoji] = (current[emoji] || 0) + 1;
-
-  const { error } = await supabase
-    .from("messages")
-    .update({ reactions: current })
-    .eq("id", messageId);
-
-  if (error) throw error;
+  const res = await authFetch(apiUrl("/api/messages/react"), {
+    method: "POST",
+    body: JSON.stringify({ message_id: messageId, emoji }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al agregar reacción");
+  }
+  return res.json();
 }
 
 export async function deleteMessage(messageId: string) {
-  const { error } = await supabase
-    .from("messages")
-    .update({ is_deleted: true })
-    .eq("id", messageId);
-
-  if (error) throw error;
+  const res = await authFetch(apiUrl("/api/messages/delete"), {
+    method: "POST",
+    body: JSON.stringify({ message_id: messageId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al eliminar mensaje");
+  }
+  return res.json();
 }
 
 export async function editMessage(messageId: string, newText: string) {
-  const { error } = await supabase
-    .from("messages")
-    .update({ text: newText, edited: true })
-    .eq("id", messageId);
-
-  if (error) throw error;
+  const res = await authFetch(apiUrl("/api/messages/edit"), {
+    method: "POST",
+    body: JSON.stringify({ message_id: messageId, new_text: newText }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al editar mensaje");
+  }
+  return res.json();
 }
 
-export async function clearMessages(chatId: string) {
-  const { error } = await supabase
-    .from("messages")
-    .update({ is_deleted: true })
-    .eq("chat_id", chatId);
-
-  if (error) throw error;
-
-  try {
-    await supabase
-      .from("chats")
-      .update({
-        last_message: "",
-        last_message_time: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", chatId);
-  } catch {}
+export async function clearForMe(chatId: string) {
+  const res = await authFetch(apiUrl("/api/messages/clear-for-me"), {
+    method: "POST",
+    body: JSON.stringify({ chat_id: chatId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al vaciar chat");
+  }
+  return res.json();
 }

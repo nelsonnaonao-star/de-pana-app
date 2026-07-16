@@ -1,8 +1,11 @@
-import React, { useState } from "react";
-import { Mic, Play, Pause, VideoIcon, BarChart2, Forward, MapPin, Loader2 } from "lucide-react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import { Mic, Play, Pause, BarChart2, Forward, MapPin, Loader2, X, Download, Share2 } from "lucide-react";
+import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
 import AudioMessagePlayer from "./AudioMessagePlayer";
+import { saveMediaToGalleryDirect, shareMedia } from "../../services/mediaUtils";
+import toast from "react-hot-toast";
 
 interface MessageBubbleProps {
   msg: Message;
@@ -20,71 +23,307 @@ interface MessageBubbleProps {
   bubbleColorThemId: string;
   isPending?: (msgId: string) => boolean;
   onEdit?: (msg: Message) => void;
+  onUpdatePrice?: (msgId: string, price: string) => void;
 }
 
-function ImageMessage({ msg, isMe, isSticker }: { msg: Message; isMe: boolean; isSticker: boolean }) {
-  const [imgLoaded, setImgLoaded] = useState(false);
-  const isSending = msg.status === "sending";
+function useSaveMedia() {
+  const [saving, setSaving] = useState(false);
+  const save = useCallback(async (url: string, fileName: string): Promise<boolean> => {
+    if (saving) return false;
+    setSaving(true);
+    try {
+      await saveMediaToGalleryDirect(url, fileName);
+      return true;
+    } catch (e) {
+      console.error("[SAVE] Error saving media:", e);
+      toast.error("No se pudo guardar");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [saving]);
+  return { saving, save };
+}
+
+function MediaViewerToolbar({ onClose, onSave, onShare, onForward, onReact, saving }: {
+  onClose: () => void;
+  onSave: () => void;
+  onShare: () => void;
+  onForward: () => void;
+  onReact: () => void;
+  saving: boolean;
+}) {
+  return (
+    <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 z-10 bg-gradient-to-b from-black/50 to-transparent">
+      <button onClick={onClose} className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors">
+        <X className="w-5 h-5 text-white" />
+      </button>
+      <div className="flex items-center gap-2">
+        <button onClick={onReact} className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors" title="Reaccionar">
+          <span className="text-white text-lg leading-none">👍</span>
+        </button>
+        <button onClick={onForward} className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors" title="Reenviar">
+          <Forward className="w-4 h-4 text-white" />
+        </button>
+        <button onClick={onShare} className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors" title="Compartir">
+          <Share2 className="w-4 h-4 text-white" />
+        </button>
+        <button onClick={onSave} disabled={saving} className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors disabled:opacity-50" title="Guardar en galería">
+          {saving ? <Loader2 className="w-4 h-4 text-white animate-spin" /> : <Download className="w-4 h-4 text-white" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ImageViewer({ src, alt, msg, onClose, handleForwardMessage, handleAddReaction, setActiveReactionMenu, activeReactionMenu }: {
+  src: string; alt: string; msg: Message;
+  onClose: () => void;
+  handleForwardMessage: (m: Message) => void;
+  handleAddReaction: (id: string, emoji: string) => void;
+  setActiveReactionMenu: (id: string | null) => void;
+  activeReactionMenu: string | null;
+}) {
+  const [showReactions, setShowReactions] = useState(false);
+  const { saving, save } = useSaveMedia();
+  const transformRef = useRef<any>(null);
 
   return (
-    <div className="relative max-w-[85%] cursor-pointer" onClick={() => {}}>
-      {/* Skeleton placeholder while image loads */}
-      {!imgLoaded && (
-        <div className={`${isSticker ? "w-[140px] h-[140px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
-          <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
-        </div>
-      )}
-
-      <img
-        src={msg.mediaUrl}
-        alt={isSticker ? "Sticker" : "Image"}
-        onLoad={() => setImgLoaded(true)}
-        className={`${isSticker
-          ? "max-w-[160px] max-h-[160px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
-          : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
-        } ${!imgLoaded ? "hidden" : ""}`}
+    <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center touch-none select-none"
+      onContextMenu={e => e.preventDefault()}
+      onClick={() => { if (!showReactions) onClose(); }}
+    >
+      <MediaViewerToolbar
+        onClose={onClose}
+        onSave={() => save(src, `redon-image-${Date.now()}.jpg`)}
+        onShare={() => shareMedia(src, "Imagen")}
+        onForward={() => { onClose(); handleForwardMessage(msg); }}
+        onReact={() => setShowReactions(!showReactions)}
+        saving={saving}
       />
 
-      {/* Sending spinner overlay (emisor) */}
-      {isSending && imgLoaded && (
-        <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center pointer-events-none">
-          <div className="bg-white/90 rounded-full p-2">
-            <Loader2 className="w-5 h-5 text-[#0a4d52] animate-spin" />
+      <TransformWrapper
+        ref={transformRef}
+        minScale={0.5}
+        maxScale={5}
+        wheel={{ smoothStep: 0.02 }}
+        pinch={{ disabled: false }}
+        doubleClick={{ mode: "toggleMin" }}
+      >
+        <TransformComponent
+          wrapperClass="!w-full !h-full !flex !items-center !justify-center"
+          contentClass="!flex !items-center !justify-center"
+        >
+          <img
+            src={src}
+            alt={alt}
+            draggable={false}
+            className="max-w-[95vw] max-h-[90vh] object-contain pointer-events-none"
+            style={{ willChange: "transform" }}
+          />
+        </TransformComponent>
+      </TransformWrapper>
+
+      {showReactions && (
+        <div onClick={e => e.stopPropagation()} className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden">
+          <div className="flex gap-1 px-3 py-2">
+            {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
+              <button key={emo} onClick={() => { handleAddReaction(msg.id, emo); setShowReactions(false); onClose(); }} className="text-2xl hover:scale-125 transition-transform p-1">{emo}</button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReaction }: {
+  src: string; msg: Message;
+  onClose: () => void;
+  handleForwardMessage: (m: Message) => void;
+  handleAddReaction: (id: string, emoji: string) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [showReactions, setShowReactions] = useState(false);
+  const { saving, save } = useSaveMedia();
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onEnd = () => setIsPlaying(false);
+    v.addEventListener("ended", onEnd);
+    v.play().then(() => setIsPlaying(true)).catch(() => {});
+    return () => v.removeEventListener("ended", onEnd);
+  }, []);
+
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) { v.play(); setIsPlaying(true); }
+    else { v.pause(); setIsPlaying(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
+      onClick={() => { if (!showReactions) onClose(); }}
+    >
+      <MediaViewerToolbar
+        onClose={onClose}
+        onSave={() => save(src, `redon-video-${Date.now()}.mp4`)}
+        onShare={() => shareMedia(src, "Video")}
+        onForward={() => { onClose(); handleForwardMessage(msg); }}
+        onReact={() => setShowReactions(!showReactions)}
+        saving={saving}
+      />
+
+      <div className="w-full h-full flex items-center justify-center">
+        <video
+          ref={videoRef}
+          src={src}
+          className="max-w-[95vw] max-h-[90vh] cursor-pointer"
+          onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+          controls={false}
+        />
+      </div>
+
+      {!isPlaying && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" onClick={(e) => { e.stopPropagation(); togglePlay(); }}>
+          <div className="w-16 h-16 rounded-full bg-black/50 flex items-center justify-center">
+            <Play className="w-8 h-8 text-white ml-1" />
           </div>
         </div>
       )}
 
-      {/* Timestamp + checkmarks */}
-      <div className="absolute bottom-1 right-1 bg-black/50 text-white/90 text-[10px] px-1.5 py-0.5 rounded-full backdrop-blur-xs font-medium pointer-events-none flex items-center gap-1">
-        <span>{msg.timestamp}</span>
-        {isMe && (
-          <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
-            {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
-            {msg.status === "sent" && "✓"}
-            {msg.status === "delivered" && "✓✓"}
-            {msg.status === "read" && "✓✓"}
-          </span>
-        )}
-      </div>
+      {showReactions && (
+        <div onClick={e => e.stopPropagation()} className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden">
+          <div className="flex gap-1 px-3 py-2">
+            {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
+              <button key={emo} onClick={() => { handleAddReaction(msg.id, emo); setShowReactions(false); onClose(); }} className="text-2xl hover:scale-125 transition-transform p-1">{emo}</button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function isEmoji(str: string): boolean {
+  return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)+$/u.test(str.trim());
+}
+
+function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReactionMenu, handleForwardMessage, handleAddReaction }: {
+  msg: Message; isMe: boolean; isSticker: boolean;
+  activeReactionMenu: string | null;
+  setActiveReactionMenu: (id: string | null) => void;
+  handleForwardMessage: (m: Message) => void;
+  handleAddReaction: (id: string, emoji: string) => void;
+}) {
+  const [imgLoaded, setImgLoaded] = useState(false);
+  const [showViewer, setShowViewer] = useState(false);
+  const isSending = msg.status === "sending";
+  const isEmojiOnly = isSticker && msg.mediaUrl && isEmoji(msg.mediaUrl);
+
+  return (
+    <>
+      {showViewer && !isEmojiOnly && (
+        <ImageViewer
+          src={msg.mediaUrl!}
+          alt={isSticker ? "Sticker" : "Imagen"}
+          msg={msg}
+          onClose={() => setShowViewer(false)}
+          handleForwardMessage={handleForwardMessage}
+          handleAddReaction={handleAddReaction}
+          setActiveReactionMenu={setActiveReactionMenu}
+          activeReactionMenu={activeReactionMenu}
+        />
+      )}
+      <div className="relative max-w-[85%] cursor-pointer group" onClick={() => { if (!isEmojiOnly) setShowViewer(true); }}>
+        {isEmojiOnly ? (
+          <div className="text-6xl leading-none p-1 select-none">
+            {msg.mediaUrl}
+          </div>
+        ) : (
+          <>
+        {!imgLoaded && (
+          <div className={`${isSticker ? "w-[140px] h-[140px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
+            <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
+          </div>
+        )}
+
+        <img
+          src={msg.mediaUrl}
+          alt={isSticker ? "Sticker" : "Image"}
+          onLoad={() => setImgLoaded(true)}
+          onError={() => setImgLoaded(true)}
+          className={`${isSticker
+            ? "max-w-[160px] max-h-[160px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
+            : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
+          } ${!imgLoaded ? "hidden" : ""}`}
+        />
+        </>)}
+
+        {imgLoaded && !isSending && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id); }}
+            className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/40 hover:bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20"
+          >
+            <span className="text-white text-[11px] leading-none">➕</span>
+          </button>
+        )}
+
+        {isSending && imgLoaded && (
+          <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center pointer-events-none">
+            <div className="bg-white/90 rounded-full p-2">
+              <Loader2 className="w-5 h-5 text-[#0a4d52] animate-spin" />
+            </div>
+          </div>
+        )}
+
+        {msg.price && (
+          <div className="absolute bottom-1 left-1 bg-emerald-600/90 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold pointer-events-none backdrop-blur-xs shadow-sm">
+            💰 {msg.price}
+          </div>
+        )}
+
+        <div className="absolute bottom-1 right-1 bg-black/50 text-white/90 text-[10px] px-1.5 py-0.5 rounded-full backdrop-blur-xs font-medium pointer-events-none flex items-center gap-1">
+          <span>{msg.timestamp}</span>
+          {isMe && (
+            <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
+              {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
+              {msg.status === "sent" && "✓"}
+              {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
+              {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
+            </span>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
   isPlayingAudio, setIsPlayingAudio,
-  handleVote, handleAddReaction, handleDeleteMessage, handleForwardMessage,   handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit,
+  handleVote, handleAddReaction, handleDeleteMessage, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
   const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
   const isGlass = isMe ? bubbleColorMeId === "glass" : bubbleColorThemId === "glass";
+  const { saving, save } = useSaveMedia();
+  const [showPriceInput, setShowPriceInput] = useState(false);
+  const [priceValue, setPriceValue] = useState("");
 
   const isMediaType = msg.type === "sticker" || msg.type === "image";
   if (isMediaType) {
     const isSticker = msg.type === "sticker";
     return (
       <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
-        <ImageMessage msg={msg} isMe={isMe} isSticker={isSticker} />
+        <ImageMessage
+          msg={msg} isMe={isMe} isSticker={isSticker}
+          activeReactionMenu={activeReactionMenu} setActiveReactionMenu={setActiveReactionMenu}
+          handleForwardMessage={handleForwardMessage} handleAddReaction={handleAddReaction}
+        />
         {msg.reactions && Object.keys(msg.reactions).length > 0 && (
           <div className={`flex gap-1 mt-[-6px] z-10 ${isMe ? "mr-2" : "ml-2"}`}>
             {Object.entries(msg.reactions).map(([emo, count]) => (
@@ -96,24 +335,100 @@ export default React.memo(function MessageBubble({
         )}
         {activeReactionMenu === msg.id && (
           <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden -top-8 ${isMe ? "right-2" : "left-2"}`}>
-            <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
-              {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
-                <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-base hover:scale-125 transition-transform p-1">{emo}</button>
-              ))}
-            </div>
-            <div className="py-1">
-              <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[11px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
-                ↩️ Responder
-              </button>
-              <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[11px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
-                ↪️ Reenviar
-              </button>
-              {isMe && (
-                <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[11px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
-                  🗑️ Eliminar para todos
-                </button>
-              )}
-            </div>
+            {showPriceInput ? (
+              <div className="py-2.5 px-3 min-w-[200px]">
+                <p className="text-[11px] font-bold text-slate-700 mb-1.5">Precio del producto</p>
+                <div className="flex items-center gap-1.5 mb-2.5">
+                  <span className="text-[13px] font-bold text-slate-500">$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoFocus
+                    value={priceValue}
+                    onChange={(e) => setPriceValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && priceValue.trim() && onUpdatePrice) {
+                        onUpdatePrice(msg.id, priceValue.trim());
+                        setShowPriceInput(false);
+                        setActiveReactionMenu(null);
+                      }
+                    }}
+                    placeholder="0.00"
+                    className="flex-1 text-[13px] px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:border-teal-400 focus:ring-1 focus:ring-teal-400/30 bg-slate-50"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { setShowPriceInput(false); setPriceValue(""); setActiveReactionMenu(null); }}
+                    className="flex-1 text-[11px] py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold hover:bg-slate-200 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (priceValue.trim() && onUpdatePrice) {
+                        onUpdatePrice(msg.id, priceValue.trim());
+                        toast.success("Precio actualizado");
+                      }
+                      setShowPriceInput(false);
+                      setActiveReactionMenu(null);
+                    }}
+                    disabled={!priceValue.trim()}
+                    className="flex-1 text-[11px] py-1.5 rounded-lg bg-teal-600 text-white font-semibold hover:bg-teal-700 transition-colors disabled:opacity-40"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
+                  {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
+                    <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 transition-transform p-1">{emo}</button>
+                  ))}
+                </div>
+                <div className="py-1">
+                  <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                    ↩️ Responder
+                  </button>
+                  <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                    ↪️ Reenviar
+                  </button>
+                  {msg.mediaUrl && (
+                    <button
+                      onClick={async () => {
+                        setActiveReactionMenu(null);
+                        const ext = msg.type === "video" ? "mp4" : "jpg";
+                        const fn = `redon-${msg.type === "video" ? "video" : "image"}-${Date.now()}.${ext}`;
+                        const ok = await save(msg.mediaUrl!, fn);
+                        if (ok) toast.success("Guardado en galería");
+                      }}
+                      disabled={saving}
+                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "⬇️"} Guardar
+                    </button>
+                  )}
+                  {msg.mediaUrl && (
+                    <button
+                      onClick={() => {
+                        setPriceValue(msg.price || "");
+                        setShowPriceInput(true);
+                      }}
+                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                    >
+                      🏷️ Precio {msg.price && <span className="text-emerald-600 font-bold ml-auto">${msg.price}</span>}
+                    </button>
+                  )}
+                  {isMe && (
+                    <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+                      🗑️ Eliminar para todos
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -143,12 +458,11 @@ export default React.memo(function MessageBubble({
         {msg.type === "text" && <p className={`leading-relaxed whitespace-pre-wrap ${isGlass ? "text-gray-900" : ""}`}>{msg.text}</p>}
 
         {msg.type === "video" && (
-          <div className="space-y-1.5 w-44">
-            <div className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center border border-white/10">
-              <video src={msg.mediaUrl} controls className="w-full h-full object-cover" />
-            </div>
-            <span className="text-[9px] font-mono opacity-85 block truncate">🎬 {msg.fileName} ({msg.fileSize})</span>
-          </div>
+          <VideoMessageContent
+            msg={msg}
+            handleForwardMessage={handleForwardMessage}
+            handleAddReaction={handleAddReaction}
+          />
         )}
 
         {msg.type === "audio" && (
@@ -189,26 +503,11 @@ export default React.memo(function MessageBubble({
         )}
 
         {msg.type === "video_note" && (
-          <div
-            className="space-y-1.5 flex flex-col items-center cursor-pointer active:scale-95 transition-transform"
-            onClick={() => {
-              if (msg.mediaUrl) {
-                const video = document.createElement("video");
-                video.src = msg.mediaUrl;
-                video.controls = true;
-                video.className = "fixed inset-0 z-50 w-full h-full object-contain bg-black";
-                video.onclick = () => video.remove();
-                document.body.appendChild(video);
-                video.play();
-              }
-            }}
-          >
-            <div className="w-24 h-24 rounded-full border-4 border-teal-400 overflow-hidden bg-teal-950 flex items-center justify-center relative shadow-inner">
-              <div className="absolute inset-0 bg-gradient-to-tr from-teal-500/20 to-transparent"></div>
-              <VideoIcon className="w-8 h-8 text-white/85 animate-pulse" />
-            </div>
-            <span className={`text-[9px] font-bold tracking-tight opacity-90 ${isGlass ? "text-gray-800" : ""}`}>📹 Nota de Video ({msg.duration || "0:08"})</span>
-          </div>
+          <VideoNoteContent
+            msg={msg}
+            handleForwardMessage={handleForwardMessage}
+            handleAddReaction={handleAddReaction}
+          />
         )}
 
         {msg.type === "location" && (
@@ -274,8 +573,8 @@ export default React.memo(function MessageBubble({
             }`}>
               {msg.status === "sending" && "🕒"}
               {msg.status === "sent" && "✓"}
-              {msg.status === "delivered" && "✓✓"}
-              {msg.status === "read" && "✓✓"}
+              {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
+              {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
               {!msg.status && "✓"}
             </span>
           )}
@@ -301,23 +600,23 @@ export default React.memo(function MessageBubble({
         }`}>
           <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
             {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
-              <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-base hover:scale-125 transition-transform p-1">{emo}</button>
+              <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 transition-transform p-1">{emo}</button>
             ))}
           </div>
           <div className="py-1">
-            <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[11px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+            <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
               ↩️ Responder
             </button>
-            <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[11px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+            <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
               ↪️ Reenviar
             </button>
             {isMe && msg.type === "text" && (
-              <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-4 py-2 text-[11px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+              <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
                 ✏️ Editar
               </button>
             )}
             {isMe && (
-              <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[11px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+              <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
                 🗑️ Eliminar para todos
               </button>
             )}
@@ -327,3 +626,75 @@ export default React.memo(function MessageBubble({
     </div>
   );
 });
+
+function VideoMessageContent({ msg, handleForwardMessage, handleAddReaction }: {
+  msg: Message;
+  handleForwardMessage: (m: Message) => void;
+  handleAddReaction: (id: string, emoji: string) => void;
+}) {
+  const [showViewer, setShowViewer] = useState(false);
+
+  return (
+    <>
+      {showViewer && (
+        <VideoViewer
+          src={msg.mediaUrl!}
+          msg={msg}
+          onClose={() => setShowViewer(false)}
+          handleForwardMessage={handleForwardMessage}
+          handleAddReaction={handleAddReaction}
+        />
+      )}
+      <div className="space-y-1.5 w-44 cursor-pointer group" onClick={() => setShowViewer(true)}>
+        <div className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center border border-white/10">
+          <video src={msg.mediaUrl} className="w-full h-full object-cover" />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
+            <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
+              <Play className="w-5 h-5 text-white ml-0.5" />
+            </div>
+          </div>
+        </div>
+        <span className="text-[9px] font-mono opacity-85 block truncate">🎬 {msg.fileName} ({msg.fileSize})</span>
+        {msg.price && (
+          <span className="text-[10px] font-bold text-emerald-600 block">💰 {msg.price}</span>
+        )}
+      </div>
+    </>
+  );
+}
+
+function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
+  msg: Message;
+  handleForwardMessage: (m: Message) => void;
+  handleAddReaction: (id: string, emoji: string) => void;
+}) {
+  const [showViewer, setShowViewer] = useState(false);
+
+  return (
+    <>
+      {showViewer && (
+        <VideoViewer
+          src={msg.mediaUrl!}
+          msg={msg}
+          onClose={() => setShowViewer(false)}
+          handleForwardMessage={handleForwardMessage}
+          handleAddReaction={handleAddReaction}
+        />
+      )}
+      <div
+        className="space-y-1.5 flex flex-col items-center cursor-pointer active:scale-95 transition-transform group"
+        onClick={() => setShowViewer(true)}
+      >
+        <div className="w-24 h-24 rounded-full border-4 border-teal-400 overflow-hidden bg-black flex items-center justify-center relative shadow-inner">
+          <video src={msg.mediaUrl} className="w-full h-full object-cover absolute inset-0" muted playsInline />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/20 transition-colors">
+            <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
+              <Play className="w-5 h-5 text-white ml-0.5" />
+            </div>
+          </div>
+        </div>
+        <span className={`text-[9px] font-bold tracking-tight opacity-90`}>📹 Nota de Video ({msg.duration || "0:08"})</span>
+      </div>
+    </>
+  );
+}

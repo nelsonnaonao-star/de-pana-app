@@ -24,7 +24,7 @@ import BottomTabBar from "./phone/BottomTabBar";
 import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages, clearMessages, sendMessage as apiSendMessage } from "../services/messages";
+import { clearForMe, sendMessage as apiSendMessage } from "../services/messages";
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat } from "../services/chats";
 import { getMyFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
 import { WebRTCService } from "../services/webrtc";
@@ -32,8 +32,6 @@ import { startCall as apiStartCall } from "../services/calls";
 import { sendFcmPush } from "../services/pushCapacitor";
 import { uploadAvatar } from "../services/storage";
 import { updateProfile } from "../services/auth";
-import { App as CapacitorApp } from "@capacitor/app";
-
 interface PhoneSimulatorProps {
   isCorrected?: boolean;
   onToggle?: (val: boolean) => void;
@@ -41,6 +39,8 @@ interface PhoneSimulatorProps {
   onClearExternalCallTrigger?: () => void;
   externalMessageTrigger?: Message | null;
   onClearExternalMessageTrigger?: () => void;
+  onBackPress?: (handler: () => boolean) => void;
+  onSetShouldExit?: (shouldExit: boolean) => void;
 }
 
 export default function PhoneSimulator({
@@ -49,7 +49,9 @@ export default function PhoneSimulator({
   externalCallTrigger = null,
   onClearExternalCallTrigger = () => {},
   externalMessageTrigger = null,
-  onClearExternalMessageTrigger = () => {}
+  onClearExternalMessageTrigger = () => {},
+  onBackPress,
+  onSetShouldExit,
 }: PhoneSimulatorProps) {
   const { user, profile, contacts: appContacts, chats: supabaseChats, refreshChats, refreshContacts, refreshProfile } = useSupabase();
 
@@ -70,12 +72,15 @@ export default function PhoneSimulator({
 
   // Application Screen State
   const [currentScreen, setCurrentScreen] = useState<
-    "welcome" | "chats" | "chat_room" | "qr_scanner" | "synced_contacts" | "contacts" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual" | "create_group"
+    "welcome" | "chats" | "chat_room" | "qr_scanner" | "synced_contacts" | "contacts" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual" | "create_group" | "calls"
   >("chats");
+  const currentScreenRef = useRef(currentScreen);
+  currentScreenRef.current = currentScreen;
 
   // Floating action menu
   const [showActionMenu, setShowActionMenu] = useState(false);
   const showActionMenuRef = useRef(false);
+  const shouldExitRef = useRef(false);
 
   // App User state
   const [registeredUser, setRegisteredUser] = useState<{
@@ -101,9 +106,10 @@ export default function PhoneSimulator({
     }
   }, [user, profile]);
 
-  // Android back button handler — navigate within app instead of closing
-  // Priority: overlays > ChatRoom internal overlays > screen navigation > minimize
+  // Android back button handler — registered ONCE, reads state from refs (no race condition)
   useEffect(() => {
+    if (!onBackPress) return;
+
     const backScreens: Record<string, string> = {
       chat_room: "chats",
       rates: "chats",
@@ -120,65 +126,57 @@ export default function PhoneSimulator({
       create_group: "chats",
       synced_contacts: "chats",
     };
-    const handleBack = (e: any) => {
-      console.log("[BACK] Back button pressed, currentScreen:", currentScreen);
 
-      // 1. Active call overlay — end the call
+    onBackPress(() => {
       if (activeCallRef.current) {
-        e.preventDefault();
         console.log("[BACK] Active call — ending call");
-        cleanupCall();
-        return;
+        cleanupCallRef.current?.();
+        return true;
       }
-
-      // 2. Context menu open — close it
       if (contextMenuChatRef.current) {
-        e.preventDefault();
         console.log("[BACK] Context menu open — closing");
         setContextMenuChat(null);
         setContextMenuPos(null);
-        return;
+        return true;
       }
-
-      // 3. Floating action menu open — close it
       if (showActionMenuRef.current) {
-        e.preventDefault();
         console.log("[BACK] Action menu open — closing");
         setShowActionMenu(false);
-        return;
+        return true;
       }
-
-      // 4. ChatRoom internal overlays (replyTo, editingMessage, etc.)
-      if (currentScreen === "chat_room" && chatRoomBackHandlerRef.current) {
+      const screen = currentScreenRef.current;
+      if (screen === "chat_room" && chatRoomBackHandlerRef.current) {
         if (chatRoomBackHandlerRef.current()) {
-          e.preventDefault();
           console.log("[BACK] ChatRoom consumed back (reply/edit/attachment/search)");
-          return;
+          return true;
         }
       }
-
-      // 5. Screen navigation
-      const target = backScreens[currentScreen];
+      const target = backScreens[screen];
       if (target) {
-        e.preventDefault();
-        console.log("[BACK] Navigating from", currentScreen, "→", target);
-        if (currentScreen === "chat_room") {
+        console.log("[BACK] Navigating from", screen, "->", target);
+        if (screen === "chat_room") {
           setSelectedChatId(null);
         }
         setCurrentScreen(target as any);
-        return;
+        return true;
       }
+      console.log("[BACK] Root screen — should exit app");
+      onSetShouldExit?.(true);
+      return false;
+    });
 
-      // 6. Root screen "chats" — minimize the app
-      console.log("[BACK] Root screen — minimizing app");
-      CapacitorApp.exitApp();
-    };
-    const reg = CapacitorApp.addListener("backButton", handleBack);
-    return () => { reg.then((h) => h.remove()); };
-  }, [currentScreen]);
+    onSetShouldExit?.(shouldExitRef.current);
+  }, [onBackPress, onSetShouldExit]);
+
+  useEffect(() => {
+    const isOnMainScreen = currentScreen === "chats" || currentScreen === "welcome";
+    shouldExitRef.current = !isOnMainScreen;
+    onSetShouldExit?.(!isOnMainScreen);
+  }, [currentScreen, onSetShouldExit]);
 
   // Active Chats & Selected Chat
   const [chats, setChats] = useState<Chat[]>([]);
+  const [clearedAtMap, setClearAtMap] = useState<Record<string, string>>({});
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [refetchTrigger, setRefetchTrigger] = useState(0);
   const deletedChatIdsRef = useRef<Set<string>>(new Set());
@@ -520,17 +518,25 @@ export default function PhoneSimulator({
         name: sc.name,
         avatar: sc.avatar || "",
         status: sc.is_online ? "online" : "offline",
-        lastMessage: sc.last_message || "",
-        lastMessageTime: sc.last_message_time
-          ? (() => {
-              const d = new Date(sc.last_message_time);
-              const now = new Date();
-              const isToday = d.toDateString() === now.toDateString();
-              return isToday
-                ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                : d.toLocaleDateString([], { day: "numeric", month: "short" });
-            })()
-          : "",
+        lastMessage: (() => {
+          const clearedAt = clearedAtMap[sc.id];
+          if (clearedAt && sc.last_message_time && sc.last_message_time <= clearedAt) return "";
+          return sc.last_message || "";
+        })(),
+        lastMessageTime: (() => {
+          const clearedAt = clearedAtMap[sc.id];
+          if (clearedAt && sc.last_message_time && sc.last_message_time <= clearedAt) return "";
+          return sc.last_message_time
+            ? (() => {
+                const d = new Date(sc.last_message_time);
+                const now = new Date();
+                const isToday = d.toDateString() === now.toDateString();
+                return isToday
+                  ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                  : d.toLocaleDateString([], { day: "numeric", month: "short" });
+              })()
+            : "";
+        })(),
         unreadCount: sc.unread_count || 0,
         partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
         isGroup: sc.is_group || false,
@@ -538,7 +544,26 @@ export default function PhoneSimulator({
       }));
       setChats(mapped);
     }
-  }, [supabaseChats, user]);
+  }, [supabaseChats, user, clearedAtMap]);
+
+  // Cargar TODOS los chat_clears del usuario de una sola vez (sin N+1)
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("chat_clears")
+          .select("chat_id, cleared_at")
+          .eq("user_id", user.id);
+        if (!data) return;
+        const map: Record<string, string> = {};
+        for (const row of data) {
+          map[row.chat_id] = row.cleared_at;
+        }
+        setClearAtMap(map);
+      } catch {}
+    })();
+  }, [user?.id]);
 
   const handleCloudBackup = () => {
     setIsBackingUp(true);
@@ -599,6 +624,8 @@ export default function PhoneSimulator({
   // Realtime subscription for incoming messages — update unreadCount badge
   const chatsRef = useRef(chats);
   chatsRef.current = chats;
+  const clearedAtMapRef = useRef(clearedAtMap);
+  clearedAtMapRef.current = clearedAtMap;
 
   useEffect(() => {
     if (!user) return;
@@ -613,9 +640,12 @@ export default function PhoneSimulator({
         if (!msg || msg.sender_id === user.id) return;
         const isCurrentChat = currentScreen === "chat_room" && selectedChatId === msg.chat_id;
         if (isCurrentChat) return;
-        setChats(prev => prev.map(c =>
-          c.id === msg.chat_id ? { ...c, unreadCount: c.unreadCount + 1, lastMessage: msg.text || c.lastMessage } : c
-        ));
+        setChats(prev => prev.map(c => {
+          if (c.id !== msg.chat_id) return c;
+          const clearedAt = clearedAtMapRef.current[msg.chat_id];
+          if (clearedAt && msg.created_at && msg.created_at <= clearedAt) return c;
+          return { ...c, unreadCount: c.unreadCount + 1, lastMessage: msg.text || c.lastMessage };
+        }));
       })
       .subscribe((status) => {
         console.log('[UNREAD] 📡 Messages unread subscription:', status);
@@ -823,6 +853,9 @@ export default function PhoneSimulator({
     setRemoteStream(null);
     setActiveCall(null);
   }, [stopRingbackTone, stopIncomingRingtone]);
+
+  const cleanupCallRef = useRef<(() => void) | null>(null);
+  cleanupCallRef.current = cleanupCall;
 
   const handleTriggerCallFromChat = async (type: "audio" | "video") => {
     if (!activeChat || !user) return;
@@ -1117,15 +1150,15 @@ export default function PhoneSimulator({
     setContextMenuChat(null);
     setContextMenuPos(null);
     try {
-      const isLocalChat = chat.id.startsWith("chat_biz_") || chat.id.startsWith("chat_state_reply_") || chat.id.startsWith("chat_biz_");
+      const isLocalChat = chat.id.startsWith("chat_biz_") || chat.id.startsWith("chat_state_reply_");
       if (!isLocalChat) {
-        await clearMessages(chat.id);
-        showToast("Mensajes eliminados");
-      } else {
-        showToast("Mensajes eliminados");
+        const now = new Date().toISOString();
+        await clearForMe(chat.id);
+        setClearAtMap(prev => ({ ...prev, [chat.id]: now }));
       }
+      showToast("Mensajes eliminados");
     } catch (e) {
-      console.error("[CHAT] clearMessages error:", e);
+      console.error("[CHAT] clearForMe error:", e);
       showToast("Error al eliminar mensajes");
     }
   };
@@ -1289,6 +1322,10 @@ export default function PhoneSimulator({
                   const newLastTime = last ? last.timestamp : "";
                   return { ...c, lastMessage: newLastMsg, lastMessageTime: newLastTime, messages: remaining };
                 }));
+              }}
+              onChatCleared={(chatId) => {
+                const now = new Date().toISOString();
+                setClearAtMap(prev => ({ ...prev, [chatId]: now }));
               }}
               currentUserId={user?.id}
               currentUserName={profile?.name}

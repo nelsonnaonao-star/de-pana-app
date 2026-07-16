@@ -2,35 +2,35 @@ export const CHAT_BACKGROUNDS = [
   { id: "default", name: "Clásico Red On 📱", value: "#f8fafc" },
   { id: "minimal_white", name: "Minimalista Blanco 🤍", value: "#ffffff" },
   { id: "dark_simple", name: "Sencillo Oscuro 🖤", value: "#0f172a" },
-  { id: "marble", name: "Mármol Elegante 🪨", value: "url('https://images.unsplash.com/photo-1604076917737-3058d0d15b0e?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
+  { id: "marble", name: "Mármol Elegante 🪨", value: "url('/assets/backgrounds/mansion_elegante.jpg') center/cover no-repeat" },
 
   // 1. NATURALEZA
-  { id: "naturaleza_forest", name: "Bosque Encantado 🌲", value: "url('https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "naturaleza_waterfall", name: "Cascada Escondida 🏔️", value: "url('https://images.unsplash.com/photo-1433086966358-54859d0ed716?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "naturaleza_meadow", name: "Prado Alpino 🌿", value: "url('https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
+  { id: "naturaleza_forest", name: "Bosque Encantado 🌲", value: "url('/assets/backgrounds/bosque_encantado.jpg') center/cover no-repeat" },
+  { id: "naturaleza_waterfall", name: "Cascada Escondida 🏔️", value: "url('/assets/backgrounds/cascada_escondida.jpg') center/cover no-repeat" },
+  { id: "naturaleza_meadow", name: "Prado Alpino 🌿", value: "url('/assets/backgrounds/prado_alpino.jpg') center/cover no-repeat" },
 
   // 2. CIUDADES
-  { id: "ciudad_tokyo", name: "Tokio Nocturna 🌃", value: "url('https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "ciudad_ny", name: "Manhattan Skyline 🏙️", value: "url('https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "ciudad_paris", name: "París Elegante 🗼", value: "url('https://images.unsplash.com/photo-1502602898657-3e91760cbb34?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
+  { id: "ciudad_tokyo", name: "Tokio Nocturna 🌃", value: "url('/assets/backgrounds/tokio_nocturna.jpg') center/cover no-repeat" },
+  { id: "ciudad_ny", name: "Manhattan Skyline 🏙️", value: "url('/assets/backgrounds/manhattan_skyline.jpg') center/cover no-repeat" },
+  { id: "ciudad_paris", name: "París Elegante 🗼", value: "url('/assets/backgrounds/paris_elegante.jpg') center/cover no-repeat" },
 
   // 3. TECNOLOGÍA
-  { id: "tech_circuit", name: "Circuito Futurista 🤖", value: "url('https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "tech_data", name: "Data Center 🌐", value: "url('https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "tech_space", name: "Nebulosa Espacial 🛸", value: "url('https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
+  { id: "tech_circuit", name: "Circuito Futurista 🤖", value: "url('/assets/backgrounds/circuito_futurista.jpg') center/cover no-repeat" },
+  { id: "tech_data", name: "Data Center 🌐", value: "url('/assets/backgrounds/data_center.jpg') center/cover no-repeat" },
+  { id: "tech_space", name: "Nebulosa Espacial 🛸", value: "url('/assets/backgrounds/nebulosa_espacial.jpg') center/cover no-repeat" },
 
   // 4. PAISAJE
-  { id: "paisaje_mountain", name: "Montañas Majestuosas ⛰️", value: "url('https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "paisaje_sunset", name: "Atardecer Dorado 🌅", value: "url('https://images.unsplash.com/photo-1505330622279-bf7d7fc918f4?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "paisaje_valley", name: "Valle Sereno 🏞️", value: "url('https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
+  { id: "paisaje_mountain", name: "Montañas Majestuosas ⛰️", value: "url('/assets/backgrounds/montanas_majestuosas.jpg') center/cover no-repeat" },
+  { id: "paisaje_sunset", name: "Atardecer Dorado 🌅", value: "url('/assets/backgrounds/atardecer_dorado.jpg') center/cover no-repeat" },
+  { id: "paisaje_valley", name: "Valle Sereno 🏞️", value: "url('/assets/backgrounds/valle_sereno.jpg') center/cover no-repeat" },
 
   // 5. MARES
-  { id: "mares_beach", name: "Playa Paraíso 🏖️", value: "url('https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "mares_ocean", name: "Océano Profundo 🌊", value: "url('https://images.unsplash.com/photo-1551241098-17e3d5b9e2df?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "mares_coral", name: "Arrecife de Coral 🐠", value: "url('https://images.unsplash.com/photo-1546026423-cc4642628d2b?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
+  { id: "mares_beach", name: "Playa Paraíso 🏖️", value: "url('/assets/backgrounds/playa_paraiso.jpg') center/cover no-repeat" },
+  { id: "mares_ocean", name: "Océano Profundo 🌊", value: "url('/assets/backgrounds/oceano_profundo.jpg') center/cover no-repeat" },
+  { id: "mares_coral", name: "Arrecife de Coral 🐠", value: "url('/assets/backgrounds/arrecife_coral.jpg') center/cover no-repeat" },
 
-  { id: "stars", name: "Noche Estrellada 🌌", value: "url('https://images.unsplash.com/photo-1506318137071-a8e063b4bec0?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
-  { id: "marble_old", name: "Mármol Clásico 🪨", value: "url('https://images.unsplash.com/photo-1533090161767-e6ffed986c88?auto=format&fit=crop&w=1920&q=90') center/cover no-repeat" },
+  { id: "stars", name: "Noche Estrellada 🌌", value: "url('/assets/backgrounds/noche_estrellada.jpg') center/cover no-repeat" },
+  { id: "marble_old", name: "Mármol Clásico 🪨", value: "url('/assets/backgrounds/marmol_clasico.jpg') center/cover no-repeat" },
 
   // 6. LOCALES (bundled - carga instantánea)
   { id: "local_forest", name: "Bosque Real 🌲", value: "url('/assets/backgrounds/forest.jpg') center/cover no-repeat" },

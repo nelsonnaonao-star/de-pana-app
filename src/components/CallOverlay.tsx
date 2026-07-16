@@ -181,7 +181,7 @@ export default function CallOverlay({
   }
 
   return (
-    <div className="absolute inset-0 bg-slate-950 text-white z-[9999] flex flex-col justify-between overflow-hidden select-none">
+    <div className="absolute inset-0 bg-black text-white z-[9999] flex flex-col justify-between overflow-hidden select-none">
 
       <div ref={emojiContainerRef} className="absolute inset-0 pointer-events-none z-30 overflow-hidden" />
 
@@ -196,13 +196,13 @@ export default function CallOverlay({
           ) : null}
 
           <div className="absolute inset-0 flex items-center justify-center">
-            <video
-              ref={remoteVideoCallback}
-              autoPlay playsInline
-              className="absolute inset-0 w-full h-full object-cover"
-              style={{ visibility: remoteStream ? "visible" : "hidden" }}
-            />
-            {!remoteStream && (
+            {remoteStream ? (
+              <video
+                ref={remoteVideoCallback}
+                autoPlay playsInline
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            ) : (
               <img
                 src={call.contactAvatar}
                 alt={call.contactName}
@@ -214,7 +214,7 @@ export default function CallOverlay({
             </div>
           </div>
 
-          <div className="absolute top-10 right-4 w-24 h-36 rounded-2xl overflow-hidden border-2 border-teal-400 shadow-lg bg-slate-950 z-20">
+          <div className="absolute top-10 right-4 w-24 h-36 rounded-2xl overflow-hidden border-2 border-teal-400 shadow-lg bg-black z-20">
             {localStream ? (
               <video
                 ref={localVideoCallback}
@@ -232,12 +232,14 @@ export default function CallOverlay({
           </div>
         </div>
       ) : (
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0a4d52] via-slate-950 to-slate-950 z-0 flex flex-col items-center justify-center p-6">
-          <video
-            ref={remoteVideoCallback}
-            autoPlay playsInline
-            className={`absolute inset-0 w-full h-full object-cover ${remoteStream ? "opacity-30" : "hidden"}`}
-          />
+        <div className="absolute inset-0 bg-gradient-to-b from-[#0a4d52] via-[#0a0a0a] to-black z-0 flex flex-col items-center justify-center p-6">
+          {remoteStream && (
+            <video
+              ref={remoteVideoCallback}
+              autoPlay playsInline
+              className="absolute inset-0 w-full h-full object-cover opacity-30"
+            />
+          )}
           <div className="relative z-10">
             <span className="absolute inset-[-15px] rounded-full border border-teal-500/20 animate-pulse"></span>
             <span className="absolute inset-[-30px] rounded-full border border-teal-500/10 animate-ping"></span>

@@ -20,6 +20,7 @@ export interface Message {
   replyToId?: string;
   replyToText?: string;
   replyToSender?: string;
+  price?: string;
 }
 
 export interface Chat {

@@ -134,8 +134,7 @@ export default function BusinessPanel({
 
   // Form states for template generator
   const [genName, setGenName] = useState("");
-  const [genProduct, setGenProduct] = useState("");
-  const [genPrice, setGenPrice] = useState("");
+  const [genProducts, setGenProducts] = useState<{ name: string; price: string }[]>([{ name: "", price: "" }]);
   const [genDesc, setGenDesc] = useState("");
   const [genLoc, setGenLoc] = useState("");
   const [genTemplateId, setGenTemplateId] = useState<"cyber" | "gold" | "blue" | "sunset">("cyber");
@@ -235,7 +234,8 @@ export default function BusinessPanel({
   // Publish generated flyer
   const handlePublishGenerated = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!genName.trim() || !genProduct.trim() || !genPrice.trim() || !genLoc.trim()) return;
+    const validProducts = genProducts.filter(p => p.name.trim());
+    if (!genName.trim() || !validProducts.length || !genLoc.trim()) return;
 
     setPublishing(true);
 
@@ -248,8 +248,8 @@ export default function BusinessPanel({
       location: genLoc,
       isGenerated: true,
       templateId: genTemplateId,
-      productName: genProduct,
-      price: genPrice,
+      productName: validProducts.map(p => p.price.trim() ? `${p.name.trim()} ${p.price.trim()}` : p.name.trim()).join(" · "),
+      price: validProducts.find(p => p.price.trim())?.price.trim() || validProducts[0]?.name.trim() || "",
       musicUrl: selectedMusic?.url || undefined,
       musicName: selectedMusic?.name !== "Sin Música" ? selectedMusic?.name : undefined,
       views: 1,
@@ -266,8 +266,7 @@ export default function BusinessPanel({
 
     // Reset form
     setGenName("");
-    setGenProduct("");
-    setGenPrice("");
+    setGenProducts([{ name: "", price: "" }]);
     setGenDesc("");
     setGenLoc("");
 
@@ -759,34 +758,54 @@ export default function BusinessPanel({
                       />
                     </div>
 
-                    {/* What you sell / Product Name */}
-                    <div className="space-y-1">
+                    {/* Products List */}
+                    <div className="space-y-1.5">
                       <label className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">
-                        ¿Qué vendes? (Nombre de tu producto/oferta)
+                        ¿Qué vendes? (Productos / Servicios)
                       </label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Ej: Smartwatch Pro Serie 9"
-                        value={genProduct}
-                        onChange={(e) => setGenProduct(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
-                      />
-                    </div>
-
-                    {/* Price */}
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">
-                        Precio del Producto/Servicio
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="Ej: $29.99"
-                        value={genPrice}
-                        onChange={(e) => setGenPrice(e.target.value)}
-                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
-                      />
+                      {genProducts.map((prod, idx) => (
+                        <div key={idx} className="flex gap-1.5">
+                          <input
+                            type="text"
+                            required
+                            value={prod.name}
+                            onChange={(e) => {
+                              const next = [...genProducts];
+                              next[idx] = { ...next[idx], name: e.target.value };
+                              setGenProducts(next);
+                            }}
+                            placeholder={`Ej: ${idx === 0 ? "Papas fritas" : "Camarones"}`}
+                            className="flex-1 min-w-0 bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
+                          />
+                          <input
+                            type="text"
+                            value={prod.price}
+                            onChange={(e) => {
+                              const next = [...genProducts];
+                              next[idx] = { ...next[idx], price: e.target.value };
+                              setGenProducts(next);
+                            }}
+                            placeholder="$0.00"
+                            className="w-[72px] shrink-0 bg-slate-50 border text-[10px] px-2 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white text-right font-mono"
+                          />
+                          {genProducts.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setGenProducts(genProducts.filter((_, i) => i !== idx))}
+                              className="px-2 py-1 text-red-500 font-bold rounded-lg hover:bg-red-50 transition-colors cursor-pointer flex items-center self-stretch"
+                            >
+                              ×
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setGenProducts([...genProducts, { name: "", price: "" }])}
+                        className="w-full py-2 text-center border border-dashed border-slate-300 rounded-xl text-slate-500 hover:border-teal-400 hover:text-teal-500 transition-all cursor-pointer text-[9.5px] font-bold uppercase"
+                      >
+                        + Agregar otro producto
+                      </button>
                     </div>
 
                     {/* Description */}
@@ -848,16 +867,24 @@ export default function BusinessPanel({
                         <span className="text-[7px] font-bold bg-white/20 border border-white/20 px-1.5 py-0.5 rounded uppercase">
                           {genName || "NOMBRE MARCA"}
                         </span>
-                        <span className="text-[10px] font-black bg-teal-400 text-white px-2 py-0.5 rounded font-mono">
-                          {genPrice || "$0.00"}
-                        </span>
                       </div>
 
                       {/* Content middle */}
                       <div className="space-y-1">
-                        <h4 className={`text-xs font-black tracking-tight uppercase leading-tight ${activeTemplate.textClass}`}>
-                          {genProduct || "TU PRODUCTO AQUÍ"}
-                        </h4>
+                        {genProducts.filter(p => p.name.trim()).length > 0 ? (
+                          <ul className={`text-[9px] font-bold leading-tight ${activeTemplate.textClass} space-y-0.5 list-disc list-inside`}>
+                            {genProducts.filter(p => p.name.trim()).map((p, i) => (
+                              <li key={i} className={`flex items-center justify-between ${genProducts.filter(p => p.name.trim()).length >= 5 ? "text-[8px]" : ""}`}>
+                                <span>{p.name.trim()}</span>
+                                {p.price.trim() && (
+                                  <span className={`font-mono font-black text-[9px] ml-1.5 ${activeTemplate.accentClass}`}>{p.price.trim()}</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <span className="text-[8px] opacity-70 font-medium">Agrega productos arriba</span>
+                        )}
                         <p className="text-[8px] opacity-90 line-clamp-2 leading-tight">
                           {genDesc || "La descripción que ingreses arriba se formateará automáticamente aquí para capturar la atención del cliente."}
                         </p>

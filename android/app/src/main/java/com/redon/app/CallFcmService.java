@@ -41,17 +41,16 @@ public class CallFcmService extends FirebaseMessagingService {
         String type = message.getData().get("type");
 
         if (isAppInForeground()) {
-            // App is open: show native heads-up notification AND bridge to JS
             if ("call".equals(type)) {
                 showCallNotification(message);
+                try {
+                    PushNotificationsPlugin.sendRemoteMessage(message);
+                    Log.d(TAG, "Bridged to Capacitor JS via PushNotificationsPlugin.onMessageReceived");
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to bridge to Capacitor JS", e);
+                }
             } else {
                 showForegroundMessageNotification(message);
-            }
-            try {
-                PushNotificationsPlugin.sendRemoteMessage(message);
-                Log.d(TAG, "Bridged to Capacitor JS via PushNotificationsPlugin.onMessageReceived");
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to bridge to Capacitor JS", e);
             }
         } else {
             // App is in background: show native notification OR full-screen activity

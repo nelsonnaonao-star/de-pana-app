@@ -13,7 +13,7 @@ import MessageBubble from "./chat/MessageBubble";
 import ChatCustomizer from "./chat/ChatCustomizer";
 import ChatPatternBackground from "./chat/ChatPatternBackground";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, clearMessages } from "../services/messages";
+import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, clearForMe } from "../services/messages";
 import { deleteChat as apiDeleteChat } from "../services/chats";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../services/storage";
@@ -28,13 +28,14 @@ interface ChatRoomProps {
   onForwardMessage?: (msg: Message) => void;
   onChatDeleted?: (chatId: string) => void;
   onMessageDeleted?: (chatId: string, messageId: string) => void;
+  onChatCleared?: (chatId: string) => void;
   currentUserId?: string;
   currentUserName?: string;
   refetchTrigger?: number;
   onRegisterBackHandler?: (handler: (() => boolean) | null) => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, onChatDeleted, onMessageDeleted, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler }: ChatRoomProps) {
   const { user, profile } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -71,7 +72,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       text: m.text,
       timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
       type: (m.type as Message["type"]) || "text",
-      mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url,
+      mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url || undefined,
       duration: durStr,
       reactions: m.reactions,
       status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
@@ -88,6 +89,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     };
   };
 
+  // Merge server messages with local pending (temp) messages to avoid wiping out in-flight sends
+  const mergeServerMessages = useCallback((serverMessages: Message[]) => {
+    setMessages(prev => {
+      const pending = prev.filter(m => m.id.startsWith('msg_') || m.id.startsWith('temp_') || m.status === 'sending' || m.status === 'queued');
+      const serverIds = new Set(serverMessages.map(m => m.id));
+      const stillPending = pending.filter(m => !serverIds.has(m.id));
+      return [...stillPending, ...serverMessages];
+    });
+  }, []);
+
   // Fetch real messages from API on mount
   useEffect(() => {
     console.log('[CHAT] useEffect [chat.id, uid] — chat.id:', chat.id, 'uid:', uid);
@@ -96,7 +107,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         console.log('[CHAT] getMessages result count:', apiMessages?.length);
         if (apiMessages && apiMessages.length > 0) {
           const mapped = apiMessages.map(mapApiMsg);
-          setMessages(mapped);
+          mergeServerMessages(mapped);
           console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
         } else {
           console.log('[CHAT] ⚠️ getMessages returned 0 messages');
@@ -113,7 +124,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       getMessages(chat.id).then(apiMessages => {
         if (apiMessages && apiMessages.length > 0) {
           const mapped = apiMessages.map(mapApiMsg);
-          setMessages(mapped);
+          mergeServerMessages(mapped);
         }
       }).catch(() => {});
     }
@@ -126,7 +137,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         getMessages(chat.id).then(apiMessages => {
           if (apiMessages && apiMessages.length > 0) {
             const mapped = apiMessages.map(mapApiMsg);
-            setMessages(mapped);
+            mergeServerMessages(mapped);
           }
         }).catch(() => {});
       }
@@ -396,7 +407,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
-        const tempId = `temp_${Date.now()}`;
+        const tempId = `temp_${Date.now()}_loc`;
         const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         const newMsg: Message = {
           id: tempId,
@@ -441,7 +452,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
 
   const handleSendText = async () => {
     if (!inputText.trim()) return;
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${Date.now()}_txt`;
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const newMsg: Message = {
       id: tempId,
@@ -497,14 +508,15 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
 
   const handleSendSticker = async (value: string, type: "gif" | "sticker" | "emoji") => {
     if (type === "emoji") {
-      const tempId = `temp_${Date.now()}`;
+      const tempId = `temp_${Date.now()}_emoji`;
       const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const newMsg: Message = {
         id: tempId,
         sender: "me",
         timestamp,
-        type: "text",
-        text: value,
+        type: "sticker",
+        mediaUrl: value,
+        fileName: "Emoji.png",
         status: isOnline ? "sent" : "sending"
       };
       setMessages(prev => [...prev, newMsg]);
@@ -515,12 +527,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       try {
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
         if (!isLocalChat) {
-          await apiSendMessage({
+          const saved = await apiSendMessage({
             chat_id: chat.id,
-            type: "text",
-            text: value,
+            type: "sticker",
+            sticker_url: value,
+            image_url: value,
             sender_id: uid,
           });
+          setMessages(prev => prev.map((m) =>
+            m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m
+          ));
         }
       } catch (e) {
         console.error("[CHAT] Error al enviar emoji:", e);
@@ -530,7 +546,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       return;
     }
     const url = value;
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${Date.now()}_stkr`;
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const newMsg: Message = {
       id: tempId,
@@ -776,11 +792,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       if (showAttachments) { setShowAttachments(false); return true; }
       if (activeReactionMenu) { setActiveReactionMenu(null); return true; }
       if (showSearch) { setShowSearch(false); setSearchQuery(""); return true; }
+      if (showGifPicker) { setShowGifPicker(false); return true; }
+      if (showCustomizer) { setShowCustomizer(false); return true; }
+      if (showDeleteConfirm) { setShowDeleteConfirm(false); return true; }
+      if (showGroupInfo) { setShowGroupInfo(false); return true; }
+      if (showDropdown) { setShowDropdown(false); return true; }
       return false;
     };
     onRegisterBackHandler(handler);
     return () => { onRegisterBackHandler(null); };
-  }, [editingMessage, replyTo, showAttachments, activeReactionMenu, showSearch, onRegisterBackHandler]);
+  }, [editingMessage, replyTo, showAttachments, activeReactionMenu, showSearch, showGifPicker, showCustomizer, showDeleteConfirm, showGroupInfo, showDropdown, onRegisterBackHandler]);
 
   const handleEditMessage = async (messageId: string, newText: string) => {
     setActiveReactionMenu(null);
@@ -791,6 +812,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     } catch (e) {
       console.error("[CHAT] Edit error:", e);
     }
+  };
+
+  const handleUpdatePrice = (messageId: string, price: string) => {
+    setActiveReactionMenu(null);
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, price } : m));
   };
 
   const handleFinishVoiceNote = async () => {
@@ -1017,10 +1043,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                       onClick={async () => {
                         setShowDropdown(false);
                         try {
-                          await clearMessages(chat.id);
+                          await clearForMe(chat.id);
+                          onChatCleared?.(chat.id);
                           onBack();
                         } catch (e) {
-                          console.error("[CHAT] clearMessages error:", e);
+                          console.error("[CHAT] clearForMe error:", e);
                         }
                       }}
                       className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
@@ -1290,6 +1317,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                   bubbleColorThemId={bubbleColorThemId}
                   isPending={isPending}
                   onEdit={(m) => setEditingMessage({ id: m.id, text: m.text || "" })}
+                  onUpdatePrice={handleUpdatePrice}
                 />
               </div>
             );
@@ -1532,7 +1560,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleSendText();
                 }}
-                className="flex-1 min-w-0 bg-transparent text-xs py-1 outline-none border-none text-slate-800 placeholder-slate-400 font-medium"
+                className="flex-1 min-w-0 bg-transparent text-xs py-1.5 outline-none border-none text-slate-800 placeholder-slate-400 font-medium"
               />
 
               {/* Attachment Clip Button */}

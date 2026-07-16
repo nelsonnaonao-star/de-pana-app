@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.WindowManager;
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.app.NotificationManagerCompat;
 import com.getcapacitor.BridgeActivity;
 
@@ -32,6 +33,25 @@ public class MainActivity extends BridgeActivity {
         createNotificationChannels();
         requestFullScreenIntentPermission();
         handleCallIntent(getIntent());
+
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                try {
+                    bridge.getWebView().evaluateJavascript(
+                        "window.history.back(); 'done'",
+                        value -> {
+                            if ("\"done\"".equals(value) || "'done'".equals(value)) {
+                                Log.d(TAG, "Back button: history.back() executed");
+                            }
+                        }
+                    );
+                } catch (Exception e) {
+                    Log.e(TAG, "Back button: history.back() failed, minimizing", e);
+                    moveTaskToBack(true);
+                }
+            }
+        });
     }
 
     @Override

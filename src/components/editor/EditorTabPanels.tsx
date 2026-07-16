@@ -25,6 +25,8 @@ interface EditorTabPanelsProps {
   setBannerProduct: (v: string) => void;
   bannerPrice: string;
   setBannerPrice: (v: string) => void;
+  showWhatsApp: boolean;
+  setShowWhatsApp: (v: boolean) => void;
   textAnimation: string;
   setTextAnimation: (v: string) => void;
   textSizePercent: number;
@@ -54,6 +56,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
     bannerTitle, setBannerTitle,
     bannerProduct, setBannerProduct,
     bannerPrice, setBannerPrice,
+    showWhatsApp, setShowWhatsApp,
     textAnimation, setTextAnimation,
     textSizePercent, setTextSizePercent,
     selectedStickerIdx, setSelectedStickerIdx,
@@ -225,6 +228,18 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
                 <input type="range" min="80" max="120" step="5" value={textSizePercent}
                   onChange={(e) => setTextSizePercent(Number(e.target.value))} className="w-full accent-teal-500 cursor-pointer mt-1" />
               </div>
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => setShowWhatsApp(!showWhatsApp)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[8px] font-bold transition-all cursor-pointer ${
+                  showWhatsApp ? "bg-teal-950/60 border-teal-400 text-teal-300" : "bg-black/20 border-white/5 text-slate-400 hover:bg-black/35"
+                }`}
+              >
+                <span>{showWhatsApp ? "✓" : "+"}</span>
+                <span>Badge WhatsApp</span>
+              </button>
+              <span className="text-[6.5px] text-slate-500">Arrastra los textos en la vista previa para moverlos</span>
             </div>
           </div>
 

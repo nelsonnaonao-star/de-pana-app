@@ -48,11 +48,14 @@ export default function MediaEditor({
   const [selectedFilterId, setSelectedFilterId] = useState("normal");
 
   // Custom Texts & Typography state
-  const [bannerTitle, setBannerTitle] = useState("SÚPER PROMO");
-  const [bannerProduct, setBannerProduct] = useState("Calzado Premium Red On");
-  const [bannerPrice, setBannerPrice] = useState("$29.99");
+  const [bannerTitle, setBannerTitle] = useState("");
+  const [bannerProduct, setBannerProduct] = useState("");
+  const [bannerPrice, setBannerPrice] = useState("");
+  const [showWhatsApp, setShowWhatsApp] = useState(false);
   const [textAnimation, setTextAnimation] = useState("none");
   const [textSizePercent, setTextSizePercent] = useState<number>(100);
+  const [textOffsetY, setTextOffsetY] = useState(0); // draggable vertical offset (px)
+  const dragRef = useRef({ startY: 0, startOffset: 0, dragging: false });
 
   // Pro Stickers state
   const [selectedStickerIdx, setSelectedStickerIdx] = useState<number>(-1);
@@ -363,7 +366,7 @@ export default function MediaEditor({
       <div className="p-2 shrink-0 bg-slate-950 flex flex-col items-center justify-center relative border-b border-white/5 shadow-inner">
         
         {/* The Frame Box */}
-        <div className="relative aspect-[4/3] w-full max-w-[245px] bg-slate-900 rounded-2xl overflow-hidden border border-white/10 shadow-xl flex flex-col justify-end">
+        <div className="relative aspect-[4/3] w-full max-w-[320px] bg-slate-900 rounded-2xl overflow-hidden border border-white/10 shadow-xl flex flex-col justify-end">
           
           {/* Main Visual Image Layer with Cumulative CSS Filter values */}
           <div 
@@ -404,30 +407,67 @@ export default function MediaEditor({
           {/* Shading layer for optimal visual contrast */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent pointer-events-none z-0"></div>
 
-          {/* INTERACTIVE TEXT OVERLAYS (Responsive, custom animates, custom scale) */}
-          <div 
-            className="absolute inset-x-3 bottom-3.5 z-10 space-y-1 text-left" 
-            style={{ transform: `scale(${textSizePercent / 100})`, transformOrigin: "bottom left" }}
+          {/* INTERACTIVE TEXT OVERLAYS (Responsive, custom animates, custom scale, draggable) */}
+          <div
+            className="absolute inset-x-3 z-10 space-y-1 text-left cursor-grab active:cursor-grabbing select-none"
+            style={{
+              transform: `scale(${textSizePercent / 100})`,
+              transformOrigin: "bottom left",
+              bottom: `${3.5 + textOffsetY}px`,
+            }}
+            onMouseDown={(e) => {
+              dragRef.current = { startY: e.clientY, startOffset: textOffsetY, dragging: true };
+              const onMove = (ev: MouseEvent) => {
+                if (!dragRef.current.dragging) return;
+                const delta = ev.clientY - dragRef.current.startY;
+                setTextOffsetY(Math.max(-120, Math.min(40, dragRef.current.startOffset + delta)));
+              };
+              const onUp = () => { dragRef.current.dragging = false; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+              window.addEventListener("mousemove", onMove);
+              window.addEventListener("mouseup", onUp);
+            }}
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              dragRef.current = { startY: touch.clientY, startOffset: textOffsetY, dragging: true };
+              const onMove = (ev: TouchEvent) => {
+                if (!dragRef.current.dragging) return;
+                const delta = ev.touches[0].clientY - dragRef.current.startY;
+                setTextOffsetY(Math.max(-120, Math.min(40, dragRef.current.startOffset + delta)));
+              };
+              const onUp = () => { dragRef.current.dragging = false; window.removeEventListener("touchmove", onMove); window.removeEventListener("touchend", onUp); };
+              window.addEventListener("touchmove", onMove, { passive: true });
+              window.addEventListener("touchend", onUp);
+            }}
           >
             {/* Title / Brand Badge */}
-            <span className={`inline-block text-[7px] font-black bg-rose-600 text-white px-2 py-0.5 rounded uppercase tracking-wider shadow-md ${getSelectedAnimClass()}`}>
-              {bannerTitle || "SÚPER OFERTA"}
-            </span>
+            {bannerTitle && (
+              <span className={`inline-block text-[7px] font-black bg-rose-600 text-white px-2 py-0.5 rounded uppercase tracking-wider shadow-md ${getSelectedAnimClass()}`}>
+                {bannerTitle}
+              </span>
+            )}
 
             {/* Product Detail */}
-            <h4 className="text-[10px] font-black text-white tracking-tight leading-tight uppercase drop-shadow-md">
-              {bannerProduct || "Producto en Oferta Especial"}
-            </h4>
+            {bannerProduct && (
+              <h4 className="text-[10px] font-black text-white tracking-tight leading-tight uppercase drop-shadow-md">
+                {bannerProduct}
+              </h4>
+            )}
 
-            {/* Price tag */}
-            <div className="flex justify-between items-center pt-1 border-t border-white/15">
-              <span className="text-[11px] font-black text-emerald-400 font-mono tracking-tight leading-none">
-                {bannerPrice || "$0.00"}
-              </span>
-              <span className="text-[6px] text-teal-300 font-bold bg-teal-950/80 border border-teal-500/30 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
-                <Phone className="w-2 h-2 text-teal-400 fill-teal-400" /> WhatsApp
-              </span>
-            </div>
+            {/* Price tag + WhatsApp badge */}
+            {(bannerPrice || showWhatsApp) && (
+              <div className="flex justify-between items-center pt-1 border-t border-white/15">
+                {bannerPrice && (
+                  <span className="text-[11px] font-black text-emerald-400 font-mono tracking-tight leading-none">
+                    {bannerPrice}
+                  </span>
+                )}
+                {showWhatsApp && (
+                  <span className="text-[6px] text-teal-300 font-bold bg-teal-950/80 border border-teal-500/30 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                    <Phone className="w-2 h-2 text-teal-400 fill-teal-400" /> WhatsApp
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* DYNAMIC PRO STICKER OVERLAY */}
@@ -534,6 +574,8 @@ export default function MediaEditor({
         setBannerProduct={setBannerProduct}
         bannerPrice={bannerPrice}
         setBannerPrice={setBannerPrice}
+        showWhatsApp={showWhatsApp}
+        setShowWhatsApp={setShowWhatsApp}
         textAnimation={textAnimation}
         setTextAnimation={setTextAnimation}
         textSizePercent={textSizePercent}

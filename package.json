@@ -14,13 +14,16 @@
   },
   "dependencies": {
     "@capacitor-community/contacts": "^7.2.0",
+    "@capacitor-community/media": "^9.1.0",
     "@capacitor/android": "^8.4.1",
     "@capacitor/app": "^8.1.0",
     "@capacitor/camera": "^8.2.0",
     "@capacitor/cli": "^8.4.1",
     "@capacitor/core": "^8.4.1",
+    "@capacitor/filesystem": "^8.1.2",
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/push-notifications": "^8.1.1",
+    "@capacitor/share": "^8.0.1",
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.110.0",
     "@tailwindcss/vite": "^4.1.14",
@@ -34,6 +37,7 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-hot-toast": "^2.6.0",
+    "react-zoom-pan-pinch": "^4.0.3",
     "vite": "^6.2.3"
   },
   "devDependencies": {
