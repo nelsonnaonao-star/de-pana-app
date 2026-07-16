@@ -282,10 +282,27 @@ router.post('/channels/unsubscribe', async (req, res) => {
 
 router.post('/channels/updates', async (req, res) => {
   try {
-    const { channel_id, text } = req.body;
+    const { channel_id, text, user_id } = req.body;
     if (!channel_id || !text) {
       return res.status(400).json({ error: 'channel_id y text requeridos' });
     }
+
+    const posterId = user_id || req.userId;
+    if (req.userId !== posterId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    const { data: channel, error: chErr } = await supabaseAdmin
+      .from('broadcast_channels')
+      .select('admin_id')
+      .eq('id', channel_id)
+      .maybeSingle();
+    if (chErr || !channel) return res.status(404).json({ error: 'Canal no encontrado' });
+
+    if (channel.admin_id !== posterId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'Solo el admin puede publicar en este canal' });
+    }
+
     const { data, error } = await supabaseAdmin
       .from('broadcast_messages')
       .insert({ channel_id, text: sanitizeInput(text) })
