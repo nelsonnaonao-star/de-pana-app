@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomInt } from 'crypto';
 import { supabaseAdmin } from '../db.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { sendResetSMS } from '../smsService.js';
@@ -27,7 +28,7 @@ const profileLimiter = rateLimit({
 });
 
 function generateCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(randomInt(100000, 1000000));
 }
 
 function sanitizeInput(str) {
@@ -89,7 +90,7 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
     try {
       await sendResetSMS(profile.phone_number, code);
     } catch (smsErr) {
-      console.error('[SMS-RECOVERY] SMS send failed, code logged for debug:', code, smsErr.message);
+      console.error('[SMS-RECOVERY] SMS send failed, code generated (last 2 digits:', code.slice(-2), '), error:', smsErr.message);
     }
 
     res.json({

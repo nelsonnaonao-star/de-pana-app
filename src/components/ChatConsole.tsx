@@ -1,6 +1,14 @@
 import React, { useState, useRef, useEffect } from "react";
+import DOMPurify from "dompurify";
 import { apiUrl } from "../lib/api";
 import { Send, Terminal, Loader2, Sparkles, Copy, Check, MessageCircle } from "lucide-react";
+
+function sanitizeHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ["strong", "em", "code", "br"],
+    ALLOWED_ATTR: ["class"],
+  });
+}
 
 interface Message {
   role: "user" | "model";
@@ -168,9 +176,9 @@ Cuando compilas con Capacitor, el WebView de Android/iOS se extiende a pantalla 
               return (
                 <ul key={lineIdx} className="list-disc pl-5 my-1 text-slate-300">
                   <li dangerouslySetInnerHTML={{ 
-                    __html: content
+                    __html: sanitizeHtml(content
                       .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-white">$1</strong>')
-                      .replace(/`(.*?)`/g, '<code class="font-mono bg-slate-950 text-cyan-400 px-1 py-0.5 rounded text-[11px]">$1</code>')
+                      .replace(/`(.*?)`/g, '<code class="font-mono bg-slate-950 text-cyan-400 px-1 py-0.5 rounded text-[11px]">$1</code>'))
                   }} />
                 </ul>
               );
@@ -181,9 +189,9 @@ Cuando compilas con Capacitor, el WebView de Android/iOS se extiende a pantalla 
                 key={lineIdx}
                 className="text-slate-300 text-sm leading-relaxed"
                 dangerouslySetInnerHTML={{
-                  __html: processed
+                  __html: sanitizeHtml(processed
                     .replace(/\*\*(.*?)\*\*/g, '<strong class="font-semibold text-white">$1</strong>')
-                    .replace(/`(.*?)`/g, '<code class="font-mono bg-slate-950 text-cyan-400 px-1 py-0.5 rounded text-[11px]">$1</code>')
+                    .replace(/`(.*?)`/g, '<code class="font-mono bg-slate-950 text-cyan-400 px-1 py-0.5 rounded text-[11px]">$1</code>'))
                 }}
               />
             );

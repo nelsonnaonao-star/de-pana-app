@@ -29,6 +29,13 @@ const uploadVideo = multer({
   },
 });
 
+const ALLOWED_MIMES = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'video/mp4', 'video/quicktime', 'video/webm',
+  'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-m4a', 'audio/mp4',
+  'application/pdf',
+];
+
 const uploadAny = multer({
   storage: multer.diskStorage({
     destination: path.join(__dirname, '..', '..', 'uploads'),
@@ -38,6 +45,13 @@ const uploadAny = multer({
     },
   }),
   limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (ALLOWED_MIMES.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Tipo de archivo no permitido: ${file.mimetype}`));
+    }
+  },
 });
 
 function getOutputPath() {

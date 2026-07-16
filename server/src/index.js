@@ -98,10 +98,14 @@ async function main() {
   app.use('/api/turn', globalLimiter, turnRoutes);
   app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);
 
-  // ─── FCM webhook (called by Supabase, not by client) ───────────
+  // ─── FCM: webhook is public (authenticated via secret header) ──
+  // ─── FCM: register/send require JWT auth ───────────────────────
   app.use('/api/fcm', (req, res, next) => {
     if (req.path === '/webhook') return next();
     globalLimiter(req, res, next);
+  }, (req, res, next) => {
+    if (req.path === '/webhook') return next();
+    authMiddleware(req, res, next);
   }, fcmRoutes);
 
   // ─── PROTECTED routes (auth required) ──────────────────────────
@@ -143,10 +147,21 @@ async function main() {
   app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
   // ─── Gemini AI Chat endpoint ───────────────────────────────────
-  app.post('/api/chat', async (req, res) => {
+  const chatLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Demasiadas peticiones al chat. Espera un minuto.' },
+  });
+
+  const MAX_HISTORY_MESSAGES = 50;
+  const MAX_HISTORY_CHARS = 50000;
+
+  app.post('/api/chat', globalLimiter, authMiddleware, chatLimiter, async (req, res) => {
     try {
       const { message, history } = req.body;
-      if (!message) {
+      if (!message || typeof message !== 'string') {
         return res.status(400).json({ error: 'El mensaje es requerido.' });
       }
 
@@ -159,17 +174,22 @@ async function main() {
       const ai = new GoogleGenAI({ apiKey });
 
       const formattedContents = [];
+      let totalChars = 0;
       if (history && Array.isArray(history)) {
-        for (const msg of history) {
+        const limitedHistory = history.slice(-MAX_HISTORY_MESSAGES);
+        for (const msg of limitedHistory) {
+          const text = String(msg.text || '').slice(0, 2000);
+          totalChars += text.length;
+          if (totalChars > MAX_HISTORY_CHARS) break;
           formattedContents.push({
             role: msg.role === 'user' ? 'user' : 'model',
-            parts: [{ text: msg.text }]
+            parts: [{ text }]
           });
         }
       }
       formattedContents.push({
         role: 'user',
-        parts: [{ text: message }]
+        parts: [{ text: message.slice(0, 4000) }]
       });
 
       const response = await ai.models.generateContent({

@@ -383,3 +383,117 @@ CREATE TRIGGER guard_sensitive_message_fields
   BEFORE UPDATE ON messages
   FOR EACH ROW
   EXECUTE FUNCTION messages_guard_sensitive_fields();
+
+
+-- ============================================================
+-- TEST FUNCTIONS: verify the trigger blocks direct client updates
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION test_a_sender_id(p_user_id uuid, p_msg_id uuid)
+RETURNS TABLE(test_name text, result text, details text)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM set_config('role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
+
+  UPDATE messages SET sender_id = '00000000-0000-0000-0000-000000000000'::uuid
+    WHERE id = p_msg_id;
+
+  RETURN QUERY SELECT 'A: sender_id'::text, 'FAIL — update was NOT blocked'::text,
+    'The trigger did not raise an exception'::text;
+
+EXCEPTION WHEN OTHERS THEN
+  RETURN QUERY SELECT 'A: sender_id'::text, 'PASS — blocked as expected'::text,
+    SQLERRM::text;
+  PERFORM set_config('role', 'service_role', true);
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION test_b_chat_id(p_user_id uuid, p_msg_id uuid)
+RETURNS TABLE(test_name text, result text, details text)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM set_config('role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
+
+  UPDATE messages SET chat_id = '00000000-0000-0000-0000-000000000000'::uuid
+    WHERE id = p_msg_id;
+
+  RETURN QUERY SELECT 'B: chat_id'::text, 'FAIL — update was NOT blocked'::text,
+    'The trigger did not raise an exception'::text;
+
+EXCEPTION WHEN OTHERS THEN
+  RETURN QUERY SELECT 'B: chat_id'::text, 'PASS — blocked as expected'::text,
+    SQLERRM::text;
+  PERFORM set_config('role', 'service_role', true);
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION test_c_delete(p_user_id uuid, p_msg_id uuid)
+RETURNS TABLE(test_name text, result text, details text)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM set_config('role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
+
+  UPDATE messages SET is_deleted = true, text = NULL
+    WHERE id = p_msg_id;
+
+  RETURN QUERY SELECT 'C: is_deleted'::text, 'FAIL — update was NOT blocked'::text,
+    'The trigger did not raise an exception'::text;
+
+EXCEPTION WHEN OTHERS THEN
+  RETURN QUERY SELECT 'C: is_deleted'::text, 'PASS — blocked as expected'::text,
+    SQLERRM::text;
+  PERFORM set_config('role', 'service_role', true);
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION test_d_edit(p_user_id uuid, p_msg_id uuid)
+RETURNS TABLE(test_name text, result text, details text)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  PERFORM set_config('role', 'authenticated', true);
+  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
+
+  UPDATE messages SET text = 'HACKED TEXT'::text
+    WHERE id = p_msg_id;
+
+  RETURN QUERY SELECT 'D: text edit'::text, 'FAIL — update was NOT blocked'::text,
+    'The trigger did not raise an exception'::text;
+
+EXCEPTION WHEN OTHERS THEN
+  RETURN QUERY SELECT 'D: text edit'::text, 'PASS — blocked as expected'::text,
+    SQLERRM::text;
+  PERFORM set_config('role', 'service_role', true);
+END;
+$$;
+
+
+-- ============================================================
+-- HOW TO RUN THE TESTS
+-- ============================================================
+--
+-- STEP 1: Find a chat_id and participant user_id
+--   SELECT c.id AS chat_id, c.profile_id AS user_id
+--   FROM chats c WHERE c.profile_id IS NOT NULL LIMIT 1;
+--
+-- STEP 2: Find a message_id in that chat
+--   SELECT m.id AS msg_id FROM messages m
+--   WHERE m.chat_id = '<paste chat_id>' AND m.is_deleted = false LIMIT 1;
+--
+-- STEP 3: Run all 4 tests
+--   SELECT * FROM test_a_sender_id('<user_id>', '<msg_id>');
+--   SELECT * FROM test_b_chat_id('<user_id>', '<msg_id>');
+--   SELECT * FROM test_c_delete('<user_id>', '<msg_id>');
+--   SELECT * FROM test_d_edit('<user_id>', '<msg_id>');
+--
+-- EXPECTED: All 4 rows show "PASS — blocked as expected"
+-- ============================================================

@@ -181,14 +181,16 @@ router.post('/webhook', async (req, res) => {
   const startTime = Date.now();
 
   const expectedSecret = process.env.FCM_WEBHOOK_SECRET;
+  if (!expectedSecret) {
+    console.error('[FCM-WEBHOOK] FCM_WEBHOOK_SECRET no configurado — rechazando petición');
+    return res.status(503).json({ error: 'Webhook not configured' });
+  }
   const receivedSecret = req.headers['x-fcm-secret'] || req.headers['authorization'] || '';
-  if (expectedSecret) {
-    const match = receivedSecret === expectedSecret
-      || receivedSecret === `Bearer ${expectedSecret}`
-      || receivedSecret === `fcm-secret ${expectedSecret}`;
-    if (!match) {
-      return res.status(401).json({ error: 'invalid webhook secret' });
-    }
+  const match = receivedSecret === expectedSecret
+    || receivedSecret === `Bearer ${expectedSecret}`
+    || receivedSecret === `fcm-secret ${expectedSecret}`;
+  if (!match) {
+    return res.status(401).json({ error: 'invalid webhook secret' });
   }
 
   const { type, table, record } = req.body;

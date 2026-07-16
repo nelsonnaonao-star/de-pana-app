@@ -14,7 +14,7 @@ if (accountSid && authToken) {
 
 export async function sendResetSMS(phoneNumber, pin) {
   if (!client) {
-    console.warn(`[SMS] Twilio no disponible. PIN para ${phoneNumber}: ${pin}`);
+    console.warn(`[SMS] Twilio no disponible. PIN generated for ${phoneNumber.slice(-4)} (last 2: ${pin.slice(-2)})`);
     throw new Error('Servicio de SMS no configurado');
   }
 
