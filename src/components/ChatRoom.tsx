@@ -234,6 +234,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recordingTimer = useRef<number | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingIndicatorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -437,26 +438,29 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
 
   // Supabase Realtime Broadcast for typing indicator
   useEffect(() => {
-    const channel = supabase.channel(`presence-${chat.id}`);
+    const channel = supabase.channel(`typing-${chat.id}`, {
+      config: { broadcast: { self: false, ack: false } },
+    });
 
-    (channel as any).on('broadcast', { event: 'typing' }, (payload: { userId?: string; isTyping?: boolean }) => {
-      if (payload.userId && payload.userId !== uid) {
-        setPartnerTyping(!!payload.isTyping);
-        if (payload.isTyping) {
-          setTimeout(() => setPartnerTyping(false), 4000);
+    channel.on('broadcast', { event: 'typing' }, (payload: any) => {
+      const data = payload.payload || payload;
+      if (data.userId && data.userId !== uid) {
+        setPartnerTyping(!!data.isTyping);
+        if (data.isTyping) {
+          if (typingIndicatorTimerRef.current) clearTimeout(typingIndicatorTimerRef.current);
+          typingIndicatorTimerRef.current = setTimeout(() => setPartnerTyping(false), 4000);
         }
       }
     });
 
-    (channel as any).subscribe();
+    channel.subscribe();
     channelRef.current = channel;
 
     return () => {
       supabase.removeChannel(channel);
       channelRef.current = null;
-      if (typingTimerRef.current) {
-        clearTimeout(typingTimerRef.current);
-      }
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      if (typingIndicatorTimerRef.current) clearTimeout(typingIndicatorTimerRef.current);
     };
   }, [chat.id, uid]);
 
