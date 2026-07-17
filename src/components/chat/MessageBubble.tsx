@@ -220,6 +220,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
   handleAddReaction: (id: string, emoji: string) => void;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const [showViewer, setShowViewer] = useState(false);
   const isSending = msg.status === "sending";
   const isEmojiOnly = isSticker && msg.mediaUrl && isEmoji(msg.mediaUrl);
@@ -245,9 +246,15 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           </div>
         ) : (
           <>
-        {!imgLoaded && (
+        {!imgLoaded && !imgError && (
           <div className={`${isSticker ? "w-[140px] h-[140px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
             <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
+          </div>
+        )}
+
+        {imgError && (
+          <div className={`${isSticker ? "w-[140px] h-[140px]" : "w-[220px] h-[200px]"} bg-slate-100 rounded-xl flex items-center justify-center`}>
+            <span className="text-slate-400 text-xs">No se pudo cargar</span>
           </div>
         )}
 
@@ -255,8 +262,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           src={msg.mediaUrl}
           alt={isSticker ? "Sticker" : "Image"}
           onLoad={() => setImgLoaded(true)}
-          onError={() => setImgLoaded(true)}
-          loading="lazy"
+          onError={() => setImgError(true)}
           className={`${isSticker
             ? "max-w-[160px] max-h-[160px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
             : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
