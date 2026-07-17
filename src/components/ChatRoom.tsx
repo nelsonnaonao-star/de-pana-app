@@ -669,7 +669,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         const isCapacitor = !!(window as any).Capacitor;
         if (isCapacitor) {
           const photo = await CapacitorCamera.getPhoto({
-            quality: 90,
+            quality: 75,
             source: CameraSource.Photos,
             resultType: CameraResultType.Uri,
           });
@@ -690,6 +690,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           setMessages(prev => [...prev, sendingMsg]);
           onSendMessage(sendingMsg);
           const url = await uploadChatMedia(fileBlob, type === "video" ? "video" : "image");
+          await new Promise<void>((resolve) => {
+            const img = new Image();
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+            img.src = url;
+          });
           setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
           const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
           if (!isLocalChat) {
@@ -728,6 +734,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       try {
         const blob = new Blob([file], { type: file.type });
         const url = await uploadChatMedia(blob, "files");
+        await new Promise<void>((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+          img.src = url;
+        });
         setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
         if (!isLocalChat) {

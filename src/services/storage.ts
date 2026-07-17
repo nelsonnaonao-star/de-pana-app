@@ -1,32 +1,6 @@
 import { supabase } from "../lib/supabase";
-import { apiUrl, authFetch } from "../lib/api";
 
 const BUCKET = "chat-images";
-
-async function uploadViaServer(blob: Blob): Promise<string | null> {
-  try {
-    const token = (await supabase.auth.getSession()).data.session?.access_token;
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const formData = new FormData();
-    formData.append("file", blob, `file.${blob.type.split("/")[1] || "bin"}`);
-    const res = await fetch(apiUrl("/api/media/upload"), {
-      method: "POST",
-      headers,
-      body: formData,
-    });
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 404) return null;
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || "Error al subir archivo");
-    }
-    const data = await res.json();
-    return data.url;
-  } catch {
-    return null;
-  }
-}
 
 async function uploadDirectToSupabase(
   blob: Blob,
@@ -48,13 +22,40 @@ async function uploadDirectToSupabase(
   return data.publicUrl;
 }
 
+export async function compressImage(blob: Blob, maxPx: number = 1080, quality: number = 0.7): Promise<Blob> {
+  if (!blob.type.startsWith("image/")) return blob;
+  try {
+    const bitmap = await createImageBitmap(blob);
+    let w = bitmap.width;
+    let h = bitmap.height;
+    if (w > maxPx || h > maxPx) {
+      const ratio = Math.min(maxPx / w, maxPx / h);
+      w = Math.round(w * ratio);
+      h = Math.round(h * ratio);
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    const out = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("canvas toBlob failed"))), "image/jpeg", quality);
+    });
+    console.log(`[STORAGE] Compressed image: ${(blob.size / 1024 / 1024).toFixed(1)}MB → ${(out.size / 1024 / 1024).toFixed(1)}MB (${w}x${h})`);
+    return out;
+  } catch (e) {
+    console.warn("[STORAGE] Image compression failed, using original:", e);
+    return blob;
+  }
+}
+
 export async function uploadChatMedia(
   blob: Blob,
   folder: string = "uploads"
 ): Promise<string> {
-  const serverUrl = await uploadViaServer(blob);
-  if (serverUrl) return serverUrl;
-  return uploadDirectToSupabase(blob, folder);
+  const toUpload = folder === "image" || folder === "uploads" ? await compressImage(blob) : blob;
+  return uploadDirectToSupabase(toUpload, folder);
 }
 
 export async function uploadAvatar(blob: Blob, _userId: string): Promise<string> {
