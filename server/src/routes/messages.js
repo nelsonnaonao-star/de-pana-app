@@ -170,6 +170,7 @@ router.post('/send', sendLimiter, async (req, res) => {
           last_message: sanitizedText || 'Multimedia',
           last_message_time: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+          deleted_at: null,
         })
         .eq('id', msg.chat_id);
     } catch (e) {
