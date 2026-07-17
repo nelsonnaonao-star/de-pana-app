@@ -605,8 +605,21 @@ export default function PhoneSimulator({
           profile_id: user.id,
           admin_id: user.id,
         });
-        await refreshChats();
         if (newChat?.id) {
+          setChats(prev => {
+            if (prev.some(c => c.id === newChat.id)) return prev;
+            return [{
+              id: newChat.id,
+              name: "Soporte RED ON 🛡️",
+              avatar: "",
+              status: "online" as const,
+              lastMessage: "",
+              lastMessageTime: "",
+              unreadCount: 0,
+              partnerUserId: user.id,
+              messages: [],
+            }, ...prev];
+          });
           setSelectedChatId(newChat.id);
           setCurrentScreen("chat_room");
         }
@@ -816,15 +829,8 @@ export default function PhoneSimulator({
     }
   }, [externalMessageTrigger, currentScreen, selectedChatId, onClearExternalMessageTrigger]);
 
+  // activeChat derived from chats + selectedChatId
   const activeChat = chats.find((c) => c.id === selectedChatId);
-
-  // Safety guard: if we're on chat_room but no activeChat, revert to chats
-  useEffect(() => {
-    if (currentScreen === "chat_room" && !activeChat) {
-      setCurrentScreen("chats");
-      setSelectedChatId(null);
-    }
-  }, [currentScreen, activeChat]);
 
   const handleSendMessageInRoom = (newMsg: Message) => {
     if (!selectedChatId) return;
@@ -1012,7 +1018,6 @@ export default function PhoneSimulator({
           profile_id: profile.id,
           admin_id: user?.id || "",
         });
-        refreshChats();
         if (chat?.id) {
           setChats(prev => {
             if (prev.some(c => c.id === chat.id)) return prev;
@@ -1050,7 +1055,6 @@ export default function PhoneSimulator({
           profile_id: partnerId,
           admin_id: user?.id || "",
         });
-        refreshChats();
         if (chat?.id) {
           setChats(prev => {
             if (prev.some(c => c.id === chat.id)) return prev;
