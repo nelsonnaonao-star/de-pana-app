@@ -256,6 +256,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           alt={isSticker ? "Sticker" : "Image"}
           onLoad={() => setImgLoaded(true)}
           onError={() => setImgLoaded(true)}
+          loading="lazy"
           className={`${isSticker
             ? "max-w-[160px] max-h-[160px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
             : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"

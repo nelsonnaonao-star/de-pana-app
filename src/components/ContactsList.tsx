@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft } from "lucide-react";
 import { Contact } from "../services/contacts";
+import CachedImage from "./CachedImage";
 
 interface ContactsListProps {
   contacts: Contact[];
@@ -126,7 +127,7 @@ function ContactRow({ contact, onClick }: { contact: Contact; onClick: (c: Conta
     >
       <div className={`w-11 h-11 rounded-full overflow-hidden bg-gradient-to-br ${avatarColors[colorIndex]} shrink-0 shadow-sm flex items-center justify-center`}>
         {contact.avatar ? (
-          <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
+          <CachedImage src={contact.avatar} alt="" className="w-full h-full object-cover" loading="lazy" />
         ) : (
           <span className="text-white font-black text-sm">{getInitials(contact.name)}</span>
         )}

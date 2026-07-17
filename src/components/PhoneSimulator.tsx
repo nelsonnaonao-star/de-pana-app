@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useDebounce } from "../hooks/useDebounce";
+import CachedImage from "./CachedImage";
+import ChatListSkeleton from "./ChatListSkeleton";
 import { 
   Check, AlertTriangle, Info, Search, Plus, 
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
@@ -176,6 +179,7 @@ export default function PhoneSimulator({
 
   // Active Chats & Selected Chat
   const [chats, setChats] = useState<Chat[]>([]);
+  const [chatsLoaded, setChatsLoaded] = useState(false);
   const [clearedAtMap, setClearAtMap] = useState<Record<string, string>>({});
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [refetchTrigger, setRefetchTrigger] = useState(0);
@@ -295,6 +299,7 @@ export default function PhoneSimulator({
 
   // Search input filter
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebounce(searchQuery, 250);
 
   // Media editor state to hide navigation and maximize vertical screen space
   const [isEditingMedia, setIsEditingMedia] = useState(false);
@@ -543,6 +548,7 @@ export default function PhoneSimulator({
         messages: [],
       }));
       setChats(mapped);
+      setChatsLoaded(true);
     }
   }, [supabaseChats, user, clearedAtMap]);
 
@@ -1195,7 +1201,7 @@ export default function PhoneSimulator({
   };
 
   const filteredChats = chats.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase())
+    c.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
   );
 
   return (
@@ -1434,7 +1440,7 @@ export default function PhoneSimulator({
                           {isSelected && <Check className="w-3 h-3 text-white" />}
                         </div>
                         {contact.avatar ? (
-                          <img src={contact.avatar} alt={contact.name} className="w-9 h-9 rounded-full object-cover" />
+                          <img src={contact.avatar} alt={contact.name} className="w-9 h-9 rounded-full object-cover" loading="lazy" />
                         ) : (
                           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                             <span className="text-white font-bold text-[10px]">
@@ -1748,7 +1754,7 @@ export default function PhoneSimulator({
                                     </svg>
                                   </div>
                                 ) : chat.avatar ? (
-                                  <img src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" />
+                                  <CachedImage src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" loading="lazy" />
                                 ) : (
                                   <div className="w-11 h-11 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                                     <span className="text-white font-black text-sm">
@@ -1784,7 +1790,11 @@ export default function PhoneSimulator({
                       );
                     })}
 
-                    {filteredChats.length === 0 && (
+                    {filteredChats.length === 0 && !chatsLoaded && (
+                      <ChatListSkeleton count={8} />
+                    )}
+
+                    {filteredChats.length === 0 && chatsLoaded && (
                       <div className="text-center py-12 text-slate-400 space-y-1">
                         <p className="text-xs font-semibold">No se encontraron chats</p>
                         <p className="text-[10px]">Prueba escribiendo otro nombre</p>

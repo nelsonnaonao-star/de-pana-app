@@ -1063,7 +1063,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                   </svg>
                 </div>
               ) : chat.avatar ? (
-                <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" />
+                <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" loading="lazy" />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center border border-white/20">
                   <span className="text-white font-bold text-xs">
@@ -1280,7 +1280,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                 {groupMembers.map(m => (
                   <div key={m.profile_id} className="flex items-center gap-3 py-1.5">
                     {m.avatar ? (
-                      <img src={m.avatar} className="w-8 h-8 rounded-full object-cover" alt="" />
+                      <img src={m.avatar} className="w-8 h-8 rounded-full object-cover" alt="" loading="lazy" />
                     ) : (
                       <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                         <span className="text-white font-bold text-[10px]">

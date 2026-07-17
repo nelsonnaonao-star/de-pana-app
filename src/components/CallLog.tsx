@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Clock, ArrowLeft } from "lucide-react";
 import { supabase } from "../lib/supabase";
+import CachedImage from "./CachedImage";
 
 type CallRecord = {
   id: string;
@@ -149,7 +150,7 @@ export default function CallLog({ userId, onBack, onStartChat }: CallLogProps) {
                 >
                   <div className="w-10 h-10 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-teal-600 shrink-0 flex items-center justify-center text-white text-sm font-bold shadow-sm">
                     {call.caller_avatar ? (
-                      <img src={call.caller_avatar} alt="" className="w-full h-full object-cover" />
+                      <CachedImage src={call.caller_avatar} alt="" className="w-full h-full object-cover" loading="lazy" />
                     ) : (
                       call.caller_name.charAt(0).toUpperCase()
                     )}
