@@ -5,6 +5,9 @@ import { useSupabase } from "./contexts/SupabaseContext";
 import AuthScreen from "./components/AuthScreen";
 import PhoneSimulator from "./components/PhoneSimulator";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { initSentryCapacitor } from "./lib/sentry";
+
+initSentryCapacitor();
 
 function AppContent() {
   const { user, loading } = useSupabase();

@@ -2,13 +2,22 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import * as Sentry from "@sentry/node";
 import dotenv from "dotenv";
 
 dotenv.config();
 
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: "staging",
+  tracesSampleRate: 1.0,
+});
+
 const app = express();
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
+app.use(Sentry.Handlers.requestHandler());
+app.use(Sentry.Handlers.tracingHandler());
 app.use(express.json());
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,6 +28,15 @@ app.use((_req, res, next) => {
     return;
   }
   next();
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ 
+    status: "ok", 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    env: "staging"
+  });
 });
 
 // Lazy-initialize Gemini client to prevent crash if key is missing on start
@@ -117,3 +135,5 @@ async function startServer() {
 }
 
 startServer();
+
+app.use(Sentry.Handlers.errorHandler());
