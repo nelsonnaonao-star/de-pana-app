@@ -126,7 +126,7 @@ router.post('/send', sendLimiter, async (req, res) => {
         chat_id: msg.chat_id,
         sender_id: msg.sender_id,
         receiver_id: msg.receiver_id || null,
-        text: sanitizedText,
+        text: sanitizedText || '',
         type: msgType,
         status: 'sent',
         created_at: new Date().toISOString(),
