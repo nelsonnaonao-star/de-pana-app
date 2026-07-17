@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
-  PhoneOff, Phone, Mic, MicOff, Video, VideoOff,
+  PhoneOff, Phone, Mic, MicOff, Video, VideoOff, RotateCw,
   Sparkles, Smile, Image, ShieldAlert, Users, Layers, MonitorPlay
 } from "lucide-react";
 import { ActiveCall } from "../types";
@@ -13,6 +13,7 @@ interface CallOverlayProps {
   onDecline: () => void;
   onToggleMute: () => void;
   onToggleVideo: () => void;
+  onSwitchCamera: () => void;
   onEndCall: () => void;
 }
 
@@ -26,6 +27,7 @@ export default function CallOverlay({
   onDecline,
   onToggleMute,
   onToggleVideo,
+  onSwitchCamera,
   onEndCall
 }: CallOverlayProps) {
   const [activeFilter, setActiveFilter] = useState<string>("none");
@@ -376,6 +378,16 @@ export default function CallOverlay({
           >
             {call.isVideoOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
           </button>
+
+          {call.type === "video" && (call.status === "connected" || call.status === "connecting") && (
+            <button
+              onClick={onSwitchCamera}
+              className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/15 text-white flex items-center justify-center transition-all cursor-pointer"
+              title="Cambiar cámara"
+            >
+              <RotateCw className="w-5 h-5" />
+            </button>
+          )}
         </div>
       </div>
     </div>

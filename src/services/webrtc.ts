@@ -395,6 +395,8 @@ export class WebRTCService {
     });
   }
 
+  private currentFacingMode: "user" | "environment" = "user";
+
   setMuted(muted: boolean) {
     if (!this.localStream) return;
     for (const track of this.localStream.getAudioTracks()) {
@@ -406,6 +408,39 @@ export class WebRTCService {
     if (!this.localStream) return;
     for (const track of this.localStream.getVideoTracks()) {
       track.enabled = enabled;
+    }
+  }
+
+  async switchCamera(): Promise<MediaStream | null> {
+    if (!this.localStream || !this.pc) return null;
+    const newFacing = this.currentFacingMode === "user" ? "environment" : "user";
+
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: newFacing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
+        audio: false,
+      });
+
+      const newVideoTrack = newStream.getVideoTracks()[0];
+      if (!newVideoTrack) return null;
+
+      const oldVideoTrack = this.localStream.getVideoTracks()[0];
+      if (oldVideoTrack) {
+        oldVideoTrack.stop();
+        this.localStream.removeTrack(oldVideoTrack);
+        this.localStream.addTrack(newVideoTrack);
+
+        const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) {
+          await sender.replaceTrack(newVideoTrack);
+        }
+      }
+
+      this.currentFacingMode = newFacing;
+      return this.localStream;
+    } catch (err) {
+      console.error("[WebRTC] switchCamera error:", err);
+      return null;
     }
   }
 

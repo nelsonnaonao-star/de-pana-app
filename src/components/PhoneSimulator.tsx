@@ -1389,6 +1389,10 @@ export default function PhoneSimulator({
               return next;
             });
           }}
+          onSwitchCamera={async () => {
+            const newStream = await webrtcRef.current?.switchCamera();
+            if (newStream) setLocalStream(newStream);
+          }}
           onEndCall={async () => {
             console.log('[WEBRTC SIGNALING] 📞 Ending call');
             stopRingbackTone();
