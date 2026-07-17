@@ -1,10 +1,12 @@
 package com.redon.app;
 
+import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
 import android.net.Uri;
 import android.os.Build;
@@ -12,7 +14,7 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.WindowManager;
-import androidx.activity.OnBackPressedCallback;
+import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationManagerCompat;
 import com.getcapacitor.BridgeActivity;
 
@@ -31,27 +33,9 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         instance = this;
         createNotificationChannels();
+        requestNotificationPermission();
         requestFullScreenIntentPermission();
         handleCallIntent(getIntent());
-
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-            @Override
-            public void handleOnBackPressed() {
-                try {
-                    bridge.getWebView().evaluateJavascript(
-                        "window.history.back(); 'done'",
-                        value -> {
-                            if ("\"done\"".equals(value) || "'done'".equals(value)) {
-                                Log.d(TAG, "Back button: history.back() executed");
-                            }
-                        }
-                    );
-                } catch (Exception e) {
-                    Log.e(TAG, "Back button: history.back() failed, minimizing", e);
-                    moveTaskToBack(true);
-                }
-            }
-        });
     }
 
     @Override
@@ -149,6 +133,14 @@ public class MainActivity extends BridgeActivity {
             callsChannel.enableLights(true);
             callsChannel.setShowBadge(true);
             nm.createNotificationChannel(callsChannel);
+        }
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1001);
+            }
         }
     }
 

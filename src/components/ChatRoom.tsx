@@ -52,16 +52,17 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const [isPlayingAudio, setIsPlayingAudio] = useState<string | null>(null); // messageId
   const [partnerTyping, setPartnerTyping] = useState(false);
   const [messages, setMessages] = useState<Message[]>(chat.messages || []);
-  const [renderLimit, setRenderLimit] = useState(50);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreOlder, setHasMoreOlder] = useState(true);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [searchIndex, setSearchIndex] = useState(0);
   const messagesRef = useRef<HTMLDivElement>(null);
-  const visibleMessages = messages.slice(-renderLimit);
+  const prevScrollHeightRef = useRef<number>(0);
   const filteredMessages = searchQuery.trim()
-    ? visibleMessages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
-    : visibleMessages;
+    ? messages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
+    : messages;
 
   const mapApiMsg = (m: any): Message => {
     const durNum = m.audio_duration ? Number(m.audio_duration) : 0;
@@ -71,6 +72,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
       text: m.text,
       timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+      rawCreatedAt: m.created_at || undefined,
       type: (m.type as Message["type"]) || "text",
       mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url || undefined,
       duration: durStr,
@@ -99,17 +101,20 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     });
   }, []);
 
-  // Fetch real messages from API on mount
+  // Fetch initial messages (last 50 only)
   useEffect(() => {
     console.log('[CHAT] useEffect [chat.id, uid] — chat.id:', chat.id, 'uid:', uid);
     if (chat.id) {
-      getMessages(chat.id).then(apiMessages => {
+      setHasMoreOlder(true);
+      getMessages(chat.id, { limit: 50 }).then(apiMessages => {
         console.log('[CHAT] getMessages result count:', apiMessages?.length);
         if (apiMessages && apiMessages.length > 0) {
           const mapped = apiMessages.map(mapApiMsg);
           mergeServerMessages(mapped);
+          if (apiMessages.length < 50) setHasMoreOlder(false);
           console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
         } else {
+          setHasMoreOlder(false);
           console.log('[CHAT] ⚠️ getMessages returned 0 messages');
         }
       }).catch((err) => {
@@ -118,32 +123,77 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     }
   }, [chat.id, uid]);
 
-  // Refetch messages when refetchTrigger changes (e.g., new FCM push received in foreground)
+  // Refetch only newer messages when refetchTrigger changes (FCM push received)
   useEffect(() => {
-    if (chat.id && refetchTrigger && refetchTrigger > 0) {
-      getMessages(chat.id).then(apiMessages => {
+    if (chat.id && refetchTrigger && refetchTrigger > 0 && messages.length > 0) {
+      getMessages(chat.id, { limit: 50 }).then(apiMessages => {
         if (apiMessages && apiMessages.length > 0) {
           const mapped = apiMessages.map(mapApiMsg);
-          mergeServerMessages(mapped);
+          setMessages(prev => {
+            const serverIds = new Set(mapped.map(m => m.id));
+            const kept = prev.filter(m => !serverIds.has(m.id));
+            return [...kept, ...mapped];
+          });
         }
       }).catch(() => {});
     }
   }, [chat.id, uid, refetchTrigger]);
 
-  // Refetch messages when app comes back to foreground (covers background race condition)
+  // Refetch only newer messages when app comes back to foreground
   useEffect(() => {
     const handler = CapacitorApp.addListener('appStateChange', ({ isActive }) => {
-      if (isActive && chat.id) {
-        getMessages(chat.id).then(apiMessages => {
+      if (isActive && chat.id && messages.length > 0) {
+        getMessages(chat.id, { limit: 50 }).then(apiMessages => {
           if (apiMessages && apiMessages.length > 0) {
             const mapped = apiMessages.map(mapApiMsg);
-            mergeServerMessages(mapped);
+            setMessages(prev => {
+              const serverIds = new Set(mapped.map(m => m.id));
+              const kept = prev.filter(m => !serverIds.has(m.id));
+              return [...kept, ...mapped];
+            });
           }
         }).catch(() => {});
       }
     });
     return () => { handler.then(h => h.remove()); };
   }, [chat.id, uid]);
+
+  // ── Infinite scroll: load older messages ────────────────────────
+  const loadOlderMessages = useCallback(async () => {
+    if (loadingOlder || !hasMoreOlder || messages.length === 0) return;
+    const oldestTs = messages[0]?.rawCreatedAt;
+    if (!oldestTs) return;
+
+    setLoadingOlder(true);
+    try {
+      const container = messagesRef.current;
+      const prevScrollHeight = container?.scrollHeight || 0;
+
+      const older = await getMessages(chat.id, { limit: 50, before: oldestTs });
+      if (older && older.length > 0) {
+        const mapped = older.map(mapApiMsg);
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const newMsgs = mapped.filter(m => !existingIds.has(m.id));
+          return [...newMsgs, ...prev];
+        });
+        // Restore scroll position after prepend
+        requestAnimationFrame(() => {
+          if (container) {
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop += newScrollHeight - prevScrollHeight;
+          }
+        });
+        if (older.length < 50) setHasMoreOlder(false);
+      } else {
+        setHasMoreOlder(false);
+      }
+    } catch (err) {
+      console.error('[CHAT] Error loading older messages:', err);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [chat.id, messages, loadingOlder, hasMoreOlder]);
 
   // Live Chat Style states with localStorage caching
   const [selectedBgId, setSelectedBgId] = useState(() => {
@@ -192,9 +242,33 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const sendingRecordingRef = useRef(false);
 
+  // Only auto-scroll to bottom when user is already near the bottom
+  const isNearBottomRef = useRef(true);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const container = messagesRef.current;
+    if (!container) return;
+    const handleAutoScroll = () => {
+      const threshold = 150;
+      isNearBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+    };
+    container.addEventListener('scroll', handleAutoScroll);
+    return () => container.removeEventListener('scroll', handleAutoScroll);
+  }, []);
+
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
+
+  // ── Infinite scroll trigger: load older when scrolled near top ──
+  const handleScroll = useCallback(() => {
+    const container = messagesRef.current;
+    if (!container || loadingOlder || !hasMoreOlder) return;
+    if (container.scrollTop < 80) {
+      loadOlderMessages();
+    }
+  }, [loadingOlder, hasMoreOlder, loadOlderMessages]);
 
   // Fetch group members when group info panel opens
   useEffect(() => {
@@ -1279,20 +1353,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       {/* MESSAGES LIST AREA */}
       <div 
         className="flex-1 p-4 overflow-y-auto space-y-3.5 relative transition-all duration-300 bg-transparent"
+        ref={messagesRef}
+        onScroll={handleScroll}
       >
         <div className="relative z-10 space-y-3.5">
-          {(() => { if (messages.length > 0 || visibleMessages.length > 0) console.log('[RENDER] Rendering messages — total:', messages.length, 'visible:', visibleMessages.length); })()}
-          {messages.length > renderLimit && (
-            <div className="flex justify-center pb-2">
-              <button
-                onClick={() => setRenderLimit((prev) => prev + 50)}
-                className="text-[10px] font-bold text-teal-400 hover:text-teal-300 bg-black/30 px-4 py-1.5 rounded-full transition-all"
-              >
-                Cargar mensajes anteriores
-              </button>
+          {loadingOlder && (
+            <div className="flex justify-center py-3">
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <div className="w-4 h-4 border-2 border-slate-300 border-t-teal-500 rounded-full animate-spin" />
+                Cargando mensajes anteriores...
+              </div>
             </div>
           )}
-          {(showSearch && searchQuery.trim() ? filteredMessages : visibleMessages).map((msg, idx) => {
+          {(showSearch && searchQuery.trim() ? filteredMessages : messages).map((msg, idx) => {
             const isMe = msg.sender === "me";
             const isHighlighted = showSearch && searchQuery.trim() && idx === searchIndex;
             return (

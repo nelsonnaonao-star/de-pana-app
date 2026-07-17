@@ -3,6 +3,7 @@ export interface Message {
   sender: "me" | "other";
   text?: string;
   timestamp: string;
+  rawCreatedAt?: string;
   type: "text" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   mediaUrl?: string;
   fileName?: string;
