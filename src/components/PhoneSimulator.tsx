@@ -91,14 +91,15 @@ export default function PhoneSimulator({
     phone: string;
     avatar: string;
   } | null>(null);
+  const avatarManualRef = useRef(false);
 
   useEffect(() => {
     if (user && profile) {
-      setRegisteredUser({
+      setRegisteredUser(prev => ({
         name: profile.name,
         phone: profile.phone_number,
-        avatar: profile.avatar || profile.avatar_url || "",
-      });
+        avatar: avatarManualRef.current ? (prev?.avatar || profile.avatar || profile.avatar_url || "") : (profile.avatar || profile.avatar_url || ""),
+      }));
     } else if (user) {
       const fallbackName = user.email?.split("@")[0] || "Usuario";
       setRegisteredUser({
@@ -180,6 +181,7 @@ export default function PhoneSimulator({
   // Active Chats & Selected Chat
   const [chats, setChats] = useState<Chat[]>([]);
   const [chatsLoaded, setChatsLoaded] = useState(false);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [clearedAtMap, setClearAtMap] = useState<Record<string, string>>({});
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [refetchTrigger, setRefetchTrigger] = useState(0);
@@ -2012,8 +2014,13 @@ export default function PhoneSimulator({
                         <img 
                           src={registeredUser.avatar} 
                           alt="Profile" 
-                          className="w-14 h-14 rounded-full mx-auto object-cover border-4 border-white/20 shadow-lg" 
+                          className={`w-14 h-14 rounded-full mx-auto object-cover border-4 border-white/20 shadow-lg transition-opacity ${isUploadingAvatar ? "opacity-50" : ""}`}
                         />
+                        {isUploadingAvatar && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          </div>
+                        )}
                         <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
                         <input
                           ref={fileInputRef}
@@ -2024,27 +2031,25 @@ export default function PhoneSimulator({
                             const file = e.target.files?.[0];
                             if (!file || !user) return;
                             try {
+                              setIsUploadingAvatar(true);
                               const blob = new Blob([await file.arrayBuffer()], { type: file.type });
                               const url = await uploadAvatar(blob, user.id);
-                              await new Promise<void>((resolve) => {
-                                const img = new Image();
-                                img.onload = () => resolve();
-                                img.onerror = () => resolve();
-                                img.src = url;
-                              });
+                              avatarManualRef.current = true;
                               await updateProfile(user.id, { avatar_url: url, avatar: url });
-                              await refreshProfile();
                               setRegisteredUser(prev => prev ? { ...prev, avatar: url } : prev);
+                              refreshProfile().catch(() => {});
                               showToast("Foto de perfil actualizada ✅");
                             } catch (err) {
                               console.error("Avatar upload failed:", err);
                               showToast("Error al subir la foto ❌");
+                            } finally {
+                              setIsUploadingAvatar(false);
                             }
                           }}
                         />
                         <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="absolute inset-0 bg-black/0 group-hover:bg-black/40 rounded-full transition-all flex items-center justify-center cursor-pointer"
+                          onClick={() => !isUploadingAvatar && fileInputRef.current?.click()}
+                          className={`absolute inset-0 bg-black/0 group-hover:bg-black/40 rounded-full transition-all flex items-center justify-center ${isUploadingAvatar ? "cursor-wait" : "cursor-pointer"}`}
                         >
                           <Camera className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md" />
                         </button>

@@ -151,12 +151,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
   const refreshProfile = async () => {
     if (!user) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", user.id)
       .single();
-    setProfile(data as Profile);
+    if (!error && data) {
+      setProfile(data as Profile);
+    }
   };
 
   const refreshChats = async () => {

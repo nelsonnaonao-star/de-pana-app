@@ -19,7 +19,7 @@ function hashUrl(url: string): string {
     const char = url.charCodeAt(i);
     hash = ((hash << 5) - hash + char) | 0;
   }
-  return Math.abs(hash).toString(36) + "_" + Date.now().toString(36);
+  return Math.abs(hash).toString(36);
 }
 
 function getExtension(url: string): string {
