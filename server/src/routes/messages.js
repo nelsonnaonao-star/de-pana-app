@@ -152,8 +152,6 @@ router.post('/send', sendLimiter, async (req, res) => {
         reply_to_id: msg.reply_to_id || null,
         reply_to_text: msg.reply_to_text || null,
         reply_to_sender: msg.reply_to_sender || null,
-        sticker_url: msg.sticker_url || null,
-        gif_url: msg.gif_url || null,
         is_animated: !!msg.is_animated,
         is_deleted: false,
         is_ephemeral: false,
