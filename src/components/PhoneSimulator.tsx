@@ -879,6 +879,20 @@ export default function PhoneSimulator({
       } catch (e) { console.warn('[WEBRTC SIGNALING] apiStartCall error:', e); }
     }
 
+    // Show call overlay IMMEDIATELY so the caller always sees "Llamando..."
+    setActiveCall({
+      id: callId,
+      contactName: activeChat.name,
+      contactAvatar: activeChat.avatar,
+      type: type,
+      status: "outgoing",
+      durationSeconds: 0,
+      isMuted: false,
+      isVideoOff: false,
+      isGroup: activeChat.id === "grupo_redon",
+      targetUserId: partnerId
+    });
+
     try {
       const webrtc = new WebRTCService(callId, user.id);
       webrtcRef.current = webrtc;
@@ -911,19 +925,6 @@ export default function PhoneSimulator({
       console.log('[WEBRTC SIGNALING] 📞 Creating offer...');
       await webrtc.createOffer();
       console.log('[WEBRTC SIGNALING] ✅ Offer sent — waiting for answer');
-
-      setActiveCall({
-        id: callId,
-        contactName: activeChat.name,
-        contactAvatar: activeChat.avatar,
-        type: type,
-        status: "outgoing",
-        durationSeconds: 0,
-        isMuted: false,
-        isVideoOff: false,
-        isGroup: activeChat.id === "grupo_redon",
-        targetUserId: partnerId
-      });
 
       playRingbackTone();
 
@@ -974,6 +975,7 @@ export default function PhoneSimulator({
       webrtcRef.current?.cleanup();
       webrtcRef.current = null;
       setLocalStream(null);
+      setTimeout(() => cleanupCall(), 3000);
     }
   };
 
