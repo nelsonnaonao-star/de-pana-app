@@ -1913,6 +1913,12 @@ export default function PhoneSimulator({
                             try {
                               const blob = new Blob([await file.arrayBuffer()], { type: file.type });
                               const url = await uploadAvatar(blob, user.id);
+                              await new Promise<void>((resolve) => {
+                                const img = new Image();
+                                img.onload = () => resolve();
+                                img.onerror = () => resolve();
+                                img.src = url;
+                              });
                               await updateProfile(user.id, { avatar_url: url, avatar: url });
                               await refreshProfile();
                               setRegisteredUser(prev => prev ? { ...prev, avatar: url } : prev);
