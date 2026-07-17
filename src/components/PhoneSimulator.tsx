@@ -56,7 +56,7 @@ export default function PhoneSimulator({
   onBackPress,
   onSetShouldExit,
 }: PhoneSimulatorProps) {
-  const { user, profile, contacts: appContacts, chats: supabaseChats, refreshChats, refreshContacts, refreshProfile } = useSupabase();
+  const { user, profile, contacts: appContacts, chats: supabaseChats, refreshChats, refreshContacts, refreshProfile, logout } = useSupabase();
 
   // Deduplicate contacts by contact_user_id (prefer entry with phone) or by name+phone
   const dedupedContacts = useMemo(() => {
@@ -2327,13 +2327,10 @@ export default function PhoneSimulator({
 
                         {/* 9. LOGOUT */}
                         <button
-                          onClick={async () => {
+                          onClick={() => {
                             setRegisteredUser(null);
                             setCurrentScreen("welcome");
-                            if (user) {
-                              const { signOut } = await import("../services/auth");
-                              signOut();
-                            }
+                            logout();
                           }}
                           className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-rose-100 cursor-pointer mt-4"
                         >

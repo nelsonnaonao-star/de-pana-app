@@ -34,6 +34,9 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
   const loadedUserId = useRef<string | null>(null);
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const profilesChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cleanupListenersRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
@@ -86,7 +89,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    return () => listener?.subscription?.unsubscribe();
+    return () => {
+      listener?.subscription?.unsubscribe();
+      // Clean up presence, heartbeat, profiles channel, event listeners on unmount
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      if (profilesChannelRef.current) supabase.removeChannel(profilesChannelRef.current);
+      presenceChannelRef.current?.untrack();
+      cleanupListenersRef.current?.();
+    };
   }, []);
 
   async function loadUserData(userId: string) {
@@ -147,6 +157,76 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       });
       presenceChannelRef.current = channel;
     });
+
+    // Heartbeat: re-set status online every 30s
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = setInterval(() => {
+      if (userId) {
+        supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
+      }
+    }, 30000);
+
+    // Realtime subscription on profiles to update chat list online status
+    if (profilesChannelRef.current) {
+      supabase.removeChannel(profilesChannelRef.current);
+      profilesChannelRef.current = null;
+    }
+    const profilesChannel = supabase.channel(`profiles-online-${userId}`);
+    profilesChannel.on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "profiles" },
+      (payload) => {
+        const updated = payload.new as { id: string; status: string };
+        setChats((prev) =>
+          prev.map((c) => {
+            if (c.is_group) return c;
+            const partnerId = c.profile_id === userId ? c.admin_id : c.profile_id;
+            if (partnerId === updated.id) {
+              return { ...c, is_online: updated.status === "online" };
+            }
+            return c;
+          })
+        );
+      }
+    );
+    profilesChannel.subscribe();
+    profilesChannelRef.current = profilesChannel;
+
+    // beforeunload: set offline on tab/browser close
+    const handleBeforeUnload = () => {
+      presenceChannelRef.current?.untrack();
+      if (userId) {
+        supabase.from("profiles").update({ status: "offline" }).eq("id", userId).then(() => {});
+      }
+    };
+
+    // visibilitychange: toggle online/offline when app goes to background
+    const handleVisibility = () => {
+      if (!userId) return;
+      if (document.hidden) {
+        presenceChannelRef.current?.untrack();
+        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+        supabase.from("profiles").update({ status: "offline" }).eq("id", userId).then(() => {});
+      } else {
+        supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
+        presenceChannelRef.current?.track({ user_id: userId, online_at: new Date().toISOString() });
+        if (!heartbeatRef.current) {
+          heartbeatRef.current = setInterval(() => {
+            supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
+          }, 30000);
+        }
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("visibilitychange", handleVisibility);
+
+    // Store cleanup for use in logout/unmount
+    if (cleanupListenersRef.current) cleanupListenersRef.current();
+    cleanupListenersRef.current = () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("visibilitychange", handleVisibility);
+    };
   }
 
   const refreshProfile = async () => {
@@ -180,8 +260,13 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    // Clean up heartbeat, profiles channel, presence channel, event listeners
+    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+    if (profilesChannelRef.current) { supabase.removeChannel(profilesChannelRef.current); profilesChannelRef.current = null; }
     presenceChannelRef.current?.untrack();
     presenceChannelRef.current?.unsubscribe();
+    cleanupListenersRef.current?.();
+    cleanupListenersRef.current = null;
     if (user) {
       await supabase.from("profiles").update({ status: "offline" }).eq("id", user.id);
     }
