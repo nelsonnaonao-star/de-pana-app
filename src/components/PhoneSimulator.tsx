@@ -28,7 +28,7 @@ import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { clearForMe, sendMessage as apiSendMessage } from "../services/messages";
-import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat } from "../services/chats";
+import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
 import { getMyFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
 import { WebRTCService } from "../services/webrtc";
 import { startCall as apiStartCall } from "../services/calls";
@@ -659,18 +659,91 @@ export default function PhoneSimulator({
         if (!msg || msg.sender_id === user.id) return;
         const isCurrentChat = currentScreen === "chat_room" && selectedChatId === msg.chat_id;
         if (isCurrentChat) return;
-        setChats(prev => prev.map(c => {
-          if (c.id !== msg.chat_id) return c;
+
+        setChats(prev => {
+          const idx = prev.findIndex(c => c.id === msg.chat_id);
+
+          // Chat doesn't exist locally — fetch full data and insert
+          if (idx === -1) {
+            getChatWithPartner(msg.chat_id, user.id).then(full => {
+              if (!full) return;
+              setChats(later => {
+                if (later.some(c => c.id === full.id)) return later;
+                const clearedAt = clearedAtMapRef.current[msg.chat_id];
+                const isCleared = clearedAt && msg.created_at && msg.created_at <= clearedAt;
+                const chatWithMsg = {
+                  ...full,
+                  lastMessage: isCleared ? "" : (msg.text || (full as any).last_message || ""),
+                  lastMessageTime: isCleared ? "" : (msg.created_at || (full as any).last_message_time || ""),
+                  unreadCount: isCleared ? 0 : 1,
+                };
+                return [chatWithMsg, ...later].sort((a, b) => {
+                  const ta = a.lastMessageTime || a.updated_at || "";
+                  const tb = b.lastMessageTime || b.updated_at || "";
+                  return tb.localeCompare(ta);
+                });
+              });
+            });
+            return prev;
+          }
+
+          // Chat exists — check cleared status then update
           const clearedAt = clearedAtMapRef.current[msg.chat_id];
-          if (clearedAt && msg.created_at && msg.created_at <= clearedAt) return c;
-          return { ...c, unreadCount: c.unreadCount + 1, lastMessage: msg.text || c.lastMessage };
-        }));
+          const isCleared = clearedAt && msg.created_at && msg.created_at <= clearedAt;
+          const updated = [...prev];
+          updated[idx] = {
+            ...updated[idx],
+            lastMessage: isCleared ? "" : (msg.text || updated[idx].lastMessage),
+            unreadCount: isCleared ? 0 : (updated[idx].unreadCount + 1),
+            lastMessageTime: msg.created_at || updated[idx].lastMessageTime,
+          };
+          return updated.sort((a, b) => {
+            const ta = a.lastMessageTime || a.updated_at || "";
+            const tb = b.lastMessageTime || b.updated_at || "";
+            return tb.localeCompare(ta);
+          });
+        });
       })
       .subscribe((status) => {
         console.log('[UNREAD] 📡 Messages unread subscription:', status);
       });
     return () => { supabase.removeChannel(channel); };
   }, [user?.id, currentScreen, selectedChatId]);
+
+  // Realtime subscription for chats table (INSERT/UPDATE) — detects new chats from other users
+  useEffect(() => {
+    if (!user) return;
+    const sub = subscribeToChats(user.id, async (event, chat) => {
+      if (event === "INSERT") {
+        // New chat created by the other user — fetch full data + partner profile
+        const full = await getChatWithPartner(chat.id, user.id);
+        if (!full) return;
+        setChats(prev => {
+          const exists = prev.some(c => c.id === full.id);
+          if (exists) return prev;
+          return [full, ...prev].sort((a, b) => {
+            const ta = a.lastMessageTime || a.updated_at || "";
+            const tb = b.lastMessageTime || b.updated_at || "";
+            return tb.localeCompare(ta);
+          });
+        });
+      } else if (event === "UPDATE") {
+        // Chat updated (e.g. new message bumped updated_at)
+        setChats(prev => {
+          const idx = prev.findIndex(c => c.id === chat.id);
+          if (idx === -1) return prev;
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], updated_at: chat.updated_at };
+          return updated.sort((a, b) => {
+            const ta = a.lastMessageTime || a.updated_at || "";
+            const tb = b.lastMessageTime || b.updated_at || "";
+            return tb.localeCompare(ta);
+          });
+        });
+      }
+    });
+    return () => { sub.unsubscribe(); };
+  }, [user?.id]);
 
   // Realtime subscription for incoming calls from other users
   const activeCallRef = useRef<ActiveCall | null>(null);
@@ -792,14 +865,32 @@ export default function PhoneSimulator({
         return;
       }
       console.log('[EVENT] selectedChatId:', selectedChatId, 'currentScreen:', currentScreen);
-      setChats(prev => prev.map(chat => {
-        if (chat.id === d.chatId) {
-          const updated = { ...chat, unreadCount: chat.unreadCount + 1 };
-          if (d.body) updated.lastMessage = d.body;
-          return updated;
+      setChats(prev => {
+        const idx = prev.findIndex(chat => chat.id === d.chatId);
+        if (idx === -1) {
+          // Chat not found locally — fetch and insert
+          getChatWithPartner(d.chatId, user!.id).then(full => {
+            if (!full) return;
+            setChats(later => {
+              if (later.some(c => c.id === full.id)) return later;
+              return [{ ...full, lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 }, ...later].sort((a, b) => {
+                const ta = a.lastMessageTime || a.updated_at || "";
+                const tb = b.lastMessageTime || b.updated_at || "";
+                return tb.localeCompare(ta);
+              });
+            });
+          });
+          return prev;
         }
-        return chat;
-      }));
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
+        if (d.body) updated[idx].lastMessage = d.body;
+        return updated.sort((a, b) => {
+          const ta = a.lastMessageTime || a.updated_at || "";
+          const tb = b.lastMessageTime || b.updated_at || "";
+          return tb.localeCompare(ta);
+        });
+      });
       if (selectedChatId === d.chatId && currentScreen === 'chat_room') {
         setRefetchTrigger(n => n + 1);
       }
@@ -829,6 +920,10 @@ export default function PhoneSimulator({
             };
           }
           return c;
+        }).sort((a, b) => {
+          const ta = a.lastMessageTime || a.updated_at || "";
+          const tb = b.lastMessageTime || b.updated_at || "";
+          return tb.localeCompare(ta);
         })
       );
       onClearExternalMessageTrigger();
@@ -852,6 +947,10 @@ export default function PhoneSimulator({
           };
         }
         return c;
+      }).sort((a, b) => {
+        const ta = a.lastMessageTime || a.updated_at || "";
+        const tb = b.lastMessageTime || b.updated_at || "";
+        return tb.localeCompare(ta);
       })
     );
   };

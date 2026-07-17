@@ -241,18 +241,55 @@ export async function createGroupChat(
   return data as Chat;
 }
 
-export function subscribeToChats(userId: string, callback: (chat: Chat) => void) {
-  return supabase
-    .channel("chats")
+export async function getChatWithPartner(chatId: string, userId: string): Promise<Chat | null> {
+  const { data: chat } = await supabase
+    .from("chats")
+    .select("*")
+    .eq("id", chatId)
+    .is("deleted_at", null)
+    .single();
+  if (!chat) return null;
+
+  if (!chat.is_group && chat.profile_id && chat.admin_id) {
+    const partnerId = chat.profile_id === userId ? chat.admin_id : chat.profile_id;
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("name, avatar_url, status")
+      .eq("id", partnerId)
+      .single();
+    if (profile) {
+      return {
+        ...chat,
+        name: profile.name || chat.name,
+        avatar: profile.avatar_url || chat.avatar,
+        is_online: profile.status === "online",
+      } as Chat;
+    }
+  }
+
+  return chat as Chat;
+}
+
+export function subscribeToChats(userId: string, callback: (event: "INSERT" | "UPDATE" | "DELETE", chat: Chat) => void) {
+  // Subscribe to chats where user is profile_id
+  const ch1 = supabase
+    .channel("chats-as-profile")
     .on(
       "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "chats",
-        filter: `profile_id=eq.${userId}`,
-      },
-      (payload) => callback(payload.new as Chat)
+      { event: "*", schema: "public", table: "chats", filter: `profile_id=eq.${userId}` },
+      (payload) => callback(payload.eventType as any, payload.new as Chat)
     )
     .subscribe();
+
+  // Subscribe to chats where user is admin_id
+  const ch2 = supabase
+    .channel("chats-as-admin")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "chats", filter: `admin_id=eq.${userId}` },
+      (payload) => callback(payload.eventType as any, payload.new as Chat)
+    )
+    .subscribe();
+
+  return { unsubscribe: () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); } };
 }
