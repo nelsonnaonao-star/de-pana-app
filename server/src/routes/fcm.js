@@ -151,6 +151,18 @@ router.post('/send', async (req, res) => {
                   sound: 'notificacion',
                 },
               },
+              apns: {
+                payload: {
+                  aps: {
+                    category: 'message',
+                    'mutable-content': 1,
+                  },
+                },
+              },
+              // Quick reply action for Android
+              fcm_options: {
+                analytics_label: 'message_reply',
+              },
             });
           }
           results.android++;
@@ -306,59 +318,9 @@ router.post('/webhook', async (req, res) => {
       // ignore
     }
 
-    const notifBody = showPreview ? (text || 'Nuevo mensaje') : 'Nuevo mensaje';
-    const tokens = await getTokens(receiverId);
-    if (!tokens.length) {
-      return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for receiver' });
-    }
-
-    const results = { web: 0, android: 0, errors: 0 };
-
-    for (const t of tokens) {
-      if (t.device === 'android-fcm' || t.device === 'android') {
-        const admin = await initFirebaseAdmin();
-        if (admin) {
-          try {
-            await admin.messaging().send({
-              token: t.token,
-              notification: { title: senderName, body: notifBody },
-              data: {
-                title: senderName, body: notifBody,
-                badge: '1', notificationCount: '1',
-                chatId: chat_id, type: 'message', contactId: sender_id,
-              },
-              android: {
-                priority: 'high', ttl: 86400000,
-                notification: {
-                  channel_id: 'redon-messages', tag: chat_id,
-                  click_action: 'OPEN_APP', notification_count: 1, visibility: 'public',
-                  sound: 'notificacion',
-                },
-              },
-            });
-            results.android++;
-          } catch (err) {
-            results.errors++;
-          }
-        } else {
-          results.errors++;
-        }
-      } else {
-        try {
-          const subscription = JSON.parse(t.token);
-          await webpush.sendNotification(subscription, JSON.stringify({
-            title: senderName, body: notifBody,
-            data: { chatId: chat_id, type: 'message', contactId: sender_id },
-            icon: '/icon.png', badge: '/badge.png',
-          }));
-          results.web++;
-        } catch (err) {
-          results.errors++;
-        }
-      }
-    }
-
-    return res.json({ ok: true, ...results });
+    // Push is handled by sendPushToChat() in messages.js (with Quick Reply support)
+    // Webhook only handles auto-reply and block checks — skip duplicate push
+    return res.json({ ok: true, note: 'push handled by sendPushToChat' });
 
   } else if (table === 'calls') {
     const { id: recordId, chat_id, caller_id, callee_id, call_type } = record;
@@ -395,6 +357,10 @@ router.post('/webhook', async (req, res) => {
           try {
             await admin.messaging().send({
               token: t.token,
+              notification: {
+                title: callerName,
+                body: 'Llamada entrante',
+              },
               data: {
                 title: callerName, body: 'Llamada entrante',
                 badge: '1', notificationCount: '1',
@@ -405,6 +371,13 @@ router.post('/webhook', async (req, res) => {
               },
               android: {
                 priority: 'high', ttl: 86400000,
+                notification: {
+                  channel_id: 'redon-calls',
+                  sound: 'ringtone',
+                  visibility: 'public',
+                  notification_count: 1,
+                  click_action: 'OPEN_APP',
+                },
               },
             });
             results.android++;
