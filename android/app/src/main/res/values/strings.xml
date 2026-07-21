@@ -4,4 +4,5 @@
     <string name="title_activity_main">Red On</string>
     <string name="package_name">com.redon.app</string>
     <string name="custom_url_scheme">com.redon.app</string>
+    <string name="sentry_dsn">https://db84a103baebee58cd13463ead165a1a@o4511665574772736.ingest.us.sentry.io/4511665606623232</string>
 </resources>

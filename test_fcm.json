@@ -1,0 +1,10 @@
+﻿{
+  "profile_id": "152321e9-b152-4c29-8c1f-ef3f5839d3d2",
+  "title": "Test FCM",
+  "body": "Notificacion de prueba desde el servidor",
+  "data": {
+    "type": "message",
+    "chatId": "test-chat",
+    "contactId": "test-contact"
+  }
+}

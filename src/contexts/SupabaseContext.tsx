@@ -8,6 +8,40 @@ import { registerPushNotifications, unregisterPushNotifications } from "../servi
 import { setupCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
 import toast from "react-hot-toast";
 
+const CACHE_KEYS = {
+  profile: "redon_cache_profile",
+  chats: "redon_cache_chats",
+  contacts: "redon_cache_contacts",
+  calls: "redon_cache_calls",
+  timestamp: "redon_cache_timestamp",
+};
+
+function loadCache<T>(key: string, fallback: T): T {
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored) return JSON.parse(stored) as T;
+  } catch {}
+  return fallback;
+}
+
+function saveCache<T>(key: string, data: T) {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem(CACHE_KEYS.timestamp, Date.now().toString());
+  } catch {}
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)),
+  ]);
+}
+
+function debugLog(label: string, data: any) {
+  console.log(`[SUPABASE] ${label}:`, data);
+}
+
 interface SupabaseContextType {
   user: any | null;
   profile: Profile | null;
@@ -101,25 +135,74 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
   async function loadUserData(userId: string) {
     loadedUserId.current = userId;
+    debugLog("loadUserData start", { userId });
+
+    // Load cached data immediately for instant UI
+    const cachedProfile = loadCache<Profile | null>(CACHE_KEYS.profile, null);
+    const cachedChats = loadCache<Chat[]>(CACHE_KEYS.chats, []);
+    const cachedContacts = loadCache<Contact[]>(CACHE_KEYS.contacts, []);
+    const cachedCalls = loadCache<Call[]>(CACHE_KEYS.calls, []);
+    
+    debugLog("cache loaded", { 
+      hasProfile: !!cachedProfile, 
+      chatsCount: cachedChats.length, 
+      contactsCount: cachedContacts.length,
+      callsCount: cachedCalls.length
+    });
+
+    setProfile(cachedProfile);
+    setChats(cachedChats);
+    setContacts(cachedContacts);
+    setCalls(cachedCalls);
+    setLoading(false); // Show cached data immediately
+
     try {
+      const TIMEOUT_MS = 8000; // Increased from 3s to 8s for slow networks
+      debugLog("fetching fresh data", { timeout: TIMEOUT_MS });
+      
       const [profilesResult, chatsResult, contactsResult, callsResult] = await Promise.allSettled([
-        supabase.from("profiles").select("*").eq("id", userId).single(),
-        getChats(userId),
-        getContacts(userId),
-        getCalls(userId),
+        withTimeout(supabase.from("profiles").select("*").eq("id", userId).single(), 8000),
+        withTimeout(getChats(userId), TIMEOUT_MS),
+        withTimeout(getContacts(userId), TIMEOUT_MS),
+        withTimeout(getCalls(userId), TIMEOUT_MS),
       ]);
 
+      debugLog("fetch results", {
+        profile: profilesResult.status,
+        chats: chatsResult.status,
+        contacts: contactsResult.status,
+        calls: callsResult.status,
+      });
+
       if (profilesResult.status === "fulfilled" && profilesResult.value.error) {
-        console.warn("[SUPABASE] Profile fetch error:", profilesResult.value.error);
+        debugLog("Profile fetch error", { message: profilesResult.value.error.message, code: profilesResult.value.error.code, details: profilesResult.value.error.details, hint: profilesResult.value.error.hint });
       }
-      setProfile(profilesResult.status === "fulfilled" ? (profilesResult.value.data as Profile) || null : null);
-      setChats(chatsResult.status === "fulfilled" ? chatsResult.value || [] : []);
-      setContacts(contactsResult.status === "fulfilled" ? contactsResult.value || [] : []);
-      setCalls(callsResult.status === "fulfilled" ? callsResult.value || [] : []);
+      const newProfile = profilesResult.status === "fulfilled" ? (profilesResult.value.data as Profile) || null : cachedProfile;
+      const newChats = chatsResult.status === "fulfilled" ? chatsResult.value || [] : cachedChats;
+      const newContacts = contactsResult.status === "fulfilled" ? contactsResult.value || [] : cachedContacts;
+      const newCalls = callsResult.status === "fulfilled" ? callsResult.value || [] : cachedCalls;
+
+      debugLog("setting fresh data", {
+        profile: !!newProfile,
+        chatsCount: newChats.length,
+        contactsCount: newContacts.length,
+        callsCount: newCalls.length,
+      });
+
+      setProfile(newProfile);
+      setChats(newChats);
+      setContacts(newContacts);
+      setCalls(newCalls);
+
+      // Update cache with fresh data
+      if (newProfile) saveCache(CACHE_KEYS.profile, newProfile);
+      if (newChats.length > 0) saveCache(CACHE_KEYS.chats, newChats);
+      if (newContacts.length > 0) saveCache(CACHE_KEYS.contacts, newContacts);
+      if (newCalls.length > 0) saveCache(CACHE_KEYS.calls, newCalls);
+      
+      debugLog("loadUserData complete");
     } catch (err) {
-      console.error("[SUPABASE] loadUserData error:", err);
-    } finally {
-      setLoading(false);
+      debugLog("loadUserData error", err);
     }
 
     registerPushNotifications(userId).catch(() => {});
@@ -238,6 +321,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       .single();
     if (!error && data) {
       setProfile(data as Profile);
+      saveCache(CACHE_KEYS.profile, data as Profile);
     }
   };
 
@@ -245,18 +329,21 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     const ch = await getChats(user.id);
     setChats(ch);
+    if (ch.length > 0) saveCache(CACHE_KEYS.chats, ch);
   };
 
   const refreshContacts = async () => {
     if (!user) return;
     const cont = await getContacts(user.id);
     setContacts(cont);
+    if (cont.length > 0) saveCache(CACHE_KEYS.contacts, cont);
   };
 
   const refreshCalls = async () => {
     if (!user) return;
     const cl = await getCalls(user.id);
     setCalls(cl);
+    if (cl.length > 0) saveCache(CACHE_KEYS.calls, cl);
   };
 
   const logout = async () => {

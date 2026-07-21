@@ -1,24 +1,55 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { 
   ArrowLeft, Phone, Video, Send, Smile, Paperclip, 
   Mic, Music, VideoIcon, 
-  BarChart2, X, Check, Palette,
+  BarChart2, X, Check, Palette, Loader2,
   Film, MoreVertical, Camera as CameraIcon, Image, File, Search, ChevronUp, ChevronDown, MapPin
 } from "lucide-react";
 import { Chat, Message } from "../types";
 import GifPicker from "./GifPicker";
-import MessageBubble from "./chat/MessageBubble";
+import MessageBubbleWithCache from "./chat/MessageBubbleWithCache";
 import ChatCustomizer from "./chat/ChatCustomizer";
 import ChatPatternBackground from "./chat/ChatPatternBackground";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, clearForMe } from "../services/messages";
-import { deleteChat as apiDeleteChat } from "../services/chats";
+import { getMessages, sendMessage as apiSendMessage, markAsRead, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, clearForMe, addReaction } from "../services/messages";
+import { deleteChat as apiDeleteChat, addGroupMember, removeGroupMember, leaveGroup } from "../services/chats";
+import { searchUsers } from "../services/contacts";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../services/storage";
+import { compressVideo } from "../services/videoCompression";
+import toast from "react-hot-toast";
 import { CHAT_BACKGROUNDS } from "./chat/chatConstants";
 import { useOfflineQueue } from "../hooks/useOfflineQueue";
+import { getItem, setItem, removeItem } from "../services/storageService";
+import { revokeCachedMedia } from "../services/mediaCache";
+
+const MESSAGE_CACHE_PREFIX = "redon_cache_msgs_";
+
+async function loadMessageCache(chatId: string): Promise<Message[]> {
+  try {
+    const raw = await getItem<Message[]>(`${MESSAGE_CACHE_PREFIX}${chatId}`);
+    if (raw) return raw;
+  } catch {}
+  return [];
+}
+
+async function saveMessageCache(chatId: string, messages: Message[]) {
+  try {
+    const clean = messages.filter(m => !m.id.startsWith('temp_') && !m.id.startsWith('msg_'));
+    if (clean.length > 0) {
+      await setItem(`${MESSAGE_CACHE_PREFIX}${chatId}`, clean.slice(-200));
+    }
+  } catch {}
+}
+
+async function clearMessageCache(chatId: string) {
+  try {
+    await removeItem(`${MESSAGE_CACHE_PREFIX}${chatId}`);
+  } catch {}
+}
 
 interface ChatRoomProps {
   chat: Chat;
@@ -40,9 +71,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
 
-  const { isOnline, queueMessage, isPending } = useOfflineQueue(chat.id, uid, (tempId, savedId) => {
-    setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: savedId, status: "sent" } : m));
-  });
+  const { isOnline, queueMessage, isPending } = useOfflineQueue(
+    chat.id,
+    uid,
+    (tempId, savedId) => {
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: savedId, status: "sent" } : m));
+    },
+    (tempId) => {
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sending" as const } : m));
+    }
+  );
 
   const [inputText, setInputText] = useState("");
   const [showAttachments, setShowAttachments] = useState(false);
@@ -58,8 +96,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const [searchQuery, setSearchQuery] = useState("");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [searchIndex, setSearchIndex] = useState(0);
-  const messagesRef = useRef<HTMLDivElement>(null);
-  const prevScrollHeightRef = useRef<number>(0);
   const filteredMessages = searchQuery.trim()
     ? messages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
     : messages;
@@ -101,24 +137,39 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     });
   }, []);
 
-  // Fetch initial messages (last 50 only)
+  // Fetch initial messages: cache-first, then network refresh
   useEffect(() => {
     console.log('[CHAT] useEffect [chat.id, uid] — chat.id:', chat.id, 'uid:', uid);
     if (chat.id) {
       setHasMoreOlder(true);
-      getMessages(chat.id, { limit: 50 }).then(apiMessages => {
-        console.log('[CHAT] getMessages result count:', apiMessages?.length);
-        if (apiMessages && apiMessages.length > 0) {
-          const mapped = apiMessages.map(mapApiMsg);
-          mergeServerMessages(mapped);
-          if (apiMessages.length < 50) setHasMoreOlder(false);
-          console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
-        } else {
-          setHasMoreOlder(false);
-          console.log('[CHAT] ⚠️ getMessages returned 0 messages');
+
+      // 1. Load cached messages immediately (offline-first)
+      loadMessageCache(chat.id).then(cached => {
+        if (cached.length > 0) {
+          console.log('[CHAT] 📦 loaded', cached.length, 'messages from cache');
+          setMessages(cached);
+          setHasMoreOlder(true);
         }
-      }).catch((err) => {
-        console.error('[CHAT] ❌ getMessages error:', err);
+
+        // 2. Fetch fresh messages from server in background
+        getMessages(chat.id, { limit: 50 }).then(apiMessages => {
+          console.log('[CHAT] getMessages result count:', apiMessages?.length);
+          if (apiMessages && apiMessages.length > 0) {
+            const mapped = apiMessages.map(mapApiMsg);
+            mergeServerMessages(mapped);
+            saveMessageCache(chat.id, mapped);
+            const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
+            if (latest) lastSyncTimestampRef.current = latest;
+            if (apiMessages.length < 50) setHasMoreOlder(false);
+            console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
+          } else {
+            if (cached.length === 0) setHasMoreOlder(false);
+            console.log('[CHAT] ⚠️ getMessages returned 0 messages');
+          }
+        }).catch((err) => {
+          console.error('[CHAT] ❌ getMessages error (using cache):', err);
+          // Keep showing cached messages — offline-first UX
+        });
       });
     }
   }, [chat.id, uid]);
@@ -129,6 +180,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       getMessages(chat.id, { limit: 50 }).then(apiMessages => {
         if (apiMessages && apiMessages.length > 0) {
           const mapped = apiMessages.map(mapApiMsg);
+          const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
+          if (latest) lastSyncTimestampRef.current = latest;
           setMessages(prev => {
             const serverIds = new Set(mapped.map(m => m.id));
             const kept = prev.filter(m => !serverIds.has(m.id));
@@ -146,6 +199,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         getMessages(chat.id, { limit: 50 }).then(apiMessages => {
           if (apiMessages && apiMessages.length > 0) {
             const mapped = apiMessages.map(mapApiMsg);
+            const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
+            if (latest) lastSyncTimestampRef.current = latest;
             setMessages(prev => {
               const serverIds = new Set(mapped.map(m => m.id));
               const kept = prev.filter(m => !serverIds.has(m.id));
@@ -166,9 +221,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
 
     setLoadingOlder(true);
     try {
-      const container = messagesRef.current;
-      const prevScrollHeight = container?.scrollHeight || 0;
-
       const older = await getMessages(chat.id, { limit: 50, before: oldestTs });
       if (older && older.length > 0) {
         const mapped = older.map(mapApiMsg);
@@ -176,13 +228,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           const existingIds = new Set(prev.map(m => m.id));
           const newMsgs = mapped.filter(m => !existingIds.has(m.id));
           return [...newMsgs, ...prev];
-        });
-        // Restore scroll position after prepend
-        requestAnimationFrame(() => {
-          if (container) {
-            const newScrollHeight = container.scrollHeight;
-            container.scrollTop += newScrollHeight - prevScrollHeight;
-          }
         });
         if (older.length < 50) setHasMoreOlder(false);
       } else {
@@ -194,6 +239,14 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       setLoadingOlder(false);
     }
   }, [chat.id, messages, loadingOlder, hasMoreOlder]);
+
+  // Auto-save messages to cache whenever they change (debounced)
+  useEffect(() => {
+    if (chat.id && messages.length > 0) {
+      const timer = setTimeout(() => { saveMessageCache(chat.id, messages); }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [chat.id, messages]);
 
   // Live Chat Style states with localStorage caching
   const [selectedBgId, setSelectedBgId] = useState(() => {
@@ -211,6 +264,15 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const [groupMembers, setGroupMembers] = useState<Array<{profile_id: string; name?: string; avatar?: string}>>([]);
+  const [editingGroupName, setEditingGroupName] = useState(false);
+  const [groupNameDraft, setGroupNameDraft] = useState("");
+  const [localGroupName, setLocalGroupName] = useState(chat.name);
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [addMemberQuery, setAddMemberQuery] = useState("");
+  const [addMemberResults, setAddMemberResults] = useState<Array<{id: string; name: string; avatar?: string}>>([]);
+  const [addingMember, setAddingMember] = useState(false);
+
+  useEffect(() => { setLocalGroupName(chat.name); }, [chat.name]);
 
   // Synchronize style choices with localStorage
   useEffect(() => {
@@ -231,7 +293,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const [pollOption1, setPollOption1] = useState("");
   const [pollOption2, setPollOption2] = useState("");
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const lastSyncTimestampRef = useRef<string | null>(null);
   const recordingTimer = useRef<number | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingIndicatorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -243,33 +306,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const sendingRecordingRef = useRef(false);
 
-  // Only auto-scroll to bottom when user is already near the bottom
-  const isNearBottomRef = useRef(true);
+  // ── Scroll to highlighted search result ──
   useEffect(() => {
-    const container = messagesRef.current;
-    if (!container) return;
-    const handleAutoScroll = () => {
-      const threshold = 150;
-      isNearBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
-    };
-    container.addEventListener('scroll', handleAutoScroll);
-    return () => container.removeEventListener('scroll', handleAutoScroll);
-  }, []);
-
-  useEffect(() => {
-    if (isNearBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (showSearch && searchQuery.trim() && filteredMessages.length > 0) {
+      virtuosoRef.current?.scrollToIndex({ index: searchIndex, behavior: "smooth", align: "center" });
     }
-  }, [messages]);
-
-  // ── Infinite scroll trigger: load older when scrolled near top ──
-  const handleScroll = useCallback(() => {
-    const container = messagesRef.current;
-    if (!container || loadingOlder || !hasMoreOlder) return;
-    if (container.scrollTop < 80) {
-      loadOlderMessages();
-    }
-  }, [loadingOlder, hasMoreOlder, loadOlderMessages]);
+  }, [searchIndex, showSearch, searchQuery, filteredMessages.length]);
 
   // Fetch group members when group info panel opens
   useEffect(() => {
@@ -387,11 +429,15 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           id: newMsg.id,
           sender: 'other',
           text: newMsg.text || '',
+          rawCreatedAt: newMsg.created_at,
           timestamp: newMsg.created_at ? new Date(newMsg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : '',
           type: (newMsg.type as Message['type']) || 'text',
           mediaUrl: newMsg.image_url || newMsg.sticker_url || newMsg.gif_url || newMsg.audio_url || newMsg.video_url,
           reactions: newMsg.reactions,
         };
+        if (mapped.rawCreatedAt && mapped.rawCreatedAt > (lastSyncTimestampRef.current || '')) {
+          lastSyncTimestampRef.current = mapped.rawCreatedAt;
+        }
         setMessages(prev => [...prev, mapped]);
         markAsRead(chat.id, uid, uname).catch(() => {});
       }
@@ -417,9 +463,30 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           m.id === updated.id ? { ...m, text: updated.text, edited: true } : m
         ));
       }
+      if (updated.reactions) {
+        setMessages(prev => prev.map(m =>
+          m.id === updated.id ? { ...m, reactions: updated.reactions } : m
+        ));
+      }
     });
+    let firstSubscribeDone = false;
     channel.subscribe((status: string) => {
       console.log('[REALTIME] channel subscribe status:', status, 'for chat.id:', chat.id);
+      if (status === 'SUBSCRIBED' && (firstSubscribeDone || lastSyncTimestampRef.current)) {
+        firstSubscribeDone = true;
+        if (lastSyncTimestampRef.current) {
+          getMessages(chat.id, { after: lastSyncTimestampRef.current }).then(newMsgs => {
+            if (newMsgs && newMsgs.length > 0) {
+              const mapped = newMsgs.map(mapApiMsg);
+              const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), lastSyncTimestampRef.current!);
+              if (latest) lastSyncTimestampRef.current = latest;
+              mergeServerMessages(mapped);
+            }
+          }).catch(() => {});
+        }
+      } else if (status === 'SUBSCRIBED') {
+        firstSubscribeDone = true;
+      }
     });
     messagesChannelRef.current = channel;
 
@@ -666,54 +733,87 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     }
   };
 
+  const generateVideoThumbnail = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.playsInline = true;
+      video.muted = true;
+      video.src = URL.createObjectURL(file);
+      video.onloadeddata = () => { video.currentTime = 0.5; };
+      video.onseeked = () => {
+        const canvas = document.createElement("canvas");
+        let w = video.videoWidth || 320;
+        let h = video.videoHeight || 180;
+
+        if (w > 600) {
+          h = Math.floor((600 / w) * h);
+          w = 600;
+        }
+
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d")?.drawImage(video, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        URL.revokeObjectURL(video.src);
+        resolve(dataUrl);
+      };
+      video.onerror = () => { URL.revokeObjectURL(video.src); reject(new Error("Error generando thumbnail")); };
+    });
+  };
+
   const triggerFilePick = async (accept: string, type: Message["type"]) => {
-    // For images and videos, use Capacitor Camera plugin on mobile
-    if (type === "image" || type === "video") {
-      try {
-        const isCapacitor = !!(window as any).Capacitor;
-        if (isCapacitor) {
+    if (type === "image") {
+      const isCapacitor = !!(window as any).Capacitor;
+      if (isCapacitor) {
+        const tempId = "msg_" + Date.now();
+        const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+
+        try {
           const photo = await CapacitorCamera.getPhoto({
-            quality: 75,
+            quality: 30,
             source: CameraSource.Photos,
-            resultType: CameraResultType.Uri,
+            resultType: CameraResultType.DataUrl,
           });
-          if (!photo.webPath) return;
-          const resp = await fetch(photo.webPath);
+          if (!photo.dataUrl) return;
+
+          const resp = await fetch(photo.dataUrl);
           const blob = await resp.blob();
-          const ext = photo.format || (type === "video" ? "mp4" : "jpeg");
-          const mimeType = type === "video" ? "video/mp4" : "image/jpeg";
-          const fileBlob = new Blob([await blob.arrayBuffer()], { type: mimeType });
-          const tempId = "msg_" + Date.now();
+
+          const ext = photo.format || "jpeg";
+          const mimeType = "image/jpeg";
+          const fileBlob = new Blob([blob], { type: mimeType });
+
           const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           const localUrl = URL.createObjectURL(fileBlob);
           const sendingMsg: Message = {
             id: tempId, sender: "me", timestamp, type, mediaUrl: localUrl,
-            fileName: `${type}_${Date.now()}.${ext}`, fileSize: `${(blob.size / 1024 / 1024).toFixed(1)} MB`,
+            fileName: `${type}_${Date.now()}.${ext}`, fileSize: `${(fileBlob.size / 1024).toFixed(0)}KB`,
             status: "sending",
           };
           setMessages(prev => [...prev, sendingMsg]);
           onSendMessage(sendingMsg);
-          const url = await uploadChatMedia(fileBlob, type === "video" ? "video" : "image");
-          await new Promise<void>((resolve) => {
-            const img = new Image();
-            img.onload = () => resolve();
-            img.onerror = () => resolve();
-            img.src = url;
-          });
+
+          const url = await uploadChatMedia(fileBlob, "image");
+
           setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
-          const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
+
           if (!isLocalChat) {
-            const payload: any = { chat_id: chat.id, sender_id: uid, type, text: type === "image" ? "Imagen" : "Video" };
-            if (type === "image") payload.image_url = url;
-            else payload.video_url = url;
+            const payload: any = { chat_id: chat.id, sender_id: uid, type, text: "Imagen" };
+            payload.image_url = url;
             const saved = await apiSendMessage(payload);
             setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id, status: "sent" } : m));
+          } else {
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sent" } : m));
           }
           return;
+        } catch (e: any) {
+          if (e?.message?.includes("cancelled") || e?.message?.includes("User")) return;
+          console.error("[CHAT] Image send failed:", e);
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" } : m));
+          toast.error(`Error al enviar imagen: ${e?.message || "Error desconocido"}`);
+          return;
         }
-      } catch (e: any) {
-        if (e?.message?.includes("cancelled") || e?.message?.includes("User")) return;
-        console.warn("Capacitor Camera failed, falling back to input:", e);
       }
     }
 
@@ -724,27 +824,45 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
+
       const tempId = "msg_" + Date.now();
       const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+      let posterUrl: string | undefined;
+      if (type === "video") {
+        try { posterUrl = await generateVideoThumbnail(file); } catch { }
+      }
+
+      const shouldCompress = type === "video" && file.size > 5 * 1024 * 1024;
       const sendingMsg: Message = {
         id: tempId, sender: "me", timestamp, type,
         mediaUrl: URL.createObjectURL(new Blob([await file.arrayBuffer()], { type: file.type })),
-        fileName: file.name, fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
+        fileName: file.name,
+        fileSize: shouldCompress ? "Comprimiendo…" : `${(file.size / 1024 / 1024).toFixed(1)} MB`,
         status: "sending",
+        posterUrl,
       };
       setMessages(prev => [...prev, sendingMsg]);
       onSendMessage(sendingMsg);
 
+      let fileToUpload = file;
       try {
-        const blob = new Blob([file], { type: file.type });
-        const url = await uploadChatMedia(blob, "files");
-        await new Promise<void>((resolve) => {
-          const img = new Image();
-          img.onload = () => resolve();
-          img.onerror = () => resolve();
-          img.src = url;
-        });
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url } : m));
+        if (shouldCompress) {
+          const compressed = await compressVideo(file);
+          fileToUpload = compressed instanceof Blob ? compressed : file;
+          const newSize = `${(fileToUpload.size / 1024 / 1024).toFixed(1)} MB`;
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: newSize } : m));
+        }
+      } catch (e: any) {
+        console.warn("[CHAT] Compression failed, using original:", e?.message);
+        fileToUpload = file;
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB` } : m));
+      }
+
+      try {
+        const blob = new Blob([fileToUpload], { type: fileToUpload.type });
+        const url = await uploadChatMedia(blob, type === "video" ? "video" : "files");
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, mediaUrl: url, posterUrl } : m));
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chat.id);
         if (!isLocalChat) {
           const payload: any = { chat_id: chat.id, sender_id: uid, type, text: file.name };
@@ -756,9 +874,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         } else {
           setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sent" } : m));
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("[CHAT] File upload error:", err);
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sent" } : m));
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" } : m));
+        toast.error(`Error al enviar archivo: ${err?.message || "Error desconocido"}`);
       }
     };
     input.click();
@@ -848,7 +967,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
     }
   };
 
-  const handleAddReaction = (messageId: string, emoji: string) => {
+  const handleAddReaction = async (messageId: string, emoji: string) => {
     setMessages(prev => prev.map((m) => {
       if (m.id === messageId) {
         const reactions = { ...(m.reactions || {}) };
@@ -858,11 +977,29 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       return m;
     }));
     setActiveReactionMenu(null);
+    try {
+      await addReaction(messageId, emoji);
+    } catch (e: any) {
+      console.error("[CHAT] Reaction save failed:", e);
+      setMessages(prev => prev.map((m) => {
+        if (m.id === messageId && m.reactions) {
+          const reactions = { ...m.reactions };
+          reactions[emoji] = (reactions[emoji] || 1) - 1;
+          if (reactions[emoji] <= 0) delete reactions[emoji];
+          return { ...m, reactions: Object.keys(reactions).length ? reactions : undefined };
+        }
+        return m;
+      }));
+      toast.error("Error al guardar reacción");
+    }
   };
 
   const handleDeleteMessage = async (messageId: string) => {
     setActiveReactionMenu(null);
     try {
+      const msg = messages.find(m => m.id === messageId);
+      if (msg?.mediaUrl) revokeCachedMedia(msg.mediaUrl);
+      if (msg?.posterUrl) revokeCachedMedia(msg.posterUrl);
       await apiDeleteMessage(messageId);
       setMessages(prev => prev.filter((m) => m.id !== messageId));
       onMessageDeleted?.(chat.id, messageId);
@@ -870,6 +1007,94 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       console.error("[CHAT] Delete error:", e);
     }
   };
+
+  const handleDeleteForMe = (messageId: string) => {
+    setActiveReactionMenu(null);
+    const msg = messages.find(m => m.id === messageId);
+    if (msg?.mediaUrl) revokeCachedMedia(msg.mediaUrl);
+    if (msg?.posterUrl) revokeCachedMedia(msg.posterUrl);
+    setMessages(prev => prev.filter((m) => m.id !== messageId));
+    onMessageDeleted?.(chat.id, messageId);
+  };
+
+  const handleSaveGroupName = async () => {
+    if (!groupNameDraft.trim() || groupNameDraft.trim() === localGroupName) {
+      setEditingGroupName(false);
+      return;
+    }
+    try {
+      const { updateChat } = await import("../services/chats");
+      await updateChat(chat.id, { name: groupNameDraft.trim() });
+      setLocalGroupName(groupNameDraft.trim());
+      setEditingGroupName(false);
+      toast.success("Nombre del grupo actualizado");
+    } catch (e) {
+      console.error("[CHAT] Error updating group name:", e);
+      toast.error("Error al actualizar nombre");
+    }
+  };
+
+  const handleAddMember = async (profileId: string) => {
+    setAddingMember(true);
+    try {
+      await addGroupMember(chat.id, profileId);
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("name, avatar_url")
+        .eq("id", profileId)
+        .single();
+      if (profile) {
+        setGroupMembers(prev => [...prev, { profile_id: profileId, name: profile.name, avatar: profile.avatar_url }]);
+      }
+      setShowAddMember(false);
+      setAddMemberQuery("");
+      setAddMemberResults([]);
+      toast.success("Miembro agregado");
+    } catch (e) {
+      console.error("[CHAT] Error adding member:", e);
+      toast.error("Error al agregar miembro");
+    } finally {
+      setAddingMember(false);
+    }
+  };
+
+  const handleRemoveMember = async (profileId: string) => {
+    try {
+      await removeGroupMember(chat.id, profileId);
+      setGroupMembers(prev => prev.filter(m => m.profile_id !== profileId));
+      toast.success("Miembro eliminado del grupo");
+    } catch (e) {
+      console.error("[CHAT] Error removing member:", e);
+      toast.error("Error al eliminar miembro");
+    }
+  };
+
+  const handleLeaveGroup = async () => {
+    try {
+      await leaveGroup(chat.id, uid);
+      onChatDeleted?.(chat.id);
+      onBack();
+    } catch (e) {
+      console.error("[CHAT] Error leaving group:", e);
+      toast.error("Error al salir del grupo");
+    }
+  };
+
+  useEffect(() => {
+    if (addMemberQuery.trim().length < 2) {
+      setAddMemberResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchUsers(addMemberQuery, uid);
+        const existingIds = new Set(groupMembers.map(m => m.profile_id));
+        const filtered = results.filter(r => !existingIds.has(r.id));
+        setAddMemberResults(filtered);
+      } catch {}
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [addMemberQuery, uid, groupMembers]);
 
   const [editingMessage, setEditingMessage] = useState<{ id: string; text: string } | null>(null);
 
@@ -1133,6 +1358,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                       onClick={async () => {
                         setShowDropdown(false);
                         try {
+                          clearMessageCache(chat.id);
                           await clearForMe(chat.id);
                           onChatCleared?.(chat.id);
                           onBack();
@@ -1229,18 +1455,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                 Cancelar
               </button>
               <button
-                onClick={async () => {
-                  setShowDeleteConfirm(false);
-                  try {
-                    if (user?.id) {
-                      await apiDeleteChat(chat.id, user.id);
+                  onClick={async () => {
+                    setShowDeleteConfirm(false);
+                    try {
+                      clearMessageCache(chat.id);
+                      if (user?.id) {
+                        await apiDeleteChat(chat.id, user.id);
+                      }
+                      onChatDeleted?.(chat.id);
+                      onBack();
+                    } catch (e) {
+                      console.error("[CHAT] deleteChat error:", e);
                     }
-                    onChatDeleted?.(chat.id);
-                    onBack();
-                  } catch (e) {
-                    console.error("[CHAT] deleteChat error:", e);
-                  }
-                }}
+                  }}
                 className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 transition-colors cursor-pointer"
               >
                 Eliminar
@@ -1253,12 +1480,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       {/* GROUP INFO PANEL */}
       {showGroupInfo && (
         <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-[420px] rounded-t-3xl shadow-lg animate-slide-up max-h-[70vh] flex flex-col">
+          <div className="bg-white w-full max-w-[420px] rounded-t-3xl shadow-lg animate-slide-up max-h-[80vh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between p-4 border-b border-slate-100 shrink-0">
               <h3 className="text-sm font-bold text-slate-800">Info del grupo</h3>
               <button
-                onClick={() => setShowGroupInfo(false)}
+                onClick={() => { setShowGroupInfo(false); setEditingGroupName(false); setShowAddMember(false); }}
                 className="p-1.5 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4 text-slate-500" />
@@ -1274,30 +1501,121 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                   <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                 </svg>
               </div>
-              <p className="text-sm font-bold text-slate-800">{chat.name}</p>
+              {editingGroupName ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={groupNameDraft}
+                    onChange={e => setGroupNameDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") handleSaveGroupName(); if (e.key === "Escape") setEditingGroupName(false); }}
+                    className="text-sm font-bold text-slate-800 text-center border-b-2 border-teal-500 outline-none bg-slate-50 px-2 py-1 rounded"
+                    autoFocus
+                  />
+                  <button onClick={handleSaveGroupName} className="p-1 text-teal-600 hover:bg-teal-50 rounded cursor-pointer">
+                    <Check className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-bold text-slate-800">{localGroupName}</p>
+                  <button onClick={() => { setGroupNameDraft(localGroupName); setEditingGroupName(true); }} className="p-1 text-slate-400 hover:text-teal-600 hover:bg-slate-100 rounded cursor-pointer">
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                  </button>
+                </div>
+              )}
               <p className="text-[10px] text-slate-400 mt-0.5">{groupMembers.length} miembros</p>
             </div>
             {/* Members list */}
             <div className="flex-1 overflow-y-auto p-4">
-              <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Miembros</p>
-              <div className="space-y-2">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-bold text-slate-400 uppercase">{groupMembers.length} miembros</p>
+                <button
+                  onClick={() => setShowAddMember(!showAddMember)}
+                  className="flex items-center gap-1 text-[10px] font-bold text-teal-600 hover:text-teal-700 cursor-pointer"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="8.5" cy="7" r="4" />
+                    <line x1="20" y1="8" x2="20" y2="14" />
+                    <line x1="23" y1="11" x2="17" y2="11" />
+                  </svg>
+                  Agregar
+                </button>
+              </div>
+
+              {/* Add member search */}
+              {showAddMember && (
+                <div className="mb-3 p-2 bg-slate-50 rounded-xl border border-slate-200">
+                  <input
+                    type="text"
+                    placeholder="Buscar por nombre o teléfono..."
+                    value={addMemberQuery}
+                    onChange={e => setAddMemberQuery(e.target.value)}
+                    className="w-full text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 outline-none focus:border-teal-400 bg-white"
+                    autoFocus
+                  />
+                  {addMemberResults.length > 0 && (
+                    <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
+                      {addMemberResults.map(r => (
+                        <button
+                          key={r.id}
+                          onClick={() => handleAddMember(r.id)}
+                          disabled={addingMember}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-teal-50 rounded-lg cursor-pointer disabled:opacity-50"
+                        >
+                          {r.avatar ? (
+                            <img src={r.avatar} className="w-6 h-6 rounded-full object-cover" alt="" />
+                          ) : (
+                            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                              <span className="text-white font-bold text-[8px]">
+                                {r.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                              </span>
+                            </div>
+                          )}
+                          <span className="flex-1 text-left truncate">{r.name}</span>
+                          {addingMember ? <Loader2 className="w-3 h-3 animate-spin text-teal-600" /> : <span className="text-teal-600 font-bold">+</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {addMemberQuery.trim().length >= 2 && addMemberResults.length === 0 && (
+                    <p className="text-[10px] text-slate-400 text-center py-2">Sin resultados</p>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-1">
                 {groupMembers.map(m => (
-                  <div key={m.profile_id} className="flex items-center gap-3 py-1.5">
+                  <div key={m.profile_id} className="flex items-center gap-3 py-1.5 px-1 rounded-lg hover:bg-slate-50 group">
                     {m.avatar ? (
                       <img src={m.avatar} className="w-8 h-8 rounded-full object-cover" alt="" loading="lazy" />
                     ) : (
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center shrink-0">
                         <span className="text-white font-bold text-[10px]">
                           {m.name ? m.name.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2) : "?"}
                         </span>
                       </div>
                     )}
                     <div className="flex-1 min-w-0">
-                      <p className="text-[11px] font-semibold text-slate-800 truncate">{m.name || "Usuario"}</p>
-                      <p className="text-[9px] text-slate-400">
-                        {m.profile_id === uid ? "Tú" : ""}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-[11px] font-semibold text-slate-800 truncate">{m.name || "Usuario"}</p>
+                        {m.profile_id === uid && (
+                          <span className="text-[8px] font-bold text-teal-600 bg-teal-50 px-1.5 py-0.5 rounded-full">Tú</span>
+                        )}
+                      </div>
                     </div>
+                    {m.profile_id !== uid && (
+                      <button
+                        onClick={() => handleRemoveMember(m.profile_id)}
+                        className="p-1 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
+                        title="Eliminar del grupo"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 ))}
                 {groupMembers.length === 0 && (
@@ -1305,8 +1623,14 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                 )}
               </div>
             </div>
-            {/* Delete group button (visible to all) */}
-            <div className="p-4 border-t border-slate-100 shrink-0">
+            {/* Bottom actions */}
+            <div className="p-4 border-t border-slate-100 shrink-0 space-y-2">
+              <button
+                onClick={handleLeaveGroup}
+                className="w-full py-2.5 text-[11px] font-bold text-amber-600 bg-amber-50 rounded-xl hover:bg-amber-100 transition-colors cursor-pointer"
+              >
+                Salir del grupo
+              </button>
               <button
                 onClick={() => { setShowGroupInfo(false); setShowDeleteConfirm(true); }}
                 className="w-full py-2.5 text-[11px] font-bold text-rose-500 bg-rose-50 rounded-xl hover:bg-rose-100 transition-colors cursor-pointer"
@@ -1367,30 +1691,33 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       )}
 
       {/* MESSAGES LIST AREA */}
-      <div 
-        className="flex-1 p-4 overflow-y-auto space-y-3.5 relative transition-all duration-300 bg-transparent"
-        ref={messagesRef}
-        onScroll={handleScroll}
-      >
-        <div className="relative z-10 space-y-3.5">
-          {loadingOlder && (
-            <div className="flex justify-center py-3">
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <div className="w-4 h-4 border-2 border-slate-300 border-t-teal-500 rounded-full animate-spin" />
-                Cargando mensajes anteriores...
-              </div>
-            </div>
-          )}
-          {(showSearch && searchQuery.trim() ? filteredMessages : messages).map((msg, idx) => {
+      <div className="flex-1 relative bg-transparent">
+        <Virtuoso
+          ref={virtuosoRef}
+          className="h-full"
+          data={showSearch && searchQuery.trim() ? filteredMessages : messages}
+          followOutput="smooth"
+          startReached={() => {
+            if (!loadingOlder && hasMoreOlder) loadOlderMessages();
+          }}
+          components={{
+            Header: () =>
+              loadingOlder ? (
+                <div className="flex justify-center py-3">
+                  <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                    <div className="w-4 h-4 border-2 border-slate-300 border-t-teal-500 rounded-full animate-spin" />
+                    Cargando mensajes anteriores...
+                  </div>
+                </div>
+              ) : null,
+          }}
+          style={{ paddingTop: "16px", paddingBottom: "16px" }}
+          itemContent={(index, msg) => {
             const isMe = msg.sender === "me";
-            const isHighlighted = showSearch && searchQuery.trim() && idx === searchIndex;
+            const isHighlighted = showSearch && searchQuery.trim() && index === searchIndex;
             return (
-              <div
-                key={msg.id}
-                ref={isHighlighted ? el => el?.scrollIntoView({ behavior: "smooth", block: "center" }) : undefined}
-                className={isHighlighted ? "ring-2 ring-teal-400 rounded-xl transition-all duration-300" : ""}
-              >
-                <MessageBubble
+              <div className={`px-4 pb-3.5 ${isHighlighted ? "ring-2 ring-teal-400 rounded-xl transition-all duration-300" : ""}`}>
+                <MessageBubbleWithCache
                   msg={msg}
                   isMe={isMe}
                   activeReactionMenu={activeReactionMenu}
@@ -1400,6 +1727,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                   handleVote={handleVote}
                   handleAddReaction={handleAddReaction}
                   handleDeleteMessage={handleDeleteMessage}
+                  handleDeleteForMe={handleDeleteForMe}
                   handleForwardMessage={(m) => onForwardMessage?.(m)}
                   handleReplyMessage={handleReplyMessage}
                   bubbleColorMeId={bubbleColorMeId}
@@ -1410,9 +1738,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
                 />
               </div>
             );
-          })}
-        </div>
-        <div ref={messagesEndRef} />
+          }}
+        />
       </div>
 
       {/* ATTACHMENT POPUP TRAY */}
@@ -1429,7 +1756,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
           </button>
 
           <button 
-            onClick={() => { setShowAttachments(false); triggerFilePick("video/*", "video"); }}
+            onClick={() => { setShowAttachments(false); triggerFilePick("video/*,video/mp4,video/x-m4v,video/quicktime", "video"); }}
             className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
           >
             <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center text-rose-600 group-hover:scale-110 transition-transform shadow-sm">
@@ -1563,11 +1890,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
         <div className="px-3 pb-1 bg-transparent relative z-10 shrink-0">
           <div className="bg-white/95 backdrop-blur-md rounded-2xl px-3 py-2 border border-slate-200 shadow-sm flex items-center gap-2">
             <div className="w-0.5 h-8 bg-teal-500 rounded-full shrink-0"></div>
+            {(replyTo.type === "image" || replyTo.type === "sticker" || replyTo.type === "video") && replyTo.mediaUrl && (
+              <img src={replyTo.mediaUrl} className="w-8 h-8 rounded-lg object-cover shrink-0" />
+            )}
             <div className="flex-1 min-w-0">
               <p className="text-[10px] font-bold text-teal-700 truncate">
                 {replyTo.sender === "me" ? "Tú" : chat.name}
               </p>
-              <p className="text-[9px] text-slate-500 truncate">{replyTo.text || "Multimedia"}</p>
+              <p className="text-[9px] text-slate-500 truncate">
+                {replyTo.text || (replyTo.type === "image" ? "Imagen" : replyTo.type === "video" ? "Video" : "Multimedia")}
+              </p>
             </div>
             <button
               onClick={() => setReplyTo(null)}

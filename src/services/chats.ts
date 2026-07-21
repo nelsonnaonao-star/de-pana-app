@@ -241,6 +241,26 @@ export async function createGroupChat(
   return data as Chat;
 }
 
+export async function addGroupMember(chatId: string, profileId: string) {
+  const { error } = await supabase
+    .from("chat_participants")
+    .insert({ chat_id: chatId, profile_id: profileId });
+  if (error) throw error;
+}
+
+export async function removeGroupMember(chatId: string, profileId: string) {
+  const { error } = await supabase
+    .from("chat_participants")
+    .delete()
+    .eq("chat_id", chatId)
+    .eq("profile_id", profileId);
+  if (error) throw error;
+}
+
+export async function leaveGroup(chatId: string, userId: string) {
+  await removeGroupMember(chatId, userId);
+}
+
 export async function getChatWithPartner(chatId: string, userId: string): Promise<Chat | null> {
   const { data: chat } = await supabase
     .from("chats")

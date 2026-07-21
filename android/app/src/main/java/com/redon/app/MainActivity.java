@@ -70,6 +70,12 @@ public class MainActivity extends BridgeActivity {
             } catch (Exception e) {
                 Log.e(TAG, "Failed to trigger JS event", e);
             }
+            // Cancel the call notification when answered
+            if (chatId != null) {
+                int notificationId = ("call-" + chatId).hashCode();
+                NotificationManagerCompat.from(this).cancel(notificationId);
+                Log.d(TAG, "Cancelled call notification for chatId: " + chatId);
+            }
         } else if ("OPEN_CHAT".equals(action) || "OPEN_APP".equals(action) || (chatId != null && "message".equals(type))) {
             if (chatId != null) {
                 try {

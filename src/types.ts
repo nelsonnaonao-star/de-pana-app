@@ -15,13 +15,14 @@ export interface Message {
   latitude?: number;
   longitude?: number;
   locationName?: string;
-  status?: "sending" | "sent" | "delivered" | "read";
+  status?: "sending" | "sent" | "delivered" | "read" | "error";
   forwarded?: boolean;
   edited?: boolean;
   replyToId?: string;
   replyToText?: string;
   replyToSender?: string;
   price?: string;
+  posterUrl?: string;
 }
 
 export interface Chat {

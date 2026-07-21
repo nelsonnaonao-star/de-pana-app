@@ -1,0 +1,13 @@
+{
+  "profile_id": "152321e9-b152-4c29-8c1f-ef3f5839d3d2",
+  "title": "Test Llamada",
+  "body": "Llamada entrante",
+  "data": {
+    "type": "call",
+    "chatId": "test-chat",
+    "callerId": "411f6755-28ed-47c0-af64-cb9ee5b4bbff",
+    "callerName": "Test User",
+    "callType": "audio",
+    "callId": "test-call-123"
+  }
+}

@@ -311,10 +311,10 @@ export default function BusinessPanel({
         </div>
 
         {/* Dynamic Horizontal Sub Tabs */}
-        <div className="flex gap-0.5 bg-black/15 p-1 rounded-lg text-[8.5px] font-bold uppercase mt-1">
+        <div className="flex gap-1 bg-black/15 p-1.5 rounded-lg text-[11px] font-bold uppercase mt-1">
           <button
             onClick={() => setActiveSubTab("feed")}
-            className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
+            className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
               activeSubTab === "feed" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
@@ -322,7 +322,7 @@ export default function BusinessPanel({
           </button>
           <button
             onClick={() => setActiveSubTab("create")}
-            className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
+            className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
               activeSubTab === "create" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
@@ -330,7 +330,7 @@ export default function BusinessPanel({
           </button>
           <button
             onClick={() => setActiveSubTab("editor")}
-            className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
+            className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
               activeSubTab === "editor" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
@@ -338,9 +338,9 @@ export default function BusinessPanel({
           </button>
           <button
             onClick={() => setActiveSubTab("stats")}
-            className={`flex-1 py-1 text-center rounded-md transition-all cursor-pointer ${
+            className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
               activeSubTab === "stats" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
-}`}
+            }`}
           >
             Mis Stats
           </button>

@@ -32,10 +32,12 @@ function mapStoryToDb(body) {
 router.get('/stories/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabaseAdmin
       .from('stories')
       .select('*')
       .eq('user_id', userId)
+      .gte('created_at', cutoff)
       .order('created_at', { ascending: false });
     if (error) throw error;
     res.json((data || []).map(mapStoryFromDb));
@@ -47,9 +49,25 @@ router.get('/stories/:userId', async (req, res) => {
 
 router.get('/stories', async (req, res) => {
   try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: contacts } = await supabaseAdmin
+      .from('contacts')
+      .select('contact_id')
+      .eq('user_id', req.userId);
+
+    const visibleIds = [req.userId];
+    if (contacts) {
+      for (const c of contacts) {
+        if (!visibleIds.includes(c.contact_id)) visibleIds.push(c.contact_id);
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from('stories')
       .select('*, profiles!inner(name, avatar_url)')
+      .in('user_id', visibleIds)
+      .gte('created_at', cutoff)
       .order('created_at', { ascending: false });
     if (error) throw error;
     const mapped = (data || []).map(s => ({
@@ -104,6 +122,103 @@ router.delete('/stories/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[CONTENT] story delete error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── STORY VIEWS & REACTIONS ──────────────────────────────────────
+
+router.post('/stories/:storyId/view', async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    const { data: story, error: storyErr } = await supabaseAdmin
+      .from('stories')
+      .select('user_id')
+      .eq('id', storyId)
+      .maybeSingle();
+    if (storyErr) throw storyErr;
+    if (!story) return res.status(404).json({ error: 'Estado no encontrado' });
+    if (story.user_id === req.userId) return res.json({ ok: true });
+    await supabaseAdmin
+      .from('story_views')
+      .upsert({ story_id: storyId, viewer_id: req.userId }, { onConflict: 'story_id,viewer_id' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[CONTENT] story view error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/stories/:storyId/viewers', async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    const { data: story, error: storyErr } = await supabaseAdmin
+      .from('stories')
+      .select('user_id')
+      .eq('id', storyId)
+      .maybeSingle();
+    if (storyErr) throw storyErr;
+    if (!story) return res.status(404).json({ error: 'Estado no encontrado' });
+    if (story.user_id !== req.userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+    const { data: views, error: viewsErr } = await supabaseAdmin
+      .from('story_views')
+      .select('viewer_id, created_at, profiles!inner(name, avatar_url)')
+      .eq('story_id', storyId)
+      .order('created_at', { ascending: false });
+    if (viewsErr) throw viewsErr;
+    const { data: reactions, error: reactErr } = await supabaseAdmin
+      .from('story_reactions')
+      .select('user_id, reaction_type')
+      .eq('story_id', storyId);
+    if (reactErr) throw reactErr;
+    const reactionMap = {};
+    if (reactions) {
+      for (const r of reactions) {
+        if (!reactionMap[r.user_id]) reactionMap[r.user_id] = [];
+        reactionMap[r.user_id].push(r.reaction_type);
+      }
+    }
+    const result = (views || []).map(v => ({
+      viewer_id: v.viewer_id,
+      name: v.profiles?.name || 'Usuario',
+      avatar: v.profiles?.avatar_url || '',
+      viewed_at: v.created_at,
+      reactions: reactionMap[v.viewer_id] || [],
+    }));
+    res.json({ viewers: result, total: result.length });
+  } catch (err) {
+    console.error('[CONTENT] story viewers error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/stories/:storyId/react', async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    const { reaction } = req.body;
+    if (!reaction) return res.status(400).json({ error: 'reaction requerida' });
+    const { data: existing } = await supabaseAdmin
+      .from('story_reactions')
+      .select('*')
+      .eq('story_id', storyId)
+      .eq('user_id', req.userId)
+      .maybeSingle();
+    if (existing) {
+      if (existing.reaction_type === reaction) {
+        await supabaseAdmin.from('story_reactions').delete().eq('id', existing.id);
+        res.json({ reacted: false });
+      } else {
+        await supabaseAdmin.from('story_reactions').update({ reaction_type: reaction }).eq('id', existing.id);
+        res.json({ reacted: true, reaction });
+      }
+    } else {
+      await supabaseAdmin.from('story_reactions').insert({ story_id: storyId, user_id: req.userId, reaction_type: reaction });
+      res.json({ reacted: true, reaction });
+    }
+  } catch (err) {
+    console.error('[CONTENT] story react error:', err);
     res.status(500).json({ error: err.message });
   }
 });

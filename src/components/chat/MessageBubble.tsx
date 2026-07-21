@@ -17,6 +17,7 @@ interface MessageBubbleProps {
   handleVote: (messageId: string, optionId: string) => void;
   handleAddReaction: (messageId: string, emoji: string) => void;
   handleDeleteMessage: (messageId: string) => void;
+  handleDeleteForMe: (messageId: string) => void;
   handleForwardMessage: (msg: Message) => void;
   handleReplyMessage: (msg: Message) => void;
   bubbleColorMeId: string;
@@ -145,6 +146,7 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isRendered, setIsRendered] = useState(false);
   const [showReactions, setShowReactions] = useState(false);
   const { saving, save } = useSaveMedia();
 
@@ -153,7 +155,6 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
     if (!v) return;
     const onEnd = () => setIsPlaying(false);
     v.addEventListener("ended", onEnd);
-    v.play().then(() => setIsPlaying(true)).catch(() => {});
     return () => v.removeEventListener("ended", onEnd);
   }, []);
 
@@ -177,17 +178,38 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
         saving={saving}
       />
 
-      <div className="w-full h-full flex items-center justify-center">
+      <div className="w-full h-full flex items-center justify-center relative">
+        {/* Poster mask: covers the video until it renders real frames */}
+        {!isRendered && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black">
+            {msg.posterUrl ? (
+              <img
+                src={msg.posterUrl}
+                alt=""
+                className="max-w-[95vw] max-h-[90vh] object-contain"
+              />
+            ) : (
+              <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center">
+                <Loader2 className="w-8 h-8 text-white/40 animate-spin" />
+              </div>
+            )}
+          </div>
+        )}
+
         <video
           ref={videoRef}
           src={src}
           className="max-w-[95vw] max-h-[90vh] cursor-pointer"
+          style={{ opacity: isRendered ? 1 : 0, backgroundColor: 'black' }}
           onClick={(e) => { e.stopPropagation(); togglePlay(); }}
-          controls={false}
+          onPlaying={() => setIsRendered(true)}
+          controls={true}
+          playsInline
+          preload="metadata"
         />
       </div>
 
-      {!isPlaying && (
+      {!isPlaying && isRendered && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none" onClick={(e) => { e.stopPropagation(); togglePlay(); }}>
           <div className="w-16 h-16 rounded-full bg-black/50 flex items-center justify-center">
             <Play className="w-8 h-8 text-white ml-1" />
@@ -212,12 +234,13 @@ function isEmoji(str: string): boolean {
   return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)+$/u.test(str.trim());
 }
 
-function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReactionMenu, handleForwardMessage, handleAddReaction }: {
+function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReactionMenu, handleForwardMessage, handleAddReaction, handleReplyMessage }: {
   msg: Message; isMe: boolean; isSticker: boolean;
   activeReactionMenu: string | null;
   setActiveReactionMenu: (id: string | null) => void;
   handleForwardMessage: (m: Message) => void;
   handleAddReaction: (id: string, emoji: string) => void;
+  handleReplyMessage: (m: Message) => void;
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
@@ -239,7 +262,30 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           activeReactionMenu={activeReactionMenu}
         />
       )}
-      <div className="relative max-w-[85%] cursor-pointer group" onClick={() => { if (!isEmojiOnly) setShowViewer(true); }}>
+      <div
+        className="relative max-w-[85%] cursor-pointer group select-none"
+        onClick={() => { if (!isEmojiOnly) setShowViewer(true); }}
+        onTouchStart={(e) => {
+          (e.currentTarget as HTMLElement).dataset.touchX = e.touches[0].clientX.toString();
+          (e.currentTarget as HTMLElement).dataset.lpTimer = window.setTimeout(() => {
+            setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id);
+          }, 500).toString();
+        }}
+        onTouchMove={(e) => {
+          const timer = (e.currentTarget as HTMLElement).dataset.lpTimer;
+          if (timer) { clearTimeout(Number(timer)); delete (e.currentTarget as HTMLElement).dataset.lpTimer; }
+        }}
+        onTouchEnd={(e) => {
+          const timer = (e.currentTarget as HTMLElement).dataset.lpTimer;
+          if (timer) { clearTimeout(Number(timer)); delete (e.currentTarget as HTMLElement).dataset.lpTimer; }
+          const startX = Number((e.currentTarget as HTMLElement).dataset.touchX || 0);
+          const dx = e.changedTouches[0].clientX - startX;
+          if (dx > 80) {
+            e.preventDefault();
+            handleReplyMessage(msg);
+          }
+        }}
+      >
         {isEmojiOnly ? (
           <div className="text-6xl leading-none p-1 select-none">
             {msg.mediaUrl}
@@ -312,7 +358,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
   isPlayingAudio, setIsPlayingAudio,
-  handleVote, handleAddReaction, handleDeleteMessage, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice,
+  handleVote, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
   const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
@@ -321,16 +367,26 @@ export default React.memo(function MessageBubble({
   const [showPriceInput, setShowPriceInput] = useState(false);
   const [priceValue, setPriceValue] = useState("");
 
-  const isMediaType = msg.type === "sticker" || msg.type === "image";
+  const isMediaType = msg.type === "sticker" || msg.type === "image" || msg.type === "video";
   if (isMediaType) {
     const isSticker = msg.type === "sticker";
     return (
       <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
-        <ImageMessage
-          msg={msg} isMe={isMe} isSticker={isSticker}
-          activeReactionMenu={activeReactionMenu} setActiveReactionMenu={setActiveReactionMenu}
-          handleForwardMessage={handleForwardMessage} handleAddReaction={handleAddReaction}
-        />
+        {msg.type === "video" ? (
+          <VideoMessageContent
+            msg={msg} isMe={isMe}
+            activeReactionMenu={activeReactionMenu} setActiveReactionMenu={setActiveReactionMenu}
+            handleForwardMessage={handleForwardMessage} handleAddReaction={handleAddReaction}
+            handleReplyMessage={handleReplyMessage}
+          />
+        ) : (
+          <ImageMessage
+            msg={msg} isMe={isMe} isSticker={isSticker}
+            activeReactionMenu={activeReactionMenu} setActiveReactionMenu={setActiveReactionMenu}
+            handleForwardMessage={handleForwardMessage} handleAddReaction={handleAddReaction}
+            handleReplyMessage={handleReplyMessage}
+          />
+        )}
         {msg.reactions && Object.keys(msg.reactions).length > 0 && (
           <div className={`flex gap-1 mt-[-6px] z-10 ${isMe ? "mr-2" : "ml-2"}`}>
             {Object.entries(msg.reactions).map(([emo, count]) => (
@@ -428,6 +484,10 @@ export default React.memo(function MessageBubble({
                       🏷️ Precio {msg.price && <span className="text-emerald-600 font-bold ml-auto">${msg.price}</span>}
                     </button>
                   )}
+                  <div className="border-t border-slate-100 my-1"></div>
+                  <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+                    🗑️ Eliminar para mí
+                  </button>
                   {isMe && (
                     <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
                       🗑️ Eliminar para todos
@@ -463,14 +523,6 @@ export default React.memo(function MessageBubble({
           </div>
         )}
         {msg.type === "text" && <p className={`leading-relaxed whitespace-pre-wrap ${isGlass ? "text-gray-900" : ""}`}>{msg.text}</p>}
-
-        {msg.type === "video" && (
-          <VideoMessageContent
-            msg={msg}
-            handleForwardMessage={handleForwardMessage}
-            handleAddReaction={handleAddReaction}
-          />
-        )}
 
         {msg.type === "audio" && (
           <div className={`flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? "bg-black/5" : "bg-black/5 dark:bg-white/5"}`}>
@@ -622,6 +674,10 @@ export default React.memo(function MessageBubble({
                 ✏️ Editar
               </button>
             )}
+            <div className="border-t border-slate-100 my-1"></div>
+            <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+              🗑️ Eliminar para mí
+            </button>
             {isMe && (
               <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
                 🗑️ Eliminar para todos
@@ -634,12 +690,16 @@ export default React.memo(function MessageBubble({
   );
 });
 
-function VideoMessageContent({ msg, handleForwardMessage, handleAddReaction }: {
-  msg: Message;
+function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionMenu, handleForwardMessage, handleAddReaction, handleReplyMessage }: {
+  msg: Message; isMe: boolean;
+  activeReactionMenu: string | null;
+  setActiveReactionMenu: (id: string | null) => void;
   handleForwardMessage: (m: Message) => void;
   handleAddReaction: (id: string, emoji: string) => void;
+  handleReplyMessage: (m: Message) => void;
 }) {
   const [showViewer, setShowViewer] = useState(false);
+  const isSending = msg.status === "sending";
 
   return (
     <>
@@ -652,18 +712,92 @@ function VideoMessageContent({ msg, handleForwardMessage, handleAddReaction }: {
           handleAddReaction={handleAddReaction}
         />
       )}
-      <div className="space-y-1.5 w-44 cursor-pointer group" onClick={() => setShowViewer(true)}>
-        <div className="relative aspect-video rounded-xl overflow-hidden bg-black flex items-center justify-center border border-white/10">
-          <video src={msg.mediaUrl} className="w-full h-full object-cover" />
-          <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/10 transition-colors">
-            <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
-              <Play className="w-5 h-5 text-white ml-0.5" />
+      <div
+        className="relative max-w-[85%] group select-none"
+        onClick={() => setShowViewer(true)}
+        onTouchStart={(e) => {
+          (e.currentTarget as HTMLElement).dataset.touchX = e.touches[0].clientX.toString();
+          (e.currentTarget as HTMLElement).dataset.lpTimer = window.setTimeout(() => {
+            setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id);
+          }, 500).toString();
+        }}
+        onTouchMove={(e) => {
+          const timer = (e.currentTarget as HTMLElement).dataset.lpTimer;
+          if (timer) { clearTimeout(Number(timer)); delete (e.currentTarget as HTMLElement).dataset.lpTimer; }
+        }}
+        onTouchEnd={(e) => {
+          const timer = (e.currentTarget as HTMLElement).dataset.lpTimer;
+          if (timer) { clearTimeout(Number(timer)); delete (e.currentTarget as HTMLElement).dataset.lpTimer; }
+          const startX = Number((e.currentTarget as HTMLElement).dataset.touchX || 0);
+          const dx = e.changedTouches[0].clientX - startX;
+          if (dx > 80) {
+            e.preventDefault();
+            handleReplyMessage(msg);
+          }
+        }}
+      >
+        <div className="relative bg-black overflow-hidden rounded-xl shadow-md border border-white/10" style={{ width: 260, height: 340 }}>
+          {/* Capa de imagen (Thumbnail) */}
+          {msg.posterUrl ? (
+            <img
+              src={msg.posterUrl}
+              alt="Video thumbnail"
+              className="w-full h-full object-cover absolute inset-0 bg-black"
+            />
+          ) : (
+            <div className="w-full h-full bg-black flex items-center justify-center absolute inset-0">
+              <Loader2 className="w-6 h-6 text-white/20 animate-spin" />
+            </div>
+          )}
+
+          {/* Overlay oscuro para mejorar contraste */}
+          <div className="absolute inset-0 bg-black/20 pointer-events-none" />
+
+          {/* Botón de Play (siempre sobre fondo negro) */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div className="w-12 h-12 rounded-full bg-black/50 flex items-center justify-center backdrop-blur-sm border border-white/10">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="white" className="ml-1">
+                <polygon points="8,5 19,12 8,19" />
+              </svg>
             </div>
           </div>
+
+          <div className="absolute bottom-1 right-1 bg-black/50 text-white/90 text-[10px] px-1.5 py-0.5 rounded-full backdrop-blur-xs font-medium pointer-events-none flex items-center gap-1 z-10">
+            <span>{msg.timestamp}</span>
+            {isMe && (
+              <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
+                {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
+                {msg.status === "sent" && "✓"}
+                {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
+                {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
+              </span>
+            )}
+          </div>
         </div>
-        <span className="text-[9px] font-mono opacity-85 block truncate">🎬 {msg.fileName} ({msg.fileSize})</span>
-        {msg.price && (
-          <span className="text-[10px] font-bold text-emerald-600 block">💰 {msg.price}</span>
+
+        <div className="px-0.5 pt-1 flex items-center gap-2">
+          <span className="text-[9px] font-mono opacity-60 truncate">{msg.fileName}</span>
+          <span className="text-[8px] font-mono opacity-40">({msg.fileSize})</span>
+          {msg.price && (
+            <span className="text-[9px] font-bold text-emerald-600 ml-auto">💰 {msg.price}</span>
+          )}
+        </div>
+
+        {!isSending && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id); }}
+            className="absolute top-2 right-2 w-6 h-6 rounded-full bg-black/40 hover:bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20"
+          >
+            <span className="text-white text-[11px] leading-none">➕</span>
+          </button>
+        )}
+
+        {isSending && (
+          <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center pointer-events-none" style={{ borderRadius: 12 }}>
+            <div className="bg-white/90 rounded-full p-2">
+              <Loader2 className="w-5 h-5 text-[#0a4d52] animate-spin" />
+            </div>
+          </div>
         )}
       </div>
     </>
@@ -676,6 +810,7 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
   handleAddReaction: (id: string, emoji: string) => void;
 }) {
   const [showViewer, setShowViewer] = useState(false);
+  const isSending = msg.status === "sending";
 
   return (
     <>
@@ -693,7 +828,13 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
         onClick={() => setShowViewer(true)}
       >
         <div className="w-24 h-24 rounded-full border-4 border-teal-400 overflow-hidden bg-black flex items-center justify-center relative shadow-inner">
-          <video src={msg.mediaUrl} className="w-full h-full object-cover absolute inset-0" muted playsInline />
+          {isSending ? (
+            <div className="w-full h-full flex items-center justify-center bg-black/60">
+              <Loader2 className="w-6 h-6 text-white/40 animate-spin" />
+            </div>
+          ) : (
+            <video src={msg.mediaUrl} className="w-full h-full object-cover absolute inset-0" muted playsInline preload="none" />
+          )}
           <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/20 transition-colors">
             <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
               <Play className="w-5 h-5 text-white ml-0.5" />

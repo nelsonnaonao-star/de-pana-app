@@ -8,6 +8,7 @@ import {
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
   Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft
 } from "lucide-react";
+import toast from "react-hot-toast";
 import { Chat, Message, ActiveCall } from "../types";
 import WelcomeScreen from "./WelcomeScreen";
 import ChatRoom from "./ChatRoom";
@@ -90,6 +91,7 @@ export default function PhoneSimulator({
     name: string;
     phone: string;
     avatar: string;
+    bio: string;
   } | null>(null);
   const avatarManualRef = useRef(false);
 
@@ -99,6 +101,7 @@ export default function PhoneSimulator({
         name: profile.name,
         phone: profile.phone_number,
         avatar: avatarManualRef.current ? (prev?.avatar || profile.avatar || profile.avatar_url || "") : (profile.avatar || profile.avatar_url || ""),
+        bio: profile.bio || "",
       }));
     } else if (user) {
       const fallbackName = user.email?.split("@")[0] || "Usuario";
@@ -106,6 +109,7 @@ export default function PhoneSimulator({
         name: fallbackName,
         phone: "",
         avatar: "",
+        bio: "",
       });
     }
   }, [user, profile]);
@@ -334,6 +338,7 @@ export default function PhoneSimulator({
   // Profile editing
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editName, setEditName] = useState("");
+  const [editBio, setEditBio] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showToast = (msg: string) => {
@@ -2067,19 +2072,26 @@ export default function PhoneSimulator({
                             className="bg-white/15 text-white text-sm font-black text-center px-3 py-1.5 rounded-xl border border-white/30 outline-none w-48"
                             placeholder="Tu nombre"
                           />
+                          <input
+                            type="text"
+                            value={editBio}
+                            onChange={(e) => setEditBio(e.target.value)}
+                            className="bg-white/10 text-white text-[10px] text-center px-3 py-1 rounded-xl border border-white/20 outline-none w-48 placeholder-teal-300/50"
+                            placeholder="Tu estado o bio"
+                          />
                           <div className="flex gap-2">
                             <button
                               onClick={async () => {
                                 if (!editName.trim() || !user) return;
                                 try {
-                                  await updateProfile(user.id, { name: editName.trim() });
+                                  await updateProfile(user.id, { name: editName.trim(), bio: editBio.trim() });
                                   await refreshProfile();
-                                  setRegisteredUser(prev => prev ? { ...prev, name: editName.trim() } : prev);
+                                  setRegisteredUser(prev => prev ? { ...prev, name: editName.trim(), bio: editBio.trim() } : prev);
                                   setIsEditingProfile(false);
-                                  showToast("Nombre actualizado ✅");
+                                  showToast("Perfil actualizado ✅");
                                 } catch (err) {
-                                  console.error("Name update failed:", err);
-                                  showToast("Error al actualizar nombre ❌");
+                                  console.error("Profile update failed:", err);
+                                  showToast("Error al actualizar perfil ❌");
                                 }
                               }}
                               className="px-3 py-1.5 bg-teal-500 hover:bg-teal-400 text-white font-black text-[10px] rounded-xl transition-colors cursor-pointer"
@@ -2094,14 +2106,18 @@ export default function PhoneSimulator({
                             </button>
                           </div>
                         </div>
-                      ) : (
+                        ) : (
                         <>
                           <h4 className="text-sm font-black mt-2 tracking-tight">{registeredUser.name}</h4>
                           <p className="text-[10px] text-teal-200 font-mono mt-0.5">{registeredUser.phone}</p>
+                          {registeredUser.bio && (
+                            <p className="text-[9px] text-teal-300/80 mt-0.5 italic max-w-[200px] mx-auto truncate">{registeredUser.bio}</p>
+                          )}
                           <div className="flex items-center justify-center gap-2 mt-1">
                             <button
                               onClick={() => {
                                 setEditName(registeredUser.name);
+                                setEditBio(registeredUser.bio || "");
                                 setIsEditingProfile(true);
                               }}
                               className="px-2.5 py-0.5 bg-white/10 hover:bg-white/20 text-[9px] font-bold rounded-lg transition-colors cursor-pointer"
@@ -2377,9 +2393,16 @@ export default function PhoneSimulator({
                                     className="flex-1 px-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-teal-500 font-mono"
                                   />
                                   <button
-                                    onClick={() => {
-                                      showToast("ID de usuario actualizado ✨");
-                                      setActiveSettingsModal(null);
+                                    onClick={async () => {
+                                      if (!user || !userId.trim()) return;
+                                      try {
+                                        await updateProfile(user.id, { username: userId.trim() });
+                                        showToast("ID de usuario actualizado ✨");
+                                        setActiveSettingsModal(null);
+                                      } catch (err) {
+                                        console.error("Username update failed:", err);
+                                        showToast("Error al actualizar ID ❌");
+                                      }
                                     }}
                                     className="px-3.5 bg-[#0a4d52] text-white font-black text-[9px] rounded-xl hover:bg-teal-800 transition-colors cursor-pointer"
                                   >
@@ -2849,6 +2872,10 @@ export default function PhoneSimulator({
                       <button
                         key={chat.id}
                         onClick={async () => {
+                          if (forwardingMessage.mediaUrl?.startsWith("blob:")) {
+                            toast.error("Espera a que el archivo termine de subirse");
+                            return;
+                          }
                           try {
                             await apiSendMessage({
                               chat_id: chat.id,

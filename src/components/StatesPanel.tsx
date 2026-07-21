@@ -7,7 +7,7 @@ import {
 import { Chat, Message } from "../types";
 import MediaEditor from "./MediaEditor";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMyStories, getAllStories, createStory, deleteStory } from "../services/contentService";
+import { getMyStories, getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
 
 export interface Story {
   id: string;
@@ -42,15 +42,10 @@ const GRADIENTS = [
 ];
 
 // Pre-designed sample photos for Status images
-const PHOTO_SAMPLES = [
-  { url: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=400&q=80", tag: "Estilo de vida" },
-  { url: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=400&q=80", tag: "Comida Gourmet" },
-  { url: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=400&q=80", tag: "Futuro & Tech" },
-  { url: "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=400&q=80", tag: "Naturaleza" }
-];
+
 
 export default function StatesPanel({ onStartChat }: StatesPanelProps) {
-  const { user } = useSupabase();
+  const { user, profile } = useSupabase();
 
   // Load stories from API on mount
   useEffect(() => {
@@ -77,6 +72,19 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
       }
       setUserStates(Object.values(grouped));
     }).catch(() => {});
+
+    if (user?.id) {
+      getMyStories(user.id).then(apiMyStories => {
+        if (apiMyStories && apiMyStories.length > 0) {
+          setMyStories(apiMyStories.map((s: any) => ({
+            id: s.id,
+            type: s.type,
+            content: s.content,
+            time: s.created_at ? new Date(s.created_at).toLocaleString() : '',
+          })));
+        }
+      }).catch(() => {});
+    }
   }, []);
 
   const [userStates, setUserStates] = useState<UserState[]>([]);
@@ -97,13 +105,18 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
   const [storyProgress, setStoryProgress] = useState<number>(0);
   const [storyReplyText, setStoryReplyText] = useState<string>("");
 
+  // Viewers data for my stories
+  const [viewersData, setViewersData] = useState<{ viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null>(null);
+  const [showViewersSheet, setShowViewersSheet] = useState(false);
+  const [myCurrentReaction, setMyCurrentReaction] = useState<string | null>(null);
+
   // Editor states (Text creator)
   const [newTextContent, setNewTextContent] = useState<string>("");
   const [selectedGradientIdx, setSelectedGradientIdx] = useState<number>(0);
 
   // Editor states (Image creator)
   const [newImageCaption, setNewImageCaption] = useState<string>("");
-  const [selectedImageUrl, setSelectedImageUrl] = useState<string>(PHOTO_SAMPLES[0].url);
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string>("");
 
   // Auto-advance logic for story viewer
   useEffect(() => {
@@ -130,11 +143,26 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
     return () => clearInterval(interval);
   }, [activeUserStates, activeStoryIdx]);
 
+  // Register view + load reactions when story opens, and load viewers for owner stories
+  useEffect(() => {
+    if (!activeUserStates || activeUserStates.stories.length === 0) return;
+    const currentStory = activeUserStates.stories[activeStoryIdx];
+    if (activeUserStates.isMe) {
+      getStoryViewers(currentStory.id).then(setViewersData).catch(() => {});
+    } else {
+      registerStoryView(currentStory.id).catch(() => {});
+    }
+    setMyCurrentReaction(null);
+  }, [activeUserStates?.id, activeStoryIdx]);
+
   // Open story viewer
   const handleOpenStoryViewer = (userState: UserState) => {
     setActiveUserStates(userState);
     setActiveStoryIdx(0);
     setStoryProgress(0);
+    setMyCurrentReaction(null);
+    setViewersData(null);
+    setShowViewersSheet(false);
 
     // Mark as seen
     if (!userState.isMe) {
@@ -235,6 +263,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
+        setSelectedImageUrl(event.target.result as string);
         setUploadedMedia({
           url: event.target.result as string,
           type: fileType,
@@ -297,7 +326,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
   const myUserStateRepresentation: UserState = {
     id: "me_state",
     userName: "Mi Estado (Nelson)",
-    userAvatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
+    userAvatar: profile?.avatar || profile?.avatar_url || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
     stories: myStories,
     hasUnseen: false,
     isMe: true
@@ -323,19 +352,20 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
       <div className="flex-1 overflow-y-auto p-3 space-y-4 text-left">
         
         {/* ======================================= */}
+        {/* Hidden native file input for states (always in DOM) */}
+        <input
+          id="state-media-upload-input"
+          type="file"
+          accept="image/*,video/*"
+          onChange={handleFileUploaded}
+          className="hidden"
+        />
+
+        {/* ======================================= */}
         {/* SUBVIEW 1: LIST OF STATES AND STORY ACTIONS */}
         {/* ======================================= */}
         {subView === "list" && (
           <div className="space-y-4 animate-fade-in">
-            
-            {/* Hidden native file input for states */}
-            <input
-              id="state-media-upload-input"
-              type="file"
-              accept="image/*,video/*"
-              onChange={handleFileUploaded}
-              className="hidden"
-            />
 
             {/* Creation Buttons Quick Row */}
             <div className="grid grid-cols-3 gap-1.5 bg-white p-2 rounded-2xl border border-slate-100 shadow-sm">
@@ -572,39 +602,18 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
             {/* Interactive Image Choice */}
             <div className="space-y-2">
               <span className="text-[8px] font-bold uppercase text-slate-400 block tracking-wider">
-                1. Selecciona una Imagen Profesional
+                1. Selecciona tu Foto o Video
               </span>
-              <div className="grid grid-cols-4 gap-2">
-                {PHOTO_SAMPLES.map((p, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setSelectedImageUrl(p.url)}
-                    className={`aspect-square rounded-xl overflow-hidden border-2 relative hover:scale-105 transition-all cursor-pointer ${
-                      selectedImageUrl === p.url ? "border-teal-400" : "border-transparent opacity-75"
-                    }`}
-                  >
-                    <img src={p.url} alt="Option" className="w-full h-full object-cover" />
-                    <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[6px] font-bold py-0.5 text-center truncate">
-                      {p.tag}
-                    </span>
-                  </button>
-                ))}
-              </div>
-
-              {/* Upload own photo/video link option */}
-              <div className="flex justify-center pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const el = document.getElementById("state-media-upload-input");
-                    if (el) el.click();
-                  }}
-                  className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-[#0a4d52] font-black text-[8px] px-3 py-1.5 rounded-lg transition-all cursor-pointer border border-slate-200/50"
-                >
-                  <Upload className="w-3.5 h-3.5 text-teal-600 animate-bounce" /> O subir tu propio archivo (Foto/Video)
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const el = document.getElementById("state-media-upload-input");
+                  if (el) el.click();
+                }}
+                className="w-full flex items-center justify-center gap-2 bg-teal-50 hover:bg-teal-100 text-teal-700 font-black text-[11px] px-4 py-4 rounded-xl transition-all cursor-pointer border-2 border-teal-200 border-dashed"
+              >
+                <Upload className="w-5 h-5 text-teal-500" /> Subir tu propio archivo (Foto/Video)
+              </button>
             </div>
 
             {/* Live Interactive editor image canvas */}
@@ -613,35 +622,38 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                 2. Vista Previa & Leyenda
               </span>
 
-              <div className="aspect-[9/16] max-h-[300px] w-full rounded-2xl relative overflow-hidden shadow-lg border border-slate-100 flex flex-col justify-between p-4 bg-slate-900 text-white">
+              <div className="aspect-[9/16] max-h-[300px] w-full rounded-2xl relative overflow-hidden shadow-lg border border-slate-100 bg-black">
                 <img
                   src={selectedImageUrl}
                   alt="Background"
-                  className="absolute inset-0 w-full h-full object-cover opacity-90"
+                  className="absolute inset-0 w-full h-full object-cover"
                 />
                 
-                {/* Overlay shadow */}
-                <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-transparent to-black/80 z-0"></div>
+                {/* Gradient inferior para legibilidad */}
+                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/30 to-transparent z-0"></div>
 
-                <div className="flex justify-between items-center z-10">
-                  <span className="text-[7px] font-bold tracking-widest uppercase bg-black/40 border border-white/15 px-2 py-0.5 rounded-full">
-                    Vista de Foto Red On
+                {/* Zona superior (solo el badge) */}
+                <div className="absolute top-3 left-3 z-10">
+                  <span className="text-[7px] font-bold tracking-widest uppercase bg-black/50 backdrop-blur-sm border border-white/15 px-2 py-1 rounded-full text-white/80">
+                    Vista Previa
                   </span>
                 </div>
 
-                {/* Caption editor overlay */}
-                <div className="z-10 bg-black/60 backdrop-blur-sm border border-white/10 rounded-xl p-2">
-                  <input
-                    type="text"
-                    required
-                    placeholder="Escribe una leyenda para tu foto..."
-                    value={newImageCaption}
-                    onChange={(e) => setNewImageCaption(e.target.value)}
-                    maxLength={70}
-                    className="w-full bg-transparent border-none text-white text-[9.5px] font-bold text-center placeholder-slate-300 outline-none focus:ring-0"
-                  />
-                  <div className="text-[6.5px] text-right text-slate-300 mt-1 font-mono">
-                    {newImageCaption.length} / 70 max
+                {/* Caja de leyenda en la parte inferior */}
+                <div className="absolute bottom-0 inset-x-0 z-10 p-3">
+                  <div className="bg-black/50 backdrop-blur-xl border border-white/10 rounded-xl p-3">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Escribe una leyenda..."
+                      value={newImageCaption}
+                      onChange={(e) => setNewImageCaption(e.target.value)}
+                      maxLength={70}
+                      className="w-full bg-transparent border-none text-white text-[11px] font-bold text-center placeholder-white/50 outline-none focus:ring-0"
+                    />
+                    <div className="text-[7px] text-right text-white/50 mt-1 font-mono">
+                      {newImageCaption.length} / 70
+                    </div>
                   </div>
                 </div>
               </div>
@@ -775,35 +787,120 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
             )}
           </div>
 
-          {/* BOTTOM REPLY BAR (FOR PRIVATE CHAT) - Hidden if it is ME */}
+          {/* BOTTOM BAR: PRIVATE REPLY + REACTIONS (non-owner) or VIEWS COUNT (owner) */}
           {!activeUserStates.isMe ? (
-            <form 
-              onSubmit={handleSendReply}
-              className="p-3 bg-black/85 border-t border-white/10 z-20 flex gap-2 items-center"
-            >
-              <input
-                type="text"
-                required
-                placeholder="Responder al estado de manera privada..."
-                value={storyReplyText}
-                onChange={(e) => setStoryReplyText(e.target.value)}
-                className="flex-1 bg-white/10 text-white placeholder-slate-400 text-[10px] px-3.5 py-2.5 rounded-xl border border-white/10 outline-none focus:border-teal-400"
-              />
-              <button
-                type="submit"
-                className="w-9 h-9 bg-teal-400 hover:bg-teal-500 text-white rounded-xl flex items-center justify-center shrink-0 transition-all cursor-pointer"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </form>
+            <div className="p-3 bg-black/85 border-t border-white/10 z-20 flex flex-col gap-2">
+              {/* Reaction row */}
+              <div className="flex items-center justify-center gap-2">
+                {["❤️", "😂", "😮", "🔥", "👍"].map(emoji => (
+                  <button
+                    key={emoji}
+                    onClick={() => {
+                      toggleStoryReaction(activeUserStates.stories[activeStoryIdx].id, emoji).then((res) => {
+                        setMyCurrentReaction(res.reacted ? emoji : null);
+                      }).catch(() => {});
+                    }}
+                    className={`text-lg w-8 h-8 flex items-center justify-center rounded-full transition-all cursor-pointer ${
+                      myCurrentReaction === emoji ? "bg-teal-500/30 scale-110 ring-1 ring-teal-400" : "hover:bg-white/10"
+                    }`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+              {/* Reply form */}
+              <form onSubmit={handleSendReply} className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  required
+                  placeholder="Responder al estado de manera privada..."
+                  value={storyReplyText}
+                  onChange={(e) => setStoryReplyText(e.target.value)}
+                  className="flex-1 bg-white/10 text-white placeholder-slate-400 text-[10px] px-3.5 py-2.5 rounded-xl border border-white/10 outline-none focus:border-teal-400"
+                />
+                <button
+                  type="submit"
+                  className="w-9 h-9 bg-teal-400 hover:bg-teal-500 text-white rounded-xl flex items-center justify-center shrink-0 transition-all cursor-pointer"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+            </div>
           ) : (
-            /* Views Count indicator on ME states */
-            <div className="p-3.5 bg-black/85 border-t border-white/10 z-20 flex items-center justify-center gap-1.5 font-mono text-[9px] text-slate-300">
+            /* Views Count indicator on ME states - clickable to open viewers sheet */
+            <div
+              onClick={() => setShowViewersSheet(true)}
+              className="p-3.5 bg-black/85 border-t border-white/10 z-20 flex items-center justify-center gap-1.5 font-mono text-[9px] text-slate-300 cursor-pointer hover:bg-black/70 transition-colors"
+            >
               <Eye className="w-3.5 h-3.5 text-teal-400" />
-              <span>0 visualizaciones (Estado publicado recientemente)</span>
+              <span>{viewersData?.total ?? 0} visualización{(viewersData?.total ?? 0) !== 1 ? "es" : ""}</span>
+              {(viewersData?.total ?? 0) > 0 && (
+                <ChevronLeft className="w-3 h-3 text-slate-500 rotate-180" />
+              )}
             </div>
           )}
 
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* VIEWERS BOTTOM SHEET (for OWNER stories)                */}
+      {/* ========================================================= */}
+      {showViewersSheet && viewersData && (
+        <div className="absolute inset-0 bg-black/60 z-[60] flex flex-col justify-end animate-fade-in" onClick={() => setShowViewersSheet(false)}>
+          <div
+            className="bg-slate-900 border-t border-slate-700/50 rounded-t-2xl max-h-[70%] flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/80 shrink-0">
+              <h3 className="text-white text-xs font-black tracking-tight">
+                Visualizaciones ({viewersData.total})
+              </h3>
+              <button
+                onClick={() => setShowViewersSheet(false)}
+                className="p-1 rounded-full hover:bg-slate-800 text-slate-400 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* List */}
+            <div className="flex-1 overflow-y-auto">
+              {viewersData.viewers.length === 0 ? (
+                <div className="p-6 text-center text-slate-500 text-[10px] font-mono">
+                  Nadie ha visto este estado aún
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-800/50">
+                  {viewersData.viewers.map(v => (
+                    <div key={v.viewer_id} className="flex items-center gap-3 px-4 py-2.5">
+                      <img
+                        src={v.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80"}
+                        alt={v.name}
+                        className="w-7 h-7 rounded-full object-cover border border-slate-700"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-[10px] font-bold leading-tight truncate">
+                          {v.name}
+                        </p>
+                        <p className="text-[7.5px] text-slate-500 font-mono mt-0.5">
+                          {new Date(v.viewed_at).toLocaleString()}
+                        </p>
+                      </div>
+                      {v.reactions.length > 0 && (
+                        <div className="flex gap-0.5 shrink-0">
+                          {v.reactions.map((r, i) => (
+                            <span key={i} className="text-sm">{r}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

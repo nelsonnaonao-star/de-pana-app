@@ -1,6 +1,7 @@
 package com.redon.app;
 
 import android.app.ActivityManager;
+import androidx.core.app.RemoteInput;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -21,6 +22,7 @@ public class CallFcmService extends FirebaseMessagingService {
     private static final String TAG = "CallFcmService";
     private static final String CHANNEL_CALLS = "redon-calls";
     private static final String CHANNEL_MESSAGES = "redon-messages";
+    private static final String REPLY_ACTION = "com.redon.app.REPLY_MESSAGE";
 
     @Override
     public void onNewToken(String token) {
@@ -53,9 +55,9 @@ public class CallFcmService extends FirebaseMessagingService {
                 showForegroundMessageNotification(message);
             }
         } else {
-            // App is in background: show native notification OR full-screen activity
+            // App is in background: show native notification with full-screen intent
             if ("call".equals(type)) {
-                showIncomingCallActivity(message);
+                showCallNotification(message);
             } else {
                 showMessageNotification(message);
             }
@@ -215,6 +217,26 @@ public class CallFcmService extends FirebaseMessagingService {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
+        // Quick Reply action
+        Intent replyIntent = new Intent(this, ReplyReceiver.class);
+        replyIntent.setAction(REPLY_ACTION);
+        replyIntent.putExtra("chatId", chatId);
+        replyIntent.putExtra("contactId", contactId);
+        int replyFlags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE;
+        PendingIntent replyPendingIntent = PendingIntent.getBroadcast(
+            this, notificationId, replyIntent,
+            replyFlags
+        );
+        RemoteInput remoteInput = new RemoteInput.Builder("reply_text")
+            .setLabel("Escribe tu respuesta...")
+            .build();
+
+        NotificationCompat.Action replyAction = new NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_send, "Responder", replyPendingIntent)
+            .addRemoteInput(remoteInput)
+            .setAllowGeneratedReplies(true)
+            .build();
+
         Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/notificacion");
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_MESSAGES)
@@ -226,6 +248,7 @@ public class CallFcmService extends FirebaseMessagingService {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
+            .addAction(replyAction)
             .setSound(soundUri)
             .setVibrate(new long[]{0, 300, 200, 300})
             .setDefaults(NotificationCompat.DEFAULT_VIBRATE | NotificationCompat.DEFAULT_LIGHTS)

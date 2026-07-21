@@ -40,6 +40,20 @@ export async function deleteStory(id: string) {
   return del(`${API}/stories/${id}`);
 }
 
+// ─── Story Views & Reactions ───────────────────────────────────────
+
+export async function registerStoryView(storyId: string) {
+  return post<any>(`${API}/stories/${storyId}/view`, {});
+}
+
+export async function getStoryViewers(storyId: string) {
+  return get<{ viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number }>(`${API}/stories/${storyId}/viewers`);
+}
+
+export async function toggleStoryReaction(storyId: string, reaction: string) {
+  return post<{ reacted: boolean; reaction?: string }>(`${API}/stories/${storyId}/react`, { reaction });
+}
+
 // ─── Channels ──────────────────────────────────────────────────────
 
 export async function getChannels() {

@@ -1,25 +1,40 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Message } from "../types";
 import { sendMessage as apiSendMessage } from "../services/messages";
+import { getItem, setItem } from "../services/storageService";
 
 const STORAGE_KEY = "redon_pending_messages";
 
-function loadQueue(): Message[] {
+async function loadQueue(): Promise<Message[]> {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return await getItem<Message[]>(STORAGE_KEY) || [];
   } catch {
     return [];
   }
 }
 
 function saveQueue(queue: Message[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
+  setItem(STORAGE_KEY, queue);
 }
 
-export function useOfflineQueue(chatId: string, uid?: string, onMessageSent?: (tempId: string, savedId: string) => void) {
+export function useOfflineQueue(
+  chatId: string,
+  uid?: string,
+  onMessageSent?: (tempId: string, savedId: string) => void,
+  onMessageSending?: (tempId: string) => void
+) {
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
-  const [pendingMessages, setPendingMessages] = useState<Message[]>(loadQueue);
+  const [pendingMessages, setPendingMessages] = useState<Message[]>([]);
+  const queueLoadedRef = useRef(false);
   const retryingRef = useRef(false);
+
+  // Load queue from IndexedDB on mount
+  useEffect(() => {
+    loadQueue().then(q => {
+      setPendingMessages(q);
+      queueLoadedRef.current = true;
+    });
+  }, []);
 
   // Listen for online/offline events
   useEffect(() => {
@@ -33,9 +48,11 @@ export function useOfflineQueue(chatId: string, uid?: string, onMessageSent?: (t
     };
   }, []);
 
-  // Persist queue changes
+  // Persist queue changes (fire-and-forget)
   useEffect(() => {
-    saveQueue(pendingMessages);
+    if (queueLoadedRef.current) {
+      saveQueue(pendingMessages);
+    }
   }, [pendingMessages]);
 
   // Retry queue when coming back online
@@ -48,6 +65,7 @@ export function useOfflineQueue(chatId: string, uid?: string, onMessageSent?: (t
       const remaining: Message[] = [];
 
       for (const msg of queue) {
+        onMessageSending?.(msg.id);
         try {
           const saved = await apiSendMessage({
             chat_id: chatId,
