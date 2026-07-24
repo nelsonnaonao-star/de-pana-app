@@ -13,27 +13,8 @@ interface RateItem {
   date: string;
 }
 
-const FALLBACK_RATES: RateItem[] = [
-  {
-    id: "usd_bcv",
-    name: "Dólar BCV",
-    symbol: "$",
-    value: 721.35,
-    source: "Banco Central de Venezuela",
-    date: "Cargando...",
-  },
-  {
-    id: "eur_bcv",
-    name: "Euro BCV",
-    symbol: "€",
-    value: 823.94,
-    source: "Banco Central de Venezuela",
-    date: "Cargando...",
-  },
-];
-
 export default function RatesPanel() {
-  const [rates, setRates] = useState<RateItem[]>(FALLBACK_RATES);
+  const [rates, setRates] = useState<RateItem[]>([]);
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [timeAgo, setTimeAgo] = useState<string>("");
@@ -61,102 +42,58 @@ export default function RatesPanel() {
 
   async function fetchRates() {
     setLoading(true);
-
-    // Source 1: Server (has DB cache + multi-source fallback)
-    async function tryServer(): Promise<RateItem[]> {
-      const serverUrl = import.meta.env.VITE_SERVER_URL;
-      if (!serverUrl) throw new Error("No server URL");
-      const res = await fetch(`${serverUrl}/api/rates/dollar`, {
-        cache: "no-cache",
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) throw new Error(`Server ${res.status}`);
-      const data = await res.json();
-      const rates: RateItem[] = [];
-      if (data.usd?.value) {
-        rates.push({
-          id: "usd_bcv", name: data.usd.name || "Dólar BCV", symbol: "$",
-          value: data.usd.value, source: data.usd.source || "BCV",
-          date: data.usd.time || data.updatedAt || "",
-        });
-      }
-      if (data.eur?.value) {
-        rates.push({
-          id: "eur_bcv", name: data.eur.name || "Euro BCV", symbol: "€",
-          value: data.eur.value, source: data.eur.source || "BCV",
-          date: data.eur.time || data.updatedAt || "",
-        });
-      }
-      if (rates.length === 0) throw new Error("No rates from server");
-      return rates;
-    }
-
-    // Source 2: ve.dolarapi.com (direct, no server needed)
-    async function tryDirectApi(): Promise<RateItem[]> {
-      const [usdRes, eurRes] = await Promise.all([
-        fetch("https://ve.dolarapi.com/v1/dolares/oficial", { signal: AbortSignal.timeout(8000) }),
-        fetch("https://ve.dolarapi.com/v1/euros/oficial", { signal: AbortSignal.timeout(8000) }),
-      ]);
-      if (!usdRes.ok) throw new Error(`dolarapi ${usdRes.status}`);
-      const usdData = await usdRes.json();
-      const eurData = eurRes.ok ? await eurRes.json() : null;
-      const rates: RateItem[] = [];
-      if (usdData.promedio) {
-        rates.push({
-          id: "usd_bcv", name: "Dólar BCV", symbol: "$",
-          value: usdData.promedio, source: "Banco Central de Venezuela",
-          date: usdData.fechaActualizacion || "",
-        });
-      }
-      if (eurData?.promedio) {
-        rates.push({
-          id: "eur_bcv", name: "Euro BCV", symbol: "€",
-          value: eurData.promedio, source: "Banco Central de Venezuela",
-          date: eurData.fechaActualizacion || "",
-        });
-      }
-      if (rates.length === 0) throw new Error("No rates from dolarapi");
-      return rates;
-    }
-
-    // Source 3: bcv.today (last resort)
-    async function tryBcvToday(): Promise<RateItem[]> {
-      const res = await fetch("https://bcv.today/api/v1/rate.json", {
-        cache: "no-cache", signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) throw new Error(`bcv.today ${res.status}`);
-      const data = await res.json();
-      const rates: RateItem[] = [];
-      if (data.USD) {
-        rates.push({
-          id: "usd_bcv", name: "Dólar BCV", symbol: "$",
-          value: data.USD, source: "Banco Central de Venezuela",
-          date: data.effective_date || "",
-        });
-      }
-      if (data.EUR) {
-        rates.push({
-          id: "eur_bcv", name: "Euro BCV", symbol: "€",
-          value: data.EUR, source: "Banco Central de Venezuela",
-          date: data.effective_date || "",
-        });
-      }
-      if (rates.length === 0) throw new Error("No rates from bcv.today");
-      return rates;
-    }
-
     try {
-      let newRates: RateItem[] = [];
-      try { newRates = await tryServer(); } catch {
-        try { newRates = await tryDirectApi(); } catch {
-          try { newRates = await tryBcvToday(); } catch (e) {
-            console.warn("All rate sources failed:", e);
-          }
-        }
+      const res = await fetch(
+        "https://tasa-bcv-api-production.up.railway.app/v1/rates/latest",
+        { signal: AbortSignal.timeout(10000) }
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const items: RateItem[] = [];
+      if (json?.usd) {
+        items.push({
+          id: "usd_bcv",
+          name: "Dólar BCV",
+          symbol: "$",
+          value: json.usd,
+          source: "Banco Central de Venezuela",
+          date: json.updatedAt || json.date || "",
+        });
       }
-      if (newRates.length > 0) {
-        setRates(newRates);
-        setLastUpdated(new Date().toISOString());
+      if (json?.eur) {
+        items.push({
+          id: "eur_bcv",
+          name: "Euro BCV",
+          symbol: "€",
+          value: json.eur,
+          source: "Banco Central de Venezuela",
+          date: json.updatedAt || json.date || "",
+        });
+      }
+      if (items.length === 0) throw new Error("No rates in response");
+      setRates(items);
+      setLastUpdated(new Date().toISOString());
+    } catch (e) {
+      console.warn("[RatesPanel] fetch failed, usando fallback:", e);
+      if (rates.length === 0) {
+        setRates([
+          {
+            id: "usd_bcv",
+            name: "Dólar BCV",
+            symbol: "$",
+            value: 742.22,
+            source: "Banco Central de Venezuela",
+            date: "",
+          },
+          {
+            id: "eur_bcv",
+            name: "Euro BCV",
+            symbol: "€",
+            value: 845.50,
+            source: "Banco Central de Venezuela",
+            date: "",
+          },
+        ]);
       }
     } finally {
       setLoading(false);
@@ -166,7 +103,7 @@ export default function RatesPanel() {
   useEffect(() => {
     fetchRates();
 
-    const interval = setInterval(fetchRates, 30 * 60 * 1000);
+    const interval = setInterval(fetchRates, 60 * 1000);
 
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
@@ -219,14 +156,14 @@ export default function RatesPanel() {
         </div>
         <div className="flex items-center justify-between mt-1">
           <p className="text-[7px] text-teal-100/70 font-mono">
-            Fuente: Banco Central de Venezuela — {rateDate}
+            Fuente: Banco Central de Venezuela — {rateDate || "Cargando..."}
           </p>
           {lastUpdated && (
             <div className="flex items-center gap-1">
               <span className={`w-1.5 h-1.5 rounded-full ${
-                Date.now() - new Date(lastUpdated).getTime() < 30 * 60000
+                Date.now() - new Date(lastUpdated).getTime() < 2 * 60000
                   ? "bg-emerald-400 animate-pulse"
-                  : Date.now() - new Date(lastUpdated).getTime() < 60 * 60000
+                  : Date.now() - new Date(lastUpdated).getTime() < 5 * 60000
                     ? "bg-amber-400"
                     : "bg-red-400"
               }`} />
@@ -240,6 +177,14 @@ export default function RatesPanel() {
 
       {/* BODY */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 text-left">
+
+        {rates.length === 0 ? (
+          <div className="flex flex-col items-center justify-center gap-3 h-full text-slate-400">
+            <div className="w-8 h-8 border-2 border-teal-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-[8px] font-mono font-semibold">Cargando tasas...</p>
+          </div>
+        ) : (
+          <>
 
         {/* RATE SELECTOR */}
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-3 space-y-2 border border-white/60">
@@ -366,6 +311,8 @@ export default function RatesPanel() {
           </p>
         </div>
 
+          </>
+        )}
       </div>
     </div>
   );

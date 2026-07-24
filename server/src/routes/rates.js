@@ -4,46 +4,8 @@ import { supabaseAdmin } from '../db.js';
 const router = Router();
 
 let memoryCache = { data: null, timestamp: 0 };
-const MEMORY_TTL = 5 * 60 * 1000;
-const DB_TTL = 30 * 60 * 1000;
-
-async function fetchFromVeDolarApi() {
-  const [usdRes, eurRes] = await Promise.all([
-    fetch('https://ve.dolarapi.com/v1/dolares/oficial', {
-      signal: AbortSignal.timeout(10000),
-    }),
-    fetch('https://ve.dolarapi.com/v1/euros/oficial', {
-      signal: AbortSignal.timeout(10000),
-    }),
-  ]);
-
-  if (!usdRes.ok) throw new Error(`ve.dolarapi USD HTTP ${usdRes.status}`);
-
-  const usdData = await usdRes.json();
-  const eurData = eurRes.ok ? await eurRes.json() : null;
-
-  const usd = usdData.promedio || usdData.precio;
-  if (!usd) throw new Error('No USD rate in ve.dolarapi response');
-
-  return {
-    usd: {
-      name: 'Dólar BCV',
-      symbol: '$',
-      value: usd,
-      source: 'Banco Central de Venezuela',
-      time: usdData.fechaActualizacion || new Date().toISOString(),
-    },
-    eur: eurData ? {
-      name: 'Euro BCV',
-      symbol: '€',
-      value: eurData.promedio || eurData.precio,
-      source: 'Banco Central de Venezuela',
-      time: eurData.fechaActualizacion || new Date().toISOString(),
-    } : null,
-    dataSource: 've.dolarapi.com',
-    updatedAt: new Date().toISOString(),
-  };
-}
+const MEMORY_TTL = 30 * 1000;
+const DB_TTL = 2 * 60 * 1000;
 
 async function fetchBcvToday() {
   const res = await fetch('https://bcv.today/api/v1/rate.json', {
@@ -122,7 +84,6 @@ async function scrapeBCV() {
 
 async function fetchFreshRates() {
   const sources = [
-    { fn: fetchFromVeDolarApi, name: 've.dolarapi' },
     { fn: fetchBcvToday, name: 'bcv.today' },
     { fn: scrapeBCV, name: 'bcv.org.ve' },
   ];

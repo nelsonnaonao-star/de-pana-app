@@ -43,8 +43,8 @@ public class CallFcmService extends FirebaseMessagingService {
         String type = message.getData().get("type");
 
         if (isAppInForeground()) {
+            // App is visible: bridge to JS only — native notification would duplicate the in-app CallOverlay
             if ("call".equals(type)) {
-                showCallNotification(message);
                 try {
                     PushNotificationsPlugin.sendRemoteMessage(message);
                     Log.d(TAG, "Bridged to Capacitor JS via PushNotificationsPlugin.onMessageReceived");

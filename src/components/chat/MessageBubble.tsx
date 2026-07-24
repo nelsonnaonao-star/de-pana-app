@@ -231,7 +231,7 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
 }
 
 function isEmoji(str: string): boolean {
-  return /^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)+$/u.test(str.trim());
+  return /^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\uFE0F\u200D\u20E3#*0-9]+$/u.test(str.trim());
 }
 
 function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReactionMenu, handleForwardMessage, handleAddReaction, handleReplyMessage }: {
@@ -366,6 +366,7 @@ export default React.memo(function MessageBubble({
   const { saving, save } = useSaveMedia();
   const [showPriceInput, setShowPriceInput] = useState(false);
   const [priceValue, setPriceValue] = useState("");
+  const isTextOnlyEmoji = msg.type === "text" && msg.text && isEmoji(msg.text);
 
   const isMediaType = msg.type === "sticker" || msg.type === "image" || msg.type === "video";
   if (isMediaType) {
@@ -496,6 +497,69 @@ export default React.memo(function MessageBubble({
                 </div>
               </>
             )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (isTextOnlyEmoji) {
+    return (
+      <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
+        <div className={`flex flex-col ${isMe ? "items-end" : "items-start"} gap-0.5`}>
+          <span className="text-7xl leading-none select-none px-1">{msg.text}</span>
+          <div className={`flex items-center gap-1 px-2 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
+            {msg.edited && <span className="italic opacity-60">editado</span>}
+            <span>{msg.timestamp}</span>
+            {isMe && (
+              <span className={`text-[10px] leading-none ${msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"}`}>
+                {msg.status === "sending" && "🕒"}
+                {msg.status === "sent" && "✓"}
+                {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
+                {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
+                {!msg.status && "✓"}
+              </span>
+            )}
+          </div>
+        </div>
+        {msg.reactions && Object.keys(msg.reactions).length > 0 && (
+          <div className={`flex gap-1 mt-[-6px] z-10 ${isMe ? "mr-2" : "ml-2"}`}>
+            {Object.entries(msg.reactions).map(([emo, count]) => (
+              <span key={emo} className="bg-white px-1.5 py-0.5 rounded-full text-[9px] border border-slate-100 shadow-sm flex items-center gap-0.5 font-bold text-slate-600">
+                {emo} <span className="text-[8px] text-slate-400">{count}</span>
+              </span>
+            ))}
+          </div>
+        )}
+        {activeReactionMenu === msg.id && (
+          <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden -top-8 ${isMe ? "right-2" : "left-2"}`}>
+            <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
+              {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
+                <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 transition-transform p-1">{emo}</button>
+              ))}
+            </div>
+            <div className="py-1">
+              <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                ↩️ Responder
+              </button>
+              <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                ↪️ Reenviar
+              </button>
+              {isMe && msg.type === "text" && (
+                <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                  ✏️ Editar
+                </button>
+              )}
+              <div className="border-t border-slate-100 my-1"></div>
+              <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+                🗑️ Eliminar para mí
+              </button>
+              {isMe && (
+                <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+                  🗑️ Eliminar para todos
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -2,12 +2,13 @@ import React, { useState, useEffect } from "react";
 import { 
   Plus, Play, Camera, ChevronLeft, Send, X, Flame, Sparkles, 
   Smile, Layout, Check, Heart, MessageCircle, Clock, Eye, Trash2,
-  Video, Upload, Award
+  Video, Upload, Award, Info
 } from "lucide-react";
 import { Chat, Message } from "../types";
 import MediaEditor from "./MediaEditor";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMyStories, getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
+import toast from "react-hot-toast";
+import { getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
 
 export interface Story {
   id: string;
@@ -45,47 +46,57 @@ const GRADIENTS = [
 
 
 export default function StatesPanel({ onStartChat }: StatesPanelProps) {
-  const { user, profile } = useSupabase();
+  const { user, profile, contacts } = useSupabase();
 
-  // Load stories from API on mount
+  // Load stories from API on mount (contacts + own, last 24h)
   useEffect(() => {
-    getAllStories().then(apiStories => {
-      if (!apiStories || apiStories.length === 0) return;
-      const grouped: Record<string, any> = {};
-      for (const s of apiStories) {
-        const uid = s.user_id;
-        if (!grouped[uid]) {
-          grouped[uid] = {
-            id: uid + '_state',
-            userName: s.profiles?.name || 'Usuario',
-            userAvatar: s.profiles?.avatar_url || '',
-            hasUnseen: true,
-            stories: [],
-          };
-        }
-        grouped[uid].stories.push({
-          id: s.id,
-          type: s.type,
-          content: s.content,
-          time: s.created_at ? new Date(s.created_at).toLocaleString() : '',
-        });
-      }
-      setUserStates(Object.values(grouped));
-    }).catch(() => {});
+    if (!user?.id) return;
 
-    if (user?.id) {
-      getMyStories(user.id).then(apiMyStories => {
-        if (apiMyStories && apiMyStories.length > 0) {
-          setMyStories(apiMyStories.map((s: any) => ({
+    getAllStories().then(apiStories => {
+      if (!apiStories || apiStories.length === 0) {
+        setUserStates([]);
+        setMyStories([]);
+        return;
+      }
+
+      const myList: Story[] = [];
+      const grouped: Record<string, any> = {};
+
+      for (const s of apiStories) {
+        if (s.user_id === user.id) {
+          myList.push({
             id: s.id,
             type: s.type,
             content: s.content,
+            caption: s.caption || undefined,
+            background: s.background || undefined,
             time: s.created_at ? new Date(s.created_at).toLocaleString() : '',
-          })));
+          });
+        } else {
+          if (!grouped[s.user_id]) {
+            grouped[s.user_id] = {
+              id: s.user_id + '_state',
+              userName: s.profiles?.name || 'Usuario',
+              userAvatar: s.profiles?.avatar_url || '',
+              hasUnseen: true,
+              stories: [],
+            };
+          }
+          grouped[s.user_id].stories.push({
+            id: s.id,
+            type: s.type,
+            content: s.content,
+            caption: s.caption || undefined,
+            background: s.background || undefined,
+            time: s.created_at ? new Date(s.created_at).toLocaleString() : '',
+          });
         }
-      }).catch(() => {});
-    }
-  }, []);
+      }
+
+      setMyStories(myList);
+      setUserStates(Object.values(grouped));
+    }).catch(() => {});
+  }, [user?.id]);
 
   const [userStates, setUserStates] = useState<UserState[]>([]);
 
@@ -98,12 +109,16 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
   const [uploadedMedia, setUploadedMedia] = useState<{ url: string; type: "image" | "video"; name: string } | null>(null);
   const [showPublishDecisionModal, setShowPublishDecisionModal] = useState<boolean>(false);
   const [isEditingProState, setIsEditingProState] = useState<boolean>(false);
+  const [publishStep, setPublishStep] = useState<"choice" | "comment">("choice");
+  const [publishComment, setPublishComment] = useState<string>("");
 
   // State of Active Story Viewer
   const [activeUserStates, setActiveUserStates] = useState<UserState | null>(null);
   const [activeStoryIdx, setActiveStoryIdx] = useState<number>(0);
   const [storyProgress, setStoryProgress] = useState<number>(0);
   const [storyReplyText, setStoryReplyText] = useState<string>("");
+
+  const [isImageLoaded, setIsImageLoaded] = useState(false);
 
   // Viewers data for my stories
   const [viewersData, setViewersData] = useState<{ viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null>(null);
@@ -147,16 +162,32 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
   useEffect(() => {
     if (!activeUserStates || activeUserStates.stories.length === 0) return;
     const currentStory = activeUserStates.stories[activeStoryIdx];
+    setIsImageLoaded(false);
     if (activeUserStates.isMe) {
       getStoryViewers(currentStory.id).then(setViewersData).catch(() => {});
     } else {
       registerStoryView(currentStory.id).catch(() => {});
     }
     setMyCurrentReaction(null);
+
+    // Prefetch next story image
+    const nextIdx = activeStoryIdx + 1;
+    if (nextIdx < activeUserStates.stories.length) {
+      const nextStory = activeUserStates.stories[nextIdx];
+      if (nextStory.type === "image" || nextStory.type === "video") {
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.href = nextStory.content;
+        link.as = nextStory.type === "video" ? "video" : "image";
+        document.head.appendChild(link);
+        setTimeout(() => document.head.removeChild(link), 5000);
+      }
+    }
   }, [activeUserStates?.id, activeStoryIdx]);
 
   // Open story viewer
   const handleOpenStoryViewer = (userState: UserState) => {
+    if (!userState.stories || userState.stories.length === 0) return;
     setActiveUserStates(userState);
     setActiveStoryIdx(0);
     setStoryProgress(0);
@@ -278,12 +309,18 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
 
   const handlePublishOriginal = () => {
     if (!uploadedMedia) return;
+    setPublishStep("comment");
+    setPublishComment("");
+  };
+
+  const handlePublishNow = () => {
+    if (!uploadedMedia) return;
 
     const newStory: Story = {
       id: "my_upload_" + Date.now(),
       type: uploadedMedia.type,
       content: uploadedMedia.url,
-      caption: `Publicado original: ${uploadedMedia.name}`,
+      caption: publishComment.trim() || `Publicado original: ${uploadedMedia.name}`,
       time: "Ahora mismo"
     };
 
@@ -291,6 +328,8 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
     saveStoryToApi(newStory);
     setUploadedMedia(null);
     setShowPublishDecisionModal(false);
+    setPublishStep("choice");
+    setPublishComment("");
     setSubView("list");
   };
 
@@ -377,11 +416,14 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                 Texto
               </button>
               <button
-                onClick={() => setSubView("create_image")}
+                onClick={() => {
+                  const el = document.getElementById("state-media-upload-input");
+                  if (el) el.click();
+                }}
                 className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-[#0a4d52] font-extrabold text-[9px] rounded-xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer"
               >
-                <Camera className="w-4 h-4 text-indigo-600" />
-                Catálogo Foto
+                <Upload className="w-4 h-4 text-indigo-600" />
+                Cargar Foto
               </button>
               <button
                 onClick={() => {
@@ -396,125 +438,61 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
               </button>
             </div>
 
-            {/* MY PERSONAL STORIES LIST */}
-            <div className="space-y-2">
-              <h4 className="text-[9px] font-black uppercase text-slate-400 tracking-wider px-1">
-                Mi Estado (Tus publicaciones)
-              </h4>
-
-              {myStories.length > 0 ? (
-                <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm space-y-2">
-                  <div 
-                    onClick={() => handleOpenStoryViewer(myUserStateRepresentation)}
-                    className="flex items-center justify-between cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-3">
-                      {/* Avatar with colorful border */}
-                      <div className="relative">
-                        <div className="absolute inset-0 rounded-full border-2 border-emerald-500 scale-110"></div>
-                        <img
-                          src={myUserStateRepresentation.userAvatar}
-                          alt="Me"
-                          className="w-9 h-9 rounded-full object-cover border-2 border-white relative z-10"
-                        />
+            {/* HORIZONTAL STORIES CAROUSEL */}
+            <div className="flex overflow-x-auto items-start gap-4 py-3 px-1 scrollbar-none">
+              {/* My State (always first) */}
+              <div
+                onClick={() => handleOpenStoryViewer(myUserStateRepresentation)}
+                className="flex flex-col items-center gap-1 min-w-[70px] cursor-pointer"
+              >
+                <div className="relative">
+                  <div className="w-16 h-16 rounded-full ring-2 ring-emerald-500 ring-offset-2 ring-offset-slate-50 object-cover overflow-hidden">
+                    {myStories.length > 0 ? (
+                      <img
+                        src={myUserStateRepresentation.userAvatar}
+                        alt="Mi estado"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-slate-200 flex items-center justify-center">
+                        <Plus className="w-5 h-5 text-slate-500" />
                       </div>
-                      
-                      <div>
-                        <h5 className="text-[10px] font-bold text-slate-800 leading-none group-hover:text-teal-400">
-                          Ver mis estados ({myStories.length})
-                        </h5>
-                        <span className="text-[8px] text-slate-400 font-mono mt-1 block">
-                          Toca para reproducir tus historias
-                        </span>
-                      </div>
-                    </div>
-
-                    <Play className="w-3.5 h-3.5 text-emerald-500 animate-pulse" />
+                    )}
                   </div>
-
-                  {/* Tiny list of published slides with Delete options */}
-                  <div className="border-t border-slate-100 pt-2 space-y-1.5">
-                    {myStories.map((story) => (
-                      <div 
-                        key={story.id}
-                        className="flex items-center justify-between bg-slate-50 p-2 rounded-xl text-[9px] font-medium"
-                      >
-                        <div className="flex items-center gap-2 truncate max-w-[180px]">
-                          <span className="w-1.5 h-1.5 rounded-full bg-teal-400"></span>
-                          <span className="text-slate-600 truncate italic">
-                            {story.type === "text" ? story.content : `[Foto] ${story.caption || ""}`}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 font-mono text-[8px] text-slate-400">
-                          <span>{story.time}</span>
-                          <button
-                            onClick={(e) => handleDeleteMyStory(story.id, e)}
-                            className="p-1 hover:text-rose-500 transition-colors cursor-pointer"
-                            title="Eliminar Estado"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
                 </div>
-              ) : (
-                <div className="bg-white p-3.5 rounded-2xl border border-dashed text-center text-slate-400 space-y-1">
-                  <p className="text-[10px] font-semibold">No tienes ningún estado activo</p>
-                  <p className="text-[8px]">¡Comparte tu día con tus contactos!</p>
-                </div>
-              )}
-            </div>
-
-            {/* CONTACTS STORIES LIST */}
-            <div className="space-y-2">
-              <h4 className="text-[9px] font-black uppercase text-slate-400 tracking-wider px-1">
-                Estados Recientes
-              </h4>
-
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm divide-y divide-slate-100">
-                {userStates.map((userState) => (
-                  <div
-                    key={userState.id}
-                    onClick={() => handleOpenStoryViewer(userState)}
-                    className="p-3 flex items-center justify-between hover:bg-slate-50/50 cursor-pointer transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      {/* Ring Indicator */}
-                      <div className="relative">
-                        <div className={`absolute inset-0 rounded-full scale-110 border-2 ${
-                          userState.hasUnseen 
-                            ? "border-teal-400 animate-pulse" 
-                            : "border-slate-200"
-                        }`}></div>
-                        <img
-                          src={userState.userAvatar}
-                          alt={userState.userName}
-                          className="w-9 h-9 rounded-full object-cover border-2 border-white relative z-10"
-                        />
-                      </div>
-
-                      <div>
-                        <h5 className="text-[10px] font-black text-slate-800 leading-none">
-                          {userState.userName}
-                        </h5>
-                        <span className="text-[8px] text-slate-400 font-mono mt-1 block">
-                          {userState.stories[userState.stories.length - 1].time} • {userState.stories.length} {userState.stories.length === 1 ? "publicación" : "publicaciones"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <ChevronLeft className="w-4 h-4 text-slate-300 rotate-180" />
-                  </div>
-                ))}
+                <span className="text-[10px] font-medium text-gray-700 text-center truncate w-full">
+                  Mi estado
+                </span>
               </div>
+
+              {/* Contact stories */}
+              {userStates.map((userState) => (
+                <div
+                  key={userState.id}
+                  onClick={() => handleOpenStoryViewer(userState)}
+                  className="flex flex-col items-center gap-1 min-w-[70px] cursor-pointer"
+                >
+                  <div className="relative">
+                    <img
+                      src={userState.userAvatar}
+                      alt={userState.userName}
+                      className={`w-16 h-16 rounded-full object-cover ${
+                        userState.hasUnseen
+                          ? "ring-2 ring-emerald-500 ring-offset-2 ring-offset-slate-50"
+                          : "ring-1 ring-slate-300 ring-offset-1 ring-offset-slate-50"
+                      }`}
+                    />
+                  </div>
+                  <span className="text-[10px] font-medium text-gray-700 text-center truncate w-full">
+                    {userState.userName}
+                  </span>
+                </div>
+              ))}
             </div>
 
             {/* Hint Box */}
             <div className="bg-teal-50/50 rounded-xl p-3 border border-teal-100 flex gap-2 items-start">
-              <Sparkles className="w-4 h-4 text-[#10646a] shrink-0 mt-0.5 animate-spin" />
+              <Info className="w-4 h-4 text-[#10646a] shrink-0 mt-0.5" />
               <p className="text-[8.5px] text-slate-500 leading-relaxed">
                 Los estados de Red On desaparecen automáticamente cada 24 horas. ¡El diseño es dinámico y soporta respuestas directas al chat privado del publicador!
               </p>
@@ -599,70 +577,73 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
               <h4 className="text-[10px] font-black uppercase text-slate-400">Crear Estado con Foto</h4>
             </div>
 
-            {/* Interactive Image Choice */}
-            <div className="space-y-2">
-              <span className="text-[8px] font-bold uppercase text-slate-400 block tracking-wider">
-                1. Selecciona tu Foto o Video
-              </span>
+            {/* Image selection area: upload prompt or preview */}
+            {!selectedImageUrl ? (
               <button
                 type="button"
                 onClick={() => {
                   const el = document.getElementById("state-media-upload-input");
                   if (el) el.click();
                 }}
-                className="w-full flex items-center justify-center gap-2 bg-teal-50 hover:bg-teal-100 text-teal-700 font-black text-[11px] px-4 py-4 rounded-xl transition-all cursor-pointer border-2 border-teal-200 border-dashed"
+                className="w-full aspect-[9/16] max-h-[300px] flex flex-col items-center justify-center gap-3 bg-white hover:bg-slate-50 rounded-2xl transition-all cursor-pointer border-2 border-dashed border-slate-300 hover:border-teal-400"
               >
-                <Upload className="w-5 h-5 text-teal-500" /> Subir tu propio archivo (Foto/Video)
+                <div className="w-12 h-12 rounded-full bg-teal-50 flex items-center justify-center">
+                  <Upload className="w-5 h-5 text-teal-500" />
+                </div>
+                <span className="text-[11px] font-bold text-slate-500">Subir foto o video</span>
               </button>
-            </div>
-
-            {/* Live Interactive editor image canvas */}
-            <div className="space-y-2">
-              <span className="text-[8px] font-bold uppercase text-slate-400 block tracking-wider">
-                2. Vista Previa & Leyenda
-              </span>
-
-              <div className="aspect-[9/16] max-h-[300px] w-full rounded-2xl relative overflow-hidden shadow-lg border border-slate-100 bg-black">
-                <img
-                  src={selectedImageUrl}
-                  alt="Background"
-                  className="absolute inset-0 w-full h-full object-cover"
-                />
-                
-                {/* Gradient inferior para legibilidad */}
-                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/30 to-transparent z-0"></div>
-
-                {/* Zona superior (solo el badge) */}
-                <div className="absolute top-3 left-3 z-10">
-                  <span className="text-[7px] font-bold tracking-widest uppercase bg-black/50 backdrop-blur-sm border border-white/15 px-2 py-1 rounded-full text-white/80">
-                    Vista Previa
-                  </span>
+            ) : (
+              <div className="space-y-3">
+                <div className="relative">
+                  <div className="aspect-[9/16] max-h-[300px] w-full rounded-2xl overflow-hidden shadow-lg border border-slate-100 bg-black">
+                    {selectedImageUrl && (
+                      <img
+                        src={selectedImageUrl}
+                        alt="Vista previa"
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                    )}
+                    <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none"></div>
+                    <div className="absolute top-3 left-3">
+                      <span className="text-[7px] font-bold tracking-widest uppercase bg-black/50 backdrop-blur-sm border border-white/15 px-2 py-1 rounded-full text-white/80">
+                        Vista Previa
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setSelectedImageUrl(""); setNewImageCaption(""); }}
+                    className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center shadow-md transition-all cursor-pointer z-10"
+                    title="Quitar foto"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 </div>
 
-                {/* Caja de leyenda en la parte inferior */}
-                <div className="absolute bottom-0 inset-x-0 z-10 p-3">
-                  <div className="bg-black/50 backdrop-blur-xl border border-white/10 rounded-xl p-3">
-                    <input
-                      type="text"
-                      required
-                      placeholder="Escribe una leyenda..."
-                      value={newImageCaption}
-                      onChange={(e) => setNewImageCaption(e.target.value)}
-                      maxLength={70}
-                      className="w-full bg-transparent border-none text-white text-[11px] font-bold text-center placeholder-white/50 outline-none focus:ring-0"
-                    />
-                    <div className="text-[7px] text-right text-white/50 mt-1 font-mono">
-                      {newImageCaption.length} / 70
-                    </div>
+                <div className="space-y-1.5">
+                  <input
+                    type="text"
+                    placeholder="Escribe una leyenda..."
+                    value={newImageCaption}
+                    onChange={(e) => setNewImageCaption(e.target.value)}
+                    maxLength={70}
+                    className="w-full bg-gray-100 text-slate-800 text-[11px] font-medium px-4 py-2.5 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 placeholder-slate-400"
+                  />
+                  <div className="text-[7px] text-right text-slate-400 font-mono">
+                    {newImageCaption.length} / 70
                   </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {/* Bottom Actions */}
             <button
               onClick={handlePublishImage}
-              className="w-full bg-teal-400 hover:bg-teal-500 text-white font-bold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer"
+              disabled={!selectedImageUrl}
+              className={`w-full font-bold text-[10px] py-3 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer ${
+                selectedImageUrl
+                  ? "bg-teal-400 hover:bg-teal-500 text-white"
+                  : "bg-slate-200 text-slate-400 cursor-not-allowed"
+              }`}
             >
               <Check className="w-4 h-4" /> Compartir en Mi Estado
             </button>
@@ -675,7 +656,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
       {/* 3. ABSOLUTE FULL-SCREEN STORY VIEWER (DYNAMIC COMPONENT) */}
       {/* ========================================================= */}
       {activeUserStates && (
-        <div className="absolute inset-0 bg-slate-950 z-50 flex flex-col text-white animate-fade-in">
+        <div className="fixed inset-0 z-[9999] bg-black flex flex-col text-white animate-fade-in">
           
           {/* Top Progress Bar indicator */}
           <div className="px-3.5 pt-3.5 flex gap-1 shrink-0 z-20">
@@ -721,7 +702,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
           </div>
 
           {/* MAIN ACTIVE SCREEN (TEXT OR IMAGE STORY TYPE) */}
-          <div className="flex-1 relative flex items-center justify-center p-6 z-10 select-none">
+          <div className="flex-1 relative flex items-center justify-center w-full h-full overflow-hidden select-none">
             
             {/* Left & Right click zones for fast control */}
             <div 
@@ -768,10 +749,18 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
             ) : (
               /* Image Slide */
               <>
+                {!isImageLoaded && (
+                  <div className="absolute inset-0 flex items-center justify-center z-20">
+                    <div className="w-8 h-8 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
                 <img
                   src={activeUserStates.stories[activeStoryIdx].content}
                   alt="Story Content"
-                  className="absolute inset-0 w-full h-full object-contain"
+                  onLoad={() => setIsImageLoaded(true)}
+                  className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-300 ${
+                    isImageLoaded ? "opacity-100" : "opacity-0"
+                  }`}
                 />
                 
                 {/* Top/Bottom Overlay gradients for readability */}
@@ -797,7 +786,13 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                     key={emoji}
                     onClick={() => {
                       toggleStoryReaction(activeUserStates.stories[activeStoryIdx].id, emoji).then((res) => {
-                        setMyCurrentReaction(res.reacted ? emoji : null);
+                        if (res.reacted) {
+                          setMyCurrentReaction(emoji);
+                          toast.success(`Reaccionaste ${emoji}`, { duration: 1500, position: "top-center" });
+                        } else {
+                          setMyCurrentReaction(null);
+                          toast("Reacción eliminada", { duration: 1000, position: "top-center" });
+                        }
                       }).catch(() => {});
                     }}
                     className={`text-lg w-8 h-8 flex items-center justify-center rounded-full transition-all cursor-pointer ${
@@ -847,7 +842,7 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
       {/* VIEWERS BOTTOM SHEET (for OWNER stories)                */}
       {/* ========================================================= */}
       {showViewersSheet && viewersData && (
-        <div className="absolute inset-0 bg-black/60 z-[60] flex flex-col justify-end animate-fade-in" onClick={() => setShowViewersSheet(false)}>
+        <div className="fixed inset-0 bg-black/60 z-[9999] flex flex-col justify-end animate-fade-in" onClick={() => setShowViewersSheet(false)}>
           <div
             className="bg-slate-900 border-t border-slate-700/50 rounded-t-2xl max-h-[70%] flex flex-col overflow-hidden"
             onClick={e => e.stopPropagation()}
@@ -957,38 +952,82 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <p className="text-[8.5px] text-slate-300 font-medium px-1">
-                ¿Cómo deseas publicar este archivo en tu estado de Red On?
-              </p>
+            {publishStep === "choice" ? (
+              <div className="space-y-2">
+                <p className="text-[8.5px] text-slate-300 font-medium px-1">
+                  ¿Cómo deseas publicar este archivo en tu estado de Red On?
+                </p>
 
-              {/* High conversion PRO action button */}
-              <button
-                onClick={handleGoToProEditor}
-                className="w-full py-2.5 px-3 bg-gradient-to-r from-teal-500 to-indigo-600 hover:from-teal-400 hover:to-indigo-500 text-white font-black text-[9.5px] rounded-xl shadow-lg hover:shadow-teal-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Award className="w-4 h-4 text-amber-300 fill-amber-300 animate-spin" style={{ animationDuration: '6s' }} />
-                Pasar por Editor PRO (Recomendado)
-              </button>
+                {/* High conversion PRO action button */}
+                <button
+                  onClick={handleGoToProEditor}
+                  className="w-full py-2.5 px-3 bg-gradient-to-r from-teal-500 to-indigo-600 hover:from-teal-400 hover:to-indigo-500 text-white font-black text-[9.5px] rounded-xl shadow-lg hover:shadow-teal-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Award className="w-4 h-4 text-amber-300 fill-amber-300 animate-spin" style={{ animationDuration: '6s' }} />
+                  Pasar por Editor PRO (Recomendado)
+                </button>
 
-              {/* Standard Original action button */}
-              <button
-                onClick={handlePublishOriginal}
-                className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 font-bold text-[9px] rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Check className="w-3.5 h-3.5 text-slate-400" />
-                Publicar Versión Original
-              </button>
-            </div>
+                {/* Standard Original action button */}
+                <button
+                  onClick={handlePublishOriginal}
+                  className="w-full py-2.5 px-3 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 font-bold text-[9px] rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5 text-slate-400" />
+                  Publicar Versión Original
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
 
+      {/* ========================================================= */}
+      {/* 6. FULL-SCREEN COMMENT STEP (Instagram/WhatsApp style)    */}
+      {/* ========================================================= */}
+      {showPublishDecisionModal && uploadedMedia && publishStep === "comment" && (
+        <div className="fixed inset-0 z-[9999] flex flex-col bg-black">
+          {/* Close button top-left */}
+          <button
+            onClick={() => setPublishStep("choice")}
+            className="absolute top-4 left-4 z-10 text-white/80 hover:text-white p-2 cursor-pointer"
+          >
+            <X className="w-6 h-6" />
+          </button>
+
+          {/* Full-screen media */}
+          <div className="flex-1 flex items-center justify-center min-h-0">
+            {uploadedMedia.type === "video" ? (
+              <video
+                src={uploadedMedia.url}
+                muted
+                playsInline
+                loop
+                autoPlay
+                className="w-full h-full object-contain"
+              />
+            ) : (
+              <img
+                src={uploadedMedia.url}
+                alt="Preview"
+                className="w-full h-full object-contain"
+              />
+            )}
+          </div>
+
+          {/* Bottom bar */}
+          <div className="w-full p-4 bg-black/50 backdrop-blur-md flex items-center gap-3">
+            <input
+              type="text"
+              placeholder="Añade un comentario..."
+              value={publishComment}
+              onChange={(e) => setPublishComment(e.target.value)}
+              className="flex-1 bg-gray-800 text-white text-sm rounded-full px-5 py-3 outline-none placeholder-gray-400 border border-white/10 focus:border-teal-400 transition-colors"
+            />
             <button
-              onClick={() => {
-                setUploadedMedia(null);
-                setShowPublishDecisionModal(false);
-              }}
-              className="text-[8px] font-bold text-slate-500 hover:text-slate-400 cursor-pointer block mx-auto pt-1"
+              onClick={handlePublishNow}
+              className="w-11 h-11 bg-teal-500 hover:bg-teal-400 text-white rounded-full flex items-center justify-center shrink-0 transition-all shadow-lg cursor-pointer"
             >
-              Cancelar Carga
+              <Send className="w-5 h-5" />
             </button>
           </div>
         </div>

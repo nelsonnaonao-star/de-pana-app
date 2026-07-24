@@ -103,15 +103,7 @@ export async function setupCapacitorPush(userId: string) {
         window.dispatchEvent(new CustomEvent('incoming-call', {
           detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio', callId: data.callId },
         }));
-        // Show FCM notification for calls using calls channel
-        PushNotifications.displayNotification({
-          title: data.callerName || 'Llamada entrante',
-          body: data.callType === 'video' ? '📹 Llamada de video' : '📞 Llamada de voz',
-          id: String(Date.now()),
-          channelId: 'redon-calls',
-          smallIcon: 'ic_dialog_info',
-          largeIcon: 'ic_dialog_info',
-        }).catch(() => {});
+        // Notification with buttons is handled by CallFcmService.java natively
       } else if (data?.type === 'message' && data?.chatId) {
         // We keep the native notification from CallFcmService (which has Quick Reply)
         // No need to duplicate here - just dispatch the event for in-app UI

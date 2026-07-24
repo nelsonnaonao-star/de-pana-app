@@ -74,10 +74,14 @@ export default function CallOverlay({
   const attachRemoteStream = useCallback((videoEl: HTMLVideoElement, stream: MediaStream) => {
     if (videoEl.srcObject === stream) return;
     videoEl.srcObject = stream;
-    videoEl.play().catch(() => {
-      const resume = () => { videoEl.play().catch(() => {}); document.removeEventListener('touchstart', resume); };
-      document.addEventListener('touchstart', resume, { once: true });
-    });
+    const tryPlay = (attempts = 0) => {
+      if (attempts > 20) {
+        document.addEventListener('touchstart', () => videoEl.play().catch(() => {}), { once: true });
+        return;
+      }
+      videoEl.play().catch(() => setTimeout(() => tryPlay(attempts + 1), 300));
+    };
+    tryPlay();
   }, []);
 
   const remoteVideoCallback = useCallback((node: HTMLVideoElement | null) => {
@@ -135,48 +139,39 @@ export default function CallOverlay({
 
   if (call.status === "incoming") {
     return (
-      <div className="absolute inset-0 bg-gradient-to-b from-[#0a4d52] via-[#041a1c] to-[#010809] text-white z-[9999] flex flex-col justify-between p-8 select-none">
-        <div className="absolute top-[20%] left-1/2 -translate-x-1/2 w-64 h-64 rounded-full bg-teal-500/10 blur-3xl pointer-events-none"></div>
-
-        <div className="text-center mt-12 space-y-3 relative z-10">
-          <span className="text-[10px] bg-teal-400/20 text-teal-300 border border-teal-500/30 px-3 py-1 rounded-full font-bold uppercase tracking-wider animate-pulse inline-flex items-center gap-1">
-            {call.isGroup ? <Users className="w-3 h-3" /> : null}
-            {call.type === "video" ? "Videollamada Entrante" : "Llamada de Voz Entrante"}
-          </span>
-          <div className="relative inline-block mt-4">
-            <div className="absolute inset-0 rounded-full bg-teal-500/20 animate-ping"></div>
+      <div className="absolute top-0 left-0 right-0 z-[9999] bg-gradient-to-r from-[#0a4d52] to-[#05292c] text-white shadow-xl border-b border-teal-500/30 animate-slide-down select-none">
+        <div className="flex items-center gap-3 px-4 py-3">
+          <div className="relative shrink-0">
+            <div className="absolute inset-0 rounded-full bg-emerald-500/30 animate-ping"></div>
             <img
-              src={call.contactAvatar}
+              src={call.contactAvatar || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230a4d52'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M12 14c-4 0-6 2-6 4v2h12v-2c0-2-2-4-6-4z'/%3E%3C/svg%3E"}
               alt={call.contactName}
-              className="w-24 h-24 rounded-full object-cover border-4 border-teal-400 relative z-10 shadow-lg"
+              className="w-10 h-10 rounded-full object-cover border-2 border-teal-400 relative z-10"
             />
           </div>
-          <h2 className="text-2xl font-black tracking-tight">{call.contactName}</h2>
-          <p className="text-xs text-slate-300 font-medium">Red On Cifrado Extremo</p>
-        </div>
-
-        {call.isGroup && (
-          <div className="bg-white/5 border border-white/10 px-4 py-2.5 rounded-2xl mx-auto text-center max-w-[200px] z-10">
-            <p className="text-[10px] text-teal-300 font-semibold mb-0.5">Grupo Activo</p>
-            <p className="text-[9px] text-slate-400">Integrantes: Nelson, Sofía, Andrés, me</p>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold truncate">{call.contactName}</p>
+            <p className="text-[9px] text-teal-200/70 font-medium">
+              {call.type === "video" ? "Videollamada entrante..." : "Llamada entrante..."}
+            </p>
           </div>
-        )}
-
-        <div className="mb-12 flex justify-around items-center px-4 relative z-10">
-          <button
-            onClick={onDecline}
-            className="w-14 h-14 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center shadow-xl shadow-rose-500/20 hover:scale-105 active:scale-95 transition-all cursor-pointer"
-          >
-            <PhoneOff className="w-6 h-6" />
-          </button>
-
-          <button
-            onClick={onAccept}
-            className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-xl shadow-emerald-500/30 hover:scale-110 active:scale-90 transition-all cursor-pointer relative"
-          >
-            <span className="absolute inset-[-4px] rounded-full border-2 border-emerald-400/50 animate-ping"></span>
-            {call.type === "video" ? <Video className="w-6 h-6" /> : <Phone className="w-6 h-6" />}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onDecline}
+              className="w-9 h-9 rounded-full bg-rose-500 hover:bg-rose-600 flex items-center justify-center shadow-lg active:scale-90 transition-all cursor-pointer"
+              title="Rechazar"
+            >
+              <PhoneOff className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onAccept}
+              className="w-9 h-9 rounded-full bg-emerald-500 hover:bg-emerald-600 flex items-center justify-center shadow-lg active:scale-90 transition-all cursor-pointer relative"
+              title="Responder"
+            >
+              <span className="absolute inset-[-3px] rounded-full border-2 border-emerald-400/50 animate-ping"></span>
+              {call.type === "video" ? <Video className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -187,7 +182,7 @@ export default function CallOverlay({
 
       <div ref={emojiContainerRef} className="absolute inset-0 pointer-events-none z-30 overflow-hidden" />
 
-      {call.type === "video" && !call.isVideoOff ? (
+      {call.type === "video" && !call.isVideoOff && call.status === "connected" ? (
         <div className="absolute inset-0 w-full h-full z-0 bg-black">
           {activeBg !== "none" ? (
             <img
@@ -216,7 +211,11 @@ export default function CallOverlay({
             </div>
           </div>
 
-          <div className="absolute top-10 right-4 w-24 h-36 rounded-2xl overflow-hidden border-2 border-teal-400 shadow-lg bg-black z-20">
+          <div className="absolute top-6 right-3 w-32 h-48 rounded-[28px] border-[3px] border-teal-700/60 shadow-2xl bg-black z-20 overflow-hidden shadow-teal-500/20">
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-14 h-4 bg-black rounded-b-xl z-10 flex items-center justify-center gap-1">
+              <div className="w-1 h-1 rounded-full bg-slate-600"></div>
+              <div className="w-4 h-1.5 rounded-full bg-gray-700"></div>
+            </div>
             {localStream ? (
               <video
                 ref={localVideoCallback}
@@ -228,8 +227,8 @@ export default function CallOverlay({
                 Sin cámara
               </div>
             )}
-            <div className="absolute bottom-1.5 left-1.5 bg-black/55 px-1.5 py-0.5 rounded text-[8px] font-semibold text-teal-300">
-              Tú (Mi cámara)
+            <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-[8px] font-semibold text-teal-300">
+              Tú
             </div>
           </div>
         </div>

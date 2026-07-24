@@ -8,13 +8,8 @@ import { registerPushNotifications, unregisterPushNotifications } from "../servi
 import { setupCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
 import toast from "react-hot-toast";
 
-const CACHE_KEYS = {
-  profile: "redon_cache_profile",
-  chats: "redon_cache_chats",
-  contacts: "redon_cache_contacts",
-  calls: "redon_cache_calls",
-  timestamp: "redon_cache_timestamp",
-};
+const CACHE_PREFIX = "redon_cache_";
+const cacheKey = (uid: string, name: string) => `${CACHE_PREFIX}${name}_${uid}`;
 
 function loadCache<T>(key: string, fallback: T): T {
   try {
@@ -27,7 +22,18 @@ function loadCache<T>(key: string, fallback: T): T {
 function saveCache<T>(key: string, data: T) {
   try {
     localStorage.setItem(key, JSON.stringify(data));
-    localStorage.setItem(CACHE_KEYS.timestamp, Date.now().toString());
+  } catch {}
+}
+
+function clearUserCache(userId: string) {
+  const prefix = `${CACHE_PREFIX}`;
+  try {
+    const keys = Object.keys(localStorage);
+    for (const k of keys) {
+      if (k.startsWith(prefix) && k.endsWith(`_${userId}`)) {
+        localStorage.removeItem(k);
+      }
+    }
   } catch {}
 }
 
@@ -103,6 +109,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           setContacts([]);
           setCalls([]);
           setLoading(false);
+          if (userId) clearUserCache(userId);
           break;
 
         case "TOKEN_REFRESHED":
@@ -137,11 +144,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     loadedUserId.current = userId;
     debugLog("loadUserData start", { userId });
 
-    // Load cached data immediately for instant UI
-    const cachedProfile = loadCache<Profile | null>(CACHE_KEYS.profile, null);
-    const cachedChats = loadCache<Chat[]>(CACHE_KEYS.chats, []);
-    const cachedContacts = loadCache<Contact[]>(CACHE_KEYS.contacts, []);
-    const cachedCalls = loadCache<Call[]>(CACHE_KEYS.calls, []);
+    // Load cached data immediately for instant UI (scoped to userId)
+    const cachedProfile = loadCache<Profile | null>(cacheKey(userId, "profile"), null);
+    const cachedChats = loadCache<Chat[]>(cacheKey(userId, "chats"), []);
+    const cachedContacts = loadCache<Contact[]>(cacheKey(userId, "contacts"), []);
+    const cachedCalls = loadCache<Call[]>(cacheKey(userId, "calls"), []);
     
     debugLog("cache loaded", { 
       hasProfile: !!cachedProfile, 
@@ -194,11 +201,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       setContacts(newContacts);
       setCalls(newCalls);
 
-      // Update cache with fresh data
-      if (newProfile) saveCache(CACHE_KEYS.profile, newProfile);
-      if (newChats.length > 0) saveCache(CACHE_KEYS.chats, newChats);
-      if (newContacts.length > 0) saveCache(CACHE_KEYS.contacts, newContacts);
-      if (newCalls.length > 0) saveCache(CACHE_KEYS.calls, newCalls);
+      // Update cache with fresh data (always save, even if empty, to overwrite stale data)
+      saveCache(cacheKey(userId, "profile"), newProfile);
+      saveCache(cacheKey(userId, "chats"), newChats);
+      saveCache(cacheKey(userId, "contacts"), newContacts);
+      saveCache(cacheKey(userId, "calls"), newCalls);
       
       debugLog("loadUserData complete");
     } catch (err) {
@@ -321,7 +328,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       .single();
     if (!error && data) {
       setProfile(data as Profile);
-      saveCache(CACHE_KEYS.profile, data as Profile);
+      saveCache(cacheKey(user.id, "profile"), data as Profile);
     }
   };
 
@@ -329,21 +336,21 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     const ch = await getChats(user.id);
     setChats(ch);
-    if (ch.length > 0) saveCache(CACHE_KEYS.chats, ch);
+    saveCache(cacheKey(user.id, "chats"), ch);
   };
 
   const refreshContacts = async () => {
     if (!user) return;
     const cont = await getContacts(user.id);
     setContacts(cont);
-    if (cont.length > 0) saveCache(CACHE_KEYS.contacts, cont);
+    saveCache(cacheKey(user.id, "contacts"), cont);
   };
 
   const refreshCalls = async () => {
     if (!user) return;
     const cl = await getCalls(user.id);
     setCalls(cl);
-    if (cl.length > 0) saveCache(CACHE_KEYS.calls, cl);
+    saveCache(cacheKey(user.id, "calls"), cl);
   };
 
   const logout = async () => {
@@ -360,6 +367,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     await unregisterPushNotifications();
     await unregisterCapacitorPush();
     await authSignOut();
+    if (user) clearUserCache(user.id);
     loadedUserId.current = null;
     setUser(null);
     setProfile(null);

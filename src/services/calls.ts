@@ -65,6 +65,14 @@ export async function updateCallStatus(callId: string, status: "ringing" | "ongo
   if (error) throw error;
 }
 
+export async function updateCallRating(callId: string, rating: number) {
+  const { error } = await supabase
+    .from("calls")
+    .update({ rating })
+    .eq("id", callId);
+  if (error) throw error;
+}
+
 export async function endCall(callId: string) {
   const endedAt = new Date();
 

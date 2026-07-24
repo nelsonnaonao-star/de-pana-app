@@ -357,10 +357,6 @@ router.post('/webhook', async (req, res) => {
           try {
             await admin.messaging().send({
               token: t.token,
-              notification: {
-                title: callerName,
-                body: 'Llamada entrante',
-              },
               data: {
                 title: callerName, body: 'Llamada entrante',
                 badge: '1', notificationCount: '1',
@@ -371,13 +367,6 @@ router.post('/webhook', async (req, res) => {
               },
               android: {
                 priority: 'high', ttl: 86400000,
-                notification: {
-                  channel_id: 'redon-calls',
-                  sound: 'ringtone',
-                  visibility: 'public',
-                  notification_count: 1,
-                  click_action: 'OPEN_APP',
-                },
               },
             });
             results.android++;

@@ -6,7 +6,7 @@ import {
   Check, AlertTriangle, Info, Search, Plus, 
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
-  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft
+  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Chat, Message, ActiveCall } from "../types";
@@ -32,10 +32,14 @@ import { clearForMe, sendMessage as apiSendMessage } from "../services/messages"
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
 import { getMyFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
 import { WebRTCService } from "../services/webrtc";
-import { startCall as apiStartCall } from "../services/calls";
-import { sendFcmPush } from "../services/pushCapacitor";
+import { startCall as apiStartCall, updateCallRating, updateCallStatus } from "../services/calls";
+import { Capacitor } from '@capacitor/core';
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
+
 import { uploadAvatar } from "../services/storage";
 import { updateProfile } from "../services/auth";
+import CallRatingModal from "./CallRatingModal";
 interface PhoneSimulatorProps {
   isCorrected?: boolean;
   onToggle?: (val: boolean) => void;
@@ -193,6 +197,7 @@ export default function PhoneSimulator({
 
   // Active Call Screen Overlay
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  const [isInitiatingCall, setIsInitiatingCall] = useState(false);
 
   // WebRTC streams for real calls
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -281,6 +286,21 @@ export default function PhoneSimulator({
       console.log('[WEBRTC SIGNALING] 🔇 Ringback tone stopped');
     }
   }, []);
+
+  // Java String.hashCode() polyfill — matches CallFcmService notification ID
+  function javaHashCode(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return hash;
+  }
+
+  // Call rating after a connected call ends
+  const [callRating, setCallRating] = useState<{ callId: string; contactName: string } | null>(null);
+  const callWasConnectedRef = useRef(false);
+  const callContactNameRef = useRef("");
 
   // Swipe-to-delete state
   const [swipedChatId, setSwipedChatId] = useState<string | null>(null);
@@ -811,6 +831,33 @@ export default function PhoneSimulator({
           targetUserId: call.caller_id,
         });
       })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'calls',
+        filter: `callee_id=eq.${user.id}`,
+      }, async (payload: any) => {
+        const call = payload.new;
+        const prev = payload.old;
+        const endedStatuses = ['missed', 'ended'];
+        if (!endedStatuses.includes(call.status)) return;
+        if (prev?.status === call.status) return;
+        if (!activeCallRef.current || activeCallRef.current.id !== call.id) return;
+        if (activeCallRef.current.status !== 'incoming') return;
+        console.log('[WEBRTC SIGNALING] 📩 Call ended while incoming — auto-dismissing. Status:', call.status);
+        stopIncomingRingtone();
+        callWasConnectedRef.current = false;
+        callContactNameRef.current = '';
+        if (Capacitor.isNativePlatform()) {
+          try {
+            const notifId = javaHashCode("call-" + (call.chat_id || call.id || ""));
+            await LocalNotifications.cancel({ notifications: [{ id: notifId }] });
+          } catch (e) {
+            console.warn('[WEBRTC SIGNALING] Failed to cancel notification:', e);
+          }
+        }
+        setActiveCall(null);
+      })
       .subscribe((status) => {
         console.log('[WEBRTC SIGNALING] 📡 Realtime subscription status:', status);
       });
@@ -963,6 +1010,9 @@ export default function PhoneSimulator({
   };
 
   const cleanupCall = useCallback(() => {
+    const wasConnected = callWasConnectedRef.current;
+    const callId = activeCallRef.current?.id;
+    const contactName = callContactNameRef.current || activeCallRef.current?.contactName || '';
     stopRingbackTone();
     stopIncomingRingtone();
     webrtcRef.current?.cleanup();
@@ -970,13 +1020,19 @@ export default function PhoneSimulator({
     setLocalStream(null);
     setRemoteStream(null);
     setActiveCall(null);
+    callWasConnectedRef.current = false;
+    if (wasConnected && callId) {
+      setCallRating({ callId, contactName });
+    }
   }, [stopRingbackTone, stopIncomingRingtone]);
 
   const cleanupCallRef = useRef<(() => void) | null>(null);
   cleanupCallRef.current = cleanupCall;
 
   const handleTriggerCallFromChat = async (type: "audio" | "video") => {
-    if (!activeChat || !user) return;
+    if (!activeChat || !user || isInitiatingCall) return;
+    setIsInitiatingCall(true);
+    try { await Haptics.impact({ style: ImpactStyle.Light }); } catch {}
     console.log('[WEBRTC SIGNALING] 📞 Starting outgoing call to:', activeChat.name, 'type:', type);
 
     const partnerId = activeChat.partnerUserId || "";
@@ -1019,6 +1075,8 @@ export default function PhoneSimulator({
         console.log('[WEBRTC CRÍTICO] 🎉 Emisor recibió remote stream — LLAMADA CONECTADA');
         setRemoteStream(stream);
         setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
+        callWasConnectedRef.current = true;
+        callContactNameRef.current = activeCallRef.current?.contactName || '';
         stopRingbackTone();
       };
 
@@ -1047,17 +1105,16 @@ export default function PhoneSimulator({
       playRingbackTone();
 
       if (partnerId) {
-        console.log('[WEBRTC SIGNALING] 📞 Sending FCM push to:', partnerId);
-        sendFcmPush(partnerId, profile?.name || 'RED ON', 'Llamada entrante...', {
-          type: 'call', chatId: activeChat.id, callerId: user.id,
-          callerName: profile?.name || 'RED ON', callType: type, callId: callId,
-        });
+        console.log('[WEBRTC SIGNALING] 📞 Push handled by Supabase webhook — skip duplicate');
       }
 
       // ICE connection timeout: auto-cleanup after 45s
       const iceTimeoutRef = { current: setTimeout(() => {
         if (webrtcRef.current && activeCallRef.current?.status === "outgoing") {
           console.warn('[WEBRTC SIGNALING] ⏰ ICE timeout — no connection after 45s');
+          if (callId && !callId.startsWith('call_')) {
+            updateCallStatus(callId, 'missed').catch(e => console.warn('[CALL] Failed to update call status to missed:', e));
+          }
           stopRingbackTone();
           cleanupCall();
         }
@@ -1095,6 +1152,7 @@ export default function PhoneSimulator({
       setLocalStream(null);
       setTimeout(() => cleanupCall(), 3000);
     }
+    setIsInitiatingCall(false);
   };
 
   const handleContactAddedByQr = async (name: string, avatar: string) => {
@@ -1333,6 +1391,7 @@ export default function PhoneSimulator({
             const callType = activeCall.type;
             console.log('[WEBRTC SIGNALING] ✅ Call accepted by receiver, callId:', callId);
             stopIncomingRingtone();
+            setActiveCall((prev) => prev ? { ...prev, status: "connecting" } : null);
 
             try {
               const webrtc = new WebRTCService(callId, user.id);
@@ -1342,6 +1401,8 @@ export default function PhoneSimulator({
                 console.log('[WEBRTC SIGNALING] 📹 Remote stream received on callee side — call CONNECTED');
                 setRemoteStream(stream);
                 setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
+                callWasConnectedRef.current = true;
+                callContactNameRef.current = activeCallRef.current?.contactName || '';
               };
 
               webrtc.onConnectionStateChange = (state) => {
@@ -1369,14 +1430,16 @@ export default function PhoneSimulator({
               webrtc.signalCalleeReady()
                 .then(() => console.log('[WEBRTC SIGNALING] ✅ Callee-ready signal sent'))
                 .catch((e) => console.warn('[WEBRTC SIGNALING] ⚠️ Callee-ready signal failed:', e?.message));
-
-              setActiveCall((prev) => prev ? { ...prev, status: "connecting" } : null);
             } catch (err) {
               console.error('[WEBRTC SIGNALING] ❌ Failed to accept call:', err);
             }
           }}
           onDecline={() => {
             console.log('[WEBRTC SIGNALING] ❌ Call declined');
+            const callId = activeCallRef.current?.id;
+            if (callId && !callId.startsWith('call_')) {
+              updateCallStatus(callId, 'missed').catch(e => console.warn('[CALL] Failed to update call status to missed:', e));
+            }
             stopIncomingRingtone();
             cleanupCall();
           }}
@@ -1407,6 +1470,23 @@ export default function PhoneSimulator({
         />
       )}
 
+      {/* CALL RATING MODAL */}
+      {callRating && (
+        <CallRatingModal
+          contactName={callRating.contactName}
+          onSend={async (rating: number) => {
+            try {
+              await updateCallRating(callRating.callId, rating);
+              console.log('[CALL] Rating saved:', rating);
+            } catch (e) {
+              console.error('[CALL] Failed to save rating:', e);
+            }
+            setCallRating(null);
+          }}
+          onSkip={() => setCallRating(null)}
+        />
+      )}
+
       {/* 1. WELCOME SCREEN / REGISTER WINDOW */}
       {!registeredUser || currentScreen === "welcome" ? (
         <WelcomeScreen onRegister={handleRegister} />
@@ -1428,6 +1508,7 @@ export default function PhoneSimulator({
               }}
               onSendMessage={handleSendMessageInRoom}
               onTriggerCall={handleTriggerCallFromChat}
+              callInProgress={isInitiatingCall}
               onForwardMessage={setForwardingMessage}
               onChatDeleted={(chatId) => {
                 deletedChatIdsRef.current.add(chatId);
@@ -1732,10 +1813,15 @@ export default function PhoneSimulator({
                 </div>
               )}
 
+              {/* STATES TAB — outside main content for stable flex layout */}
+              <div className={currentScreen === "states" ? "flex flex-1" : "hidden"}>
+                <StatesPanel onStartChat={handleStartChatFromState} />
+              </div>
+
               {/* Main Tab Content Body */}
               <div className={`flex-1 overflow-y-auto bg-white relative flex flex-col h-full ${
                 currentScreen === "chats" ? "pt-[170px]" : ""
-              }`}>
+              } ${currentScreen === "states" ? "hidden" : ""}`}>
                 
                 {/* CHATS LIST */}
                 {currentScreen === "chats" && (
@@ -1951,12 +2037,7 @@ export default function PhoneSimulator({
                   </>
                 )}
 
-                {/* STATES TAB */}
-                {currentScreen === "states" && (
-                  <StatesPanel onStartChat={handleStartChatFromState} />
-                )}
-
-                {/* CHANNELS TAB */}
+                  {/* CHANNELS TAB */}
                 {currentScreen === "channels" && (
                   <ChannelsPanel />
                 )}
@@ -2109,7 +2190,20 @@ export default function PhoneSimulator({
                         ) : (
                         <>
                           <h4 className="text-sm font-black mt-2 tracking-tight">{registeredUser.name}</h4>
-                          <p className="text-[10px] text-teal-200 font-mono mt-0.5">{registeredUser.phone}</p>
+                          <button
+                            onClick={() => {
+                              if (registeredUser?.phone) {
+                                navigator.clipboard.writeText(registeredUser.phone).then(() => {
+                                  showToast("Número copiado ✅");
+                                }).catch(() => {});
+                              }
+                            }}
+                            className="text-[10px] text-teal-200 font-mono mt-0.5 hover:text-white transition-colors cursor-pointer flex items-center gap-1 mx-auto"
+                            title="Copiar número"
+                          >
+                            {registeredUser.phone}
+                            <Copy className="w-3 h-3 inline opacity-60" />
+                          </button>
                           {registeredUser.bio && (
                             <p className="text-[9px] text-teal-300/80 mt-0.5 italic max-w-[200px] mx-auto truncate">{registeredUser.bio}</p>
                           )}
@@ -2382,6 +2476,24 @@ export default function PhoneSimulator({
                           {/* 1. CUENTA OVERLAY */}
                           {activeSettingsModal === "cuenta" && (
                             <div className="space-y-4 animate-fade-in">
+                              <div className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
+                                <div>
+                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Tu número</div>
+                                  <div className="text-xs font-mono font-bold text-slate-800 mt-0.5">{registeredUser?.phone || profile?.phone_number || "No disponible"}</div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    const num = registeredUser?.phone || profile?.phone_number || "";
+                                    if (num) {
+                                      navigator.clipboard.writeText(num).then(() => showToast("Número copiado ✅")).catch(() => {});
+                                    }
+                                  }}
+                                  className="w-8 h-8 rounded-full bg-teal-500/10 hover:bg-teal-500/20 text-teal-600 flex items-center justify-center transition-all cursor-pointer"
+                                  title="Copiar número"
+                                >
+                                  <Copy className="w-4 h-4" />
+                                </button>
+                              </div>
                               <div className="space-y-2">
                                 <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Cambiar ID de RED ON</label>
                                 <div className="flex gap-2">

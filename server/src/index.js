@@ -18,6 +18,14 @@ import ratesRoutes from './routes/rates.js';
 import messagesRoutes from './routes/messages.js';
 import contentRoutes from './routes/content.js';
 
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+});
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
 
@@ -68,7 +76,7 @@ async function main() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // ─── Global rate limiter ───────────────────────────────────────
+  // Global rate limiter
   const globalLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
     max: 200,
@@ -77,21 +85,21 @@ async function main() {
     message: { error: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.' },
   });
 
-  // ─── Strict rate limiter for sensitive endpoints ────────────────
+  // Strict rate limiter for sensitive endpoints
   const strictLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 10,
     message: { error: 'Demasiados intentos. Espera 15 minutos.' },
   });
 
-  // ─── Upload rate limiter ───────────────────────────────────────
+  // Upload rate limiter
   const uploadLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     max: 30,
     message: { error: 'Demasiadas subidas. Espera unos minutos.' },
   });
 
-  // ─── PUBLIC routes (no auth needed) ────────────────────────────
+  // PUBLIC routes (no auth needed)
   app.use('/api/health', (_req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
@@ -100,8 +108,8 @@ async function main() {
   app.use('/api/turn', globalLimiter, turnRoutes);
   app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);
 
-  // ─── FCM: webhook is public (authenticated via secret header) ──
-  // ─── FCM: register/send require JWT auth ───────────────────────
+  // FCM: webhook is public (authenticated via secret header)
+  // FCM: register/send require JWT auth
   app.use('/api/fcm', (req, res, next) => {
     if (req.path === '/webhook') return next();
     globalLimiter(req, res, next);
@@ -110,13 +118,13 @@ async function main() {
     authMiddleware(req, res, next);
   }, fcmRoutes);
 
-  // ─── PROTECTED routes (auth required) ──────────────────────────
+  // PROTECTED routes (auth required)
   app.use('/api/data', globalLimiter, authMiddleware, dataRoutes);
   app.use('/api/messages', globalLimiter, authMiddleware, messagesRoutes);
   app.use('/api/content', globalLimiter, authMiddleware, contentRoutes);
   app.use('/api/media', uploadLimiter, authMiddleware, mediaRoutes);
 
-  // ─── GIPHY proxy (hides API key from client) ───────────────────
+  // GIPHY proxy (hides API key from client)
   const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
   if (!GIPHY_API_KEY) console.warn('[GIPHY] GIPHY_API_KEY no está configurada en variables de entorno');
   app.get('/api/giphy/:action', async (req, res) => {
@@ -145,10 +153,10 @@ async function main() {
     }
   });
 
-  // ─── Static files ──────────────────────────────────────────────
+  // Static files
   app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
-  // ─── Gemini AI Chat endpoint ───────────────────────────────────
+  // Gemini AI Chat endpoint
   const chatLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 20,
@@ -213,6 +221,18 @@ async function main() {
   const distPath = path.join(ROOT_DIR, 'dist');
   app.use(express.static(distPath));
 
+  // Global error middleware
+  app.use((err, req, res, next) => {
+    console.error(`[ERROR] ${req.method} ${req.originalUrl}:`, err.message);
+    if (err.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'El cuerpo de la solicitud es demasiado grande' });
+    }
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'El archivo excede el tamaño máximo permitido' });
+    }
+    res.status(500).json({ error: 'Error interno del servidor' });
+  });
+
   // JSON 404 for unmatched API/uploads routes
   app.use('/api', (req, res) => {
     res.status(404).json({ error: `Ruta API no encontrada: ${req.method} ${req.originalUrl}` });
@@ -231,15 +251,15 @@ async function main() {
     const url = process.env.APP_URL || `http://localhost:${PORT}`;
     console.log(`RED ON corriendo en ${url}`);
 
-    // ─── Self-ping keep-alive (anti-sleep para Render free tier) ──
+    // Self-ping keep-alive (anti-sleep para Render free tier)
     const SERVER_URL = process.env.SERVER_URL;
     if (SERVER_URL && isProduction) {
       const pingUrl = `${SERVER_URL}/api/health`;
-      console.log(`[KEEP-ALIVE] Ping cada 14 min → ${pingUrl}`);
+      console.log(`[KEEP-ALIVE] Ping cada 14 min -> ${pingUrl}`);
       setInterval(async () => {
         try {
           const res = await fetch(pingUrl, { signal: AbortSignal.timeout(10000) });
-          console.log(`[KEEP-ALIVE] ${res.ok ? '✓' : '✗'} ${res.status}`);
+          console.log(`[KEEP-ALIVE] ${res.ok ? 'OK' : 'FAIL'} ${res.status}`);
         } catch (err) {
           console.error('[KEEP-ALIVE] Ping failed:', err.message);
         }

@@ -37,14 +37,8 @@ const ALLOWED_MIMES = [
 ];
 
 const uploadAny = multer({
-  storage: multer.diskStorage({
-    destination: path.join(__dirname, '..', '..', 'uploads'),
-    filename: (req, file, cb) => {
-      const ext = file.originalname.split('.').pop() || 'bin';
-      cb(null, `upload-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
-    },
-  }),
-  limits: { fileSize: 50 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (ALLOWED_MIMES.includes(file.mimetype)) {
       cb(null, true);
@@ -56,6 +50,22 @@ const uploadAny = multer({
 
 function getOutputPath() {
   return path.join(__dirname, '..', '..', 'uploads', `compressed-${Date.now()}-${Math.random().toString(36).slice(2)}.mp4`);
+}
+
+async function uploadBufferToSupabase(buffer, mimeType, ext = 'bin') {
+  if (!supabaseAdmin) throw new Error('Supabase no configurado');
+
+  const prefix = mimeType.startsWith('video/') ? 'video' : mimeType.startsWith('image/') ? 'image' : 'file';
+  const fileName = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+  const { error } = await supabaseAdmin.storage
+    .from('chat-images')
+    .upload(fileName, buffer, { contentType: mimeType, upsert: false });
+
+  if (error) throw error;
+
+  const { data } = supabaseAdmin.storage.from('chat-images').getPublicUrl(fileName);
+  return data.publicUrl;
 }
 
 router.post('/compress-video', (req, res) => {
@@ -128,8 +138,8 @@ router.post('/upload', uploadAny.single('file'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No se recibió ningún archivo' });
     }
-    const url = await uploadToSupabase(req.file.path, req.file.mimetype, req.file.originalname.split('.').pop() || 'bin');
-    await fs.unlink(req.file.path).catch(() => {});
+    const ext = req.file.originalname.split('.').pop() || 'bin';
+    const url = await uploadBufferToSupabase(req.file.buffer, req.file.mimetype, ext);
     res.json({ url });
   } catch (err) {
     res.status(500).json({ error: 'Error al subir el archivo' });

@@ -56,6 +56,7 @@ interface ChatRoomProps {
   onBack: () => void;
   onSendMessage: (msg: Message) => void;
   onTriggerCall: (type: "audio" | "video") => void;
+  callInProgress?: boolean;
   onForwardMessage?: (msg: Message) => void;
   onChatDeleted?: (chatId: string) => void;
   onMessageDeleted?: (chatId: string, messageId: string) => void;
@@ -66,7 +67,7 @@ interface ChatRoomProps {
   onRegisterBackHandler?: (handler: (() => boolean) | null) => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler }: ChatRoomProps) {
   const { user, profile } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -1314,17 +1315,27 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
 
           {/* Call Trigger Buttons */}
           <div className="flex items-center gap-1.5">
-            <button 
+            <button
               onClick={() => onTriggerCall("audio")}
-              className="p-2 hover:bg-white/10 rounded-full transition-all text-teal-100 hover:text-white"
-              title="Llamada de voz"
+              disabled={callInProgress}
+              className={`p-2 rounded-full transition-all duration-150 active:scale-90 active:bg-green-700 cursor-pointer ${
+                callInProgress
+                  ? "text-teal-600 bg-white/5"
+                  : "text-teal-100 hover:bg-white/10 hover:text-white"
+              }`}
+              title={callInProgress ? "Iniciando llamada..." : "Llamada de voz"}
             >
               <Phone className="w-5 h-5" />
             </button>
-            <button 
+            <button
               onClick={() => onTriggerCall("video")}
-              className="p-2 hover:bg-white/10 rounded-full transition-all text-teal-100 hover:text-white"
-              title="Video llamada"
+              disabled={callInProgress}
+              className={`p-2 rounded-full transition-all duration-150 active:scale-90 active:bg-green-700 cursor-pointer ${
+                callInProgress
+                  ? "text-teal-600 bg-white/5"
+                  : "text-teal-100 hover:bg-white/10 hover:text-white"
+              }`}
+              title={callInProgress ? "Iniciando llamada..." : "Video llamada"}
             >
               <Video className="w-5 h-5" />
             </button>
@@ -1880,7 +1891,14 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, o
       {/* GIF / STICKER PICKER OVERLAY */}
       {showGifPicker && (
         <GifPicker
-          onSelect={(url, type) => handleSendSticker(url, type)}
+          onSelect={(url, type) => {
+            if (type === "emoji") {
+              setInputText(prev => prev + url);
+              setShowGifPicker(false);
+            } else {
+              handleSendSticker(url, type);
+            }
+          }}
           onClose={() => setShowGifPicker(false)}
         />
       )}

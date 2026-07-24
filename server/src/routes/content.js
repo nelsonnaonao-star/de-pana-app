@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { supabaseAdmin } from '../db.js';
+import { getMessaging } from 'firebase-admin/messaging';
 
 const router = Router();
 
@@ -208,7 +209,7 @@ router.post('/stories/:storyId/react', async (req, res) => {
     if (existing) {
       if (existing.reaction_type === reaction) {
         await supabaseAdmin.from('story_reactions').delete().eq('id', existing.id);
-        res.json({ reacted: false });
+        return res.json({ reacted: false });
       } else {
         await supabaseAdmin.from('story_reactions').update({ reaction_type: reaction }).eq('id', existing.id);
         res.json({ reacted: true, reaction });
@@ -216,6 +217,45 @@ router.post('/stories/:storyId/react', async (req, res) => {
     } else {
       await supabaseAdmin.from('story_reactions').insert({ story_id: storyId, user_id: req.userId, reaction_type: reaction });
       res.json({ reacted: true, reaction });
+
+      // Send push notification to story owner (only on new reaction)
+      try {
+        const { data: story } = await supabaseAdmin
+          .from('stories')
+          .select('user_id')
+          .eq('id', storyId)
+          .maybeSingle();
+        if (story && story.user_id !== req.userId) {
+          const { data: profile } = await supabaseAdmin
+            .from('profiles')
+            .select('name')
+            .eq('id', req.userId)
+            .maybeSingle();
+          const reactorName = profile?.name || 'Alguien';
+          const { data: tokens } = await supabaseAdmin
+            .from('push_tokens')
+            .select('token, device')
+            .eq('profile_id', story.user_id);
+          if (tokens?.length) {
+            for (const t of tokens) {
+              if (t.device === 'android-fcm' || t.device === 'android') {
+                try {
+                  await getMessaging().send({
+                    token: t.token,
+                    data: {
+                      title: reactorName,
+                      body: `Reaccionó ${reaction} a tu estado`,
+                      type: 'story_reaction',
+                      storyId,
+                    },
+                    android: { priority: 'high', ttl: 86400000 },
+                  });
+                } catch {}
+              }
+            }
+          }
+        }
+      } catch {}
     }
   } catch (err) {
     console.error('[CONTENT] story react error:', err);
