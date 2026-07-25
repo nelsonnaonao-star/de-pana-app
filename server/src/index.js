@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 
 import { initDb } from './db.js';
 import { authMiddleware } from './middleware/auth.js';
+import { tripwire } from './middleware/tripwire.js';
 import authRoutes from './routes/auth.js';
 import fcmRoutes from './routes/fcm.js';
 import turnRoutes from './routes/turn.js';
@@ -76,20 +77,25 @@ async function main() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // Global rate limiter
+  // Tripwire: anomaly detection (must be before routes, after body parser)
+  app.use(tripwire);
+
+  // Global rate limiter (~1.6 req/s)
   const globalLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000,
-    max: 200,
+    windowMs: 60 * 1000,
+    max: 100,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.' },
   });
 
-  // Strict rate limiter for sensitive endpoints
+  // Strict rate limiter for auth endpoints (brute-force protection)
   const strictLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
-    message: { error: 'Demasiados intentos. Espera 15 minutos.' },
+    windowMs: 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Demasiados intentos de autenticación. Espera 1 minuto.' },
   });
 
   // Upload rate limiter
@@ -103,7 +109,7 @@ async function main() {
   app.use('/api/health', (_req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
-  app.use('/api/auth', globalLimiter, authRoutes);
+  app.use('/api/auth', strictLimiter, authRoutes);
   app.use('/api/rates', globalLimiter, ratesRoutes);
   app.use('/api/turn', globalLimiter, turnRoutes);
   app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);

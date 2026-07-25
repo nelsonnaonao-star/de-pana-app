@@ -359,6 +359,7 @@ export default function PhoneSimulator({
   const [mobileDataUsage, setMobileDataUsage] = useState("Ahorro");
   const [autoDownloadPhotos, setAutoDownloadPhotos] = useState(true);
   const [appFont, setAppFont] = useState<"Clásico" | "Mono" | "Elegante" | "Moderno">("Clásico");
+  const [hasUnseenStates, setHasUnseenStates] = useState(false);
   const [backupDate, setBackupDate] = useState("");
   const [backupChatsCount, setBackupChatsCount] = useState(0);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -1849,7 +1850,7 @@ export default function PhoneSimulator({
 
               {/* STATES TAB — outside main content for stable flex layout */}
               <div className={currentScreen === "states" ? "flex flex-1" : "hidden"}>
-                <StatesPanel onStartChat={handleStartChatFromState} />
+                <StatesPanel onStartChat={handleStartChatFromState} onHasUnseen={(v) => setHasUnseenStates(v)} />
               </div>
 
               {/* Main Tab Content Body */}
@@ -2986,6 +2987,7 @@ export default function PhoneSimulator({
                 setCurrentScreen={setCurrentScreen}
                 isEditingMedia={isEditingMedia}
                 totalUnread={chats.reduce((sum, c) => sum + c.unreadCount, 0)}
+                hasUnseenStates={hasUnseenStates}
               />
 
             </div>

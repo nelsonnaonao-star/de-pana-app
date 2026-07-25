@@ -6,6 +6,7 @@ interface BottomTabBarProps {
   setCurrentScreen: (screen: any) => void;
   isEditingMedia: boolean;
   totalUnread?: number;
+  hasUnseenStates?: boolean;
 }
 
 const TABS = [
@@ -17,7 +18,7 @@ const TABS = [
   { id: "profile", label: "Perfil", icon: CircleUser },
 ];
 
-export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditingMedia, totalUnread = 0 }: BottomTabBarProps) {
+export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditingMedia, totalUnread = 0, hasUnseenStates = false }: BottomTabBarProps) {
   if (isEditingMedia) return null;
 
   return (
@@ -27,6 +28,7 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
           const Icon = tab.icon;
           const isActive = currentScreen === tab.id;
           const showBadge = tab.id === "chats" && totalUnread > 0;
+          const showStatesDot = tab.id === "states" && hasUnseenStates;
           return (
             <button
               key={tab.id}
@@ -43,6 +45,9 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
                   <span className="absolute -top-1 -right-2 bg-[#25D366] text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded-full border border-white z-30 shadow-sm">
                     {totalUnread > 99 ? "99+" : totalUnread}
                   </span>
+                )}
+                {showStatesDot && (
+                  <span className="absolute top-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-[1.5px] border-white z-30 shadow-sm" />
                 )}
               </div>
               <span className={`text-[9px] ${isActive ? "font-bold" : "font-medium"} tracking-tight`}>{tab.label}</span>

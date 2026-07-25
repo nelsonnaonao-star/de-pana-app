@@ -30,6 +30,7 @@ export interface UserState {
 
 interface StatesPanelProps {
   onStartChat: (name: string, avatar: string, initialText: string) => void;
+  onHasUnseen?: (unseen: boolean) => void;
 }
 
 // Premium Background Gradients for Text Statuses
@@ -45,7 +46,7 @@ const GRADIENTS = [
 // Pre-designed sample photos for Status images
 
 
-export default function StatesPanel({ onStartChat }: StatesPanelProps) {
+export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelProps) {
   const { user, profile, contacts } = useSupabase();
 
   // Load stories from API on mount (contacts + own, last 24h)
@@ -94,7 +95,10 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
       }
 
       setMyStories(myList);
-      setUserStates(Object.values(grouped));
+      const groupedList = Object.values(grouped);
+      setUserStates(groupedList);
+      const hasUnseen = (groupedList as any[]).some((u: any) => u.hasUnseen);
+      onHasUnseen?.(hasUnseen);
     }).catch(() => {});
   }, [user?.id]);
 
