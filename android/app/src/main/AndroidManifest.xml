@@ -21,6 +21,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
             android:exported="true"
             android:showWhenLocked="true"

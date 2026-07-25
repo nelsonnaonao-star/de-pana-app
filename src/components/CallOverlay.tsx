@@ -233,7 +233,7 @@ export default function CallOverlay({
           </div>
         </div>
       ) : (
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0a4d52] via-[#0a0a0a] to-black z-0 flex flex-col items-center justify-center p-6">
+        <div className="absolute inset-0 bg-black z-0 flex flex-col items-center justify-center p-6">
           {remoteStream && (
             <video
               ref={remoteVideoCallback}
@@ -273,18 +273,20 @@ export default function CallOverlay({
 
       <div className="relative z-10 p-4 bg-gradient-to-t from-black/90 via-black/75 to-transparent pb-8 space-y-4">
 
-        <div className="flex justify-center gap-3">
-          {EMOJIS.map((emoji) => (
-            <button
-              key={emoji}
-              onClick={() => triggerReaction(emoji)}
-              className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all flex items-center justify-center text-base cursor-pointer"
-              title={`Reacción en tiempo real ${emoji}`}
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
+        {call.type === "video" && (
+          <div className="flex justify-center gap-3">
+            {EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                onClick={() => triggerReaction(emoji)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all flex items-center justify-center text-base cursor-pointer"
+                title={`Reacción en tiempo real ${emoji}`}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        )}
 
         {call.type === "video" && !call.isVideoOff && (
           <div className="space-y-3">

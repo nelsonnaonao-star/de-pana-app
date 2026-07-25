@@ -295,6 +295,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [pollOption2, setPollOption2] = useState("");
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastSyncTimestampRef = useRef<string | null>(null);
   const recordingTimer = useRef<number | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -306,6 +307,15 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const sendingRecordingRef = useRef(false);
+
+  // ── Auto-scroll to bottom on new messages or chat open ──
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   // ── Scroll to highlighted search result ──
   useEffect(() => {
@@ -1751,6 +1761,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             );
           }}
         />
+          <div ref={messagesEndRef} />
       </div>
 
       {/* ATTACHMENT POPUP TRAY */}

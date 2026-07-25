@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Toaster } from "react-hot-toast";
 import { App as CapacitorApp } from "@capacitor/app";
 import { useSupabase } from "./contexts/SupabaseContext";
@@ -47,6 +47,8 @@ function AppContent() {
     };
   }, []);
 
+  if (loading) return null;
+
   return (
     <>
       <Toaster
@@ -58,16 +60,7 @@ function AppContent() {
           success: { style: { background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0" } },
         }}
       />
-      {loading ? (
-        <div className="w-screen h-screen bg-[#070b13] flex items-center justify-center">
-          <div className="text-center space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-teal-400 to-[#0a4d52] mx-auto flex items-center justify-center animate-pulse">
-              <span className="text-xl font-black text-white">R</span>
-            </div>
-            <p className="text-slate-400 text-sm font-medium">Cargando Red On...</p>
-          </div>
-        </div>
-      ) : !user ? (
+      {!user ? (
         <AuthScreen />
       ) : (
         <PhoneSimulator 

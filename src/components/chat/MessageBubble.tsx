@@ -569,7 +569,7 @@ export default React.memo(function MessageBubble({
   return (
     <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-3 py-2.5 shadow-sm text-xs relative cursor-pointer select-none transition-all duration-200 ${
+        className={`max-w-[85%] rounded-2xl px-3 py-2.5 shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
           isMe ? activeMeBubble.css : activeThemBubble.css
         }`}
         onClick={() => setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id)}

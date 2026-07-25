@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { SplashScreen } from "@capacitor/splash-screen";
 import { useDebounce } from "../hooks/useDebounce";
 import CachedImage from "./CachedImage";
 import ChatListSkeleton from "./ChatListSkeleton";
@@ -61,7 +62,7 @@ export default function PhoneSimulator({
   onBackPress,
   onSetShouldExit,
 }: PhoneSimulatorProps) {
-  const { user, profile, contacts: appContacts, chats: supabaseChats, refreshChats, refreshContacts, refreshProfile, logout } = useSupabase();
+  const { user, profile, contacts: appContacts, chats: supabaseChats, loading, refreshChats, refreshContacts, refreshProfile, logout } = useSupabase();
 
   // Deduplicate contacts by contact_user_id (prefer entry with phone) or by name+phone
   const dedupedContacts = useMemo(() => {
@@ -117,6 +118,21 @@ export default function PhoneSimulator({
       });
     }
   }, [user, profile]);
+
+  // Hide native splash only after Supabase session resolves and DOM paints
+  useEffect(() => {
+    if (!loading) {
+      requestAnimationFrame(() => {
+        SplashScreen.hide().catch(() => {});
+      });
+    }
+  }, [loading]);
+
+  // Fallback: force-hide splash after 10s max (problematic devices)
+  useEffect(() => {
+    const t = setTimeout(() => SplashScreen.hide().catch(() => {}), 10000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Android back button handler — registered ONCE, reads state from refs (no race condition)
   useEffect(() => {

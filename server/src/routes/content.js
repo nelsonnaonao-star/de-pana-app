@@ -54,13 +54,13 @@ router.get('/stories', async (req, res) => {
 
     const { data: contacts } = await supabaseAdmin
       .from('contacts')
-      .select('contact_id')
+      .select('contact_user_id')
       .eq('user_id', req.userId);
 
     const visibleIds = [req.userId];
     if (contacts) {
       for (const c of contacts) {
-        if (!visibleIds.includes(c.contact_id)) visibleIds.push(c.contact_id);
+        if (c.contact_user_id && !visibleIds.includes(c.contact_user_id)) visibleIds.push(c.contact_user_id);
       }
     }
 
