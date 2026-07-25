@@ -124,6 +124,14 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
   const [viewersData, setViewersData] = useState<{ viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null>(null);
   const [showViewersSheet, setShowViewersSheet] = useState(false);
   const [myCurrentReaction, setMyCurrentReaction] = useState<string | null>(null);
+  const [reactionFeedback, setReactionFeedback] = useState<string | null>(null);
+
+  // Auto-clear reaction feedback after 1.2s
+  useEffect(() => {
+    if (!reactionFeedback) return;
+    const t = setTimeout(() => setReactionFeedback(null), 1200);
+    return () => clearTimeout(t);
+  }, [reactionFeedback]);
 
   // Editor states (Text creator)
   const [newTextContent, setNewTextContent] = useState<string>("");
@@ -776,6 +784,16 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
             )}
           </div>
 
+          {/* FLOATING REACTION FEEDBACK */}
+          {reactionFeedback && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30 animate-fade-in">
+              <div className="bg-black/60 backdrop-blur-md rounded-3xl px-6 py-3 flex items-center gap-3 border border-white/15 shadow-2xl">
+                <span className="text-3xl">{reactionFeedback}</span>
+                <span className="text-white text-sm font-bold tracking-tight">Reaccionaste</span>
+              </div>
+            </div>
+          )}
+
           {/* BOTTOM BAR: PRIVATE REPLY + REACTIONS (non-owner) or VIEWS COUNT (owner) */}
           {!activeUserStates.isMe ? (
             <div className="p-3 bg-black/85 border-t border-white/10 z-20 flex flex-col gap-2">
@@ -788,10 +806,10 @@ export default function StatesPanel({ onStartChat }: StatesPanelProps) {
                       toggleStoryReaction(activeUserStates.stories[activeStoryIdx].id, emoji).then((res) => {
                         if (res.reacted) {
                           setMyCurrentReaction(emoji);
-                          toast.success(`Reaccionaste ${emoji}`, { duration: 1500, position: "top-center" });
+                          setReactionFeedback(emoji);
                         } else {
                           setMyCurrentReaction(null);
-                          toast("Reacción eliminada", { duration: 1000, position: "top-center" });
+                          setReactionFeedback(emoji);
                         }
                       }).catch(() => {});
                     }}

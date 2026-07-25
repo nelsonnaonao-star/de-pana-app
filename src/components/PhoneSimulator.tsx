@@ -28,6 +28,7 @@ import CallLog from "./CallLog";
 import BottomTabBar from "./phone/BottomTabBar";
 import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
+import { getAllUserData } from "../services/server-api";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { clearForMe, sendMessage as apiSendMessage } from "../services/messages";
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
@@ -614,29 +615,46 @@ export default function PhoneSimulator({
     })();
   }, [user?.id]);
 
-  const handleCloudBackup = () => {
+  const handleCloudBackup = async () => {
+    if (!user) return;
     setIsBackingUp(true);
-    setTimeout(() => {
+    try {
+      const { count: chatCount, error: chatErr } = await supabase
+        .from("chats")
+        .select("*", { count: "exact", head: true })
+        .or(`profile_id.eq.${user.id},admin_id.eq.${user.id}`);
+      const { count: msgCount, error: msgErr } = await supabase
+        .from("messages")
+        .select("*", { count: "exact", head: true })
+        .eq("sender_id", user.id);
+      const { count: contactCount, error: contactErr } = await supabase
+        .from("contacts")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id);
+      if (chatErr || msgErr || contactErr) throw new Error("Error al verificar datos");
       const now = new Date();
-      const formattedDate = `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()}`;
+      const formattedDate = `${now.getDate()}/${now.getMonth() + 1}/${now.getFullYear()} ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`;
       setBackupDate(formattedDate);
-      setBackupChatsCount(chats.length);
-      setIsBackingUp(false);
-      showToast("Copia de seguridad guardada con éxito ☁️");
-    }, 1500);
+      setBackupChatsCount(chatCount ?? 0);
+      showToast(`☁️ ${chatCount} chats, ${msgCount} mensajes, ${contactCount} contactos — todo en la nube`);
+    } catch (e) {
+      showToast("No se pudo verificar la copia");
+    }
+    setIsBackingUp(false);
   };
 
-  const handleCloudRestore = () => {
+  const handleCloudRestore = async () => {
+    if (!user) return;
     setIsRestoring(true);
-    setTimeout(async () => {
-      if (user) {
-        try {
-          await refreshChats();
-        } catch {}
-      }
-      setIsRestoring(false);
-      showToast("Mensajes restaurados con éxito 🔄");
-    }, 1500);
+    try {
+      const data = await getAllUserData(user.id);
+      await refreshChats();
+      const total = (data.chats?.length ?? 0) + (data.contacts?.length ?? 0);
+      showToast(`🔄 ${total} elementos restaurados desde la nube`);
+    } catch {
+      showToast("No se pudo restaurar — revisa tu conexión");
+    }
+    setIsRestoring(false);
   };
 
   const handleOpenSupportChat = async () => {
@@ -2397,7 +2415,7 @@ export default function PhoneSimulator({
                               ) : (
                                 <>
                                   <span className="text-slate-800 font-bold">Restaurar desde copia</span>
-                                  <span className="text-[7.5px] text-slate-400 font-normal">Reemplaza chats locales con la nube</span>
+                                  <span className="text-[7.5px] text-slate-400 font-normal">Exporta todos tus datos como JSON</span>
                                 </>
                               )}
                             </button>
