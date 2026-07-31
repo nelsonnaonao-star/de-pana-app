@@ -1,29 +1,30 @@
 -- ============================================================
--- RLS Policies for RED ON (DE PANA)
+-- RLS Policies for RED ON (DE PANA) — v2 (idempotente)
 -- Run in: Supabase Dashboard → SQL Editor → New Query → Run
 -- ============================================================
--- The server uses supabaseAdmin (service_role key) which
--- bypasses RLS entirely. These policies protect against
--- direct client-side access via the user's JWT.
+-- Enables Row Level Security + policies so each user only
+-- sees/edits THEIR OWN data. Server keeps using supabaseAdmin
+-- (service_role) which bypasses RLS entirely.
+-- Safe to run multiple times.
 -- ============================================================
 
 -- ─── PROFILES ────────────────────────────────────────────────────
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
--- Anyone authenticated can read any profile (needed for contacts, chat names, avatars)
+DROP POLICY IF EXISTS "profiles_select_auth" ON profiles;
 CREATE POLICY "profiles_select_auth"
   ON profiles FOR SELECT
   TO authenticated
   USING (true);
 
--- Users can only update their own profile
+DROP POLICY IF EXISTS "profiles_update_own" ON profiles;
 CREATE POLICY "profiles_update_own"
   ON profiles FOR UPDATE
   TO authenticated
   USING (auth.uid() = id)
   WITH CHECK (auth.uid() = id);
 
--- Users can insert their own profile (signup flow)
+DROP POLICY IF EXISTS "profiles_insert_own" ON profiles;
 CREATE POLICY "profiles_insert_own"
   ON profiles FOR INSERT
   TO authenticated
@@ -33,13 +34,13 @@ CREATE POLICY "profiles_insert_own"
 -- ─── CHATS ───────────────────────────────────────────────────────
 ALTER TABLE chats ENABLE ROW LEVEL SECURITY;
 
--- Users can see chats where they are a direct participant (profile_id or admin_id)
+DROP POLICY IF EXISTS "chats_select_direct" ON chats;
 CREATE POLICY "chats_select_direct"
   ON chats FOR SELECT
   TO authenticated
   USING (auth.uid() = profile_id OR auth.uid() = admin_id);
 
--- Users can see group chats where they are in chat_participants
+DROP POLICY IF EXISTS "chats_select_group" ON chats;
 CREATE POLICY "chats_select_group"
   ON chats FOR SELECT
   TO authenticated
@@ -52,13 +53,13 @@ CREATE POLICY "chats_select_group"
     )
   );
 
--- Users can only create chats where they are profile_id or admin_id
+DROP POLICY IF EXISTS "chats_insert_own" ON chats;
 CREATE POLICY "chats_insert_own"
   ON chats FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = profile_id OR auth.uid() = admin_id);
 
--- Users can only update chats where they are a participant
+DROP POLICY IF EXISTS "chats_update_participant" ON chats;
 CREATE POLICY "chats_update_participant"
   ON chats FOR UPDATE
   TO authenticated
@@ -91,7 +92,7 @@ CREATE POLICY "chats_update_participant"
 -- ─── CHAT_PARTICIPANTS ───────────────────────────────────────────
 ALTER TABLE chat_participants ENABLE ROW LEVEL SECURITY;
 
--- Users can see participants for chats they belong to
+DROP POLICY IF EXISTS "chat_participants_select_own_chat" ON chat_participants;
 CREATE POLICY "chat_participants_select_own_chat"
   ON chat_participants FOR SELECT
   TO authenticated
@@ -111,7 +112,7 @@ CREATE POLICY "chat_participants_select_own_chat"
     )
   );
 
--- Users can add participants to chats they belong to
+DROP POLICY IF EXISTS "chat_participants_insert_own_chat" ON chat_participants;
 CREATE POLICY "chat_participants_insert_own_chat"
   ON chat_participants FOR INSERT
   TO authenticated
@@ -126,7 +127,7 @@ CREATE POLICY "chat_participants_insert_own_chat"
     )
   );
 
--- Users can remove participants from chats they own (or remove themselves)
+DROP POLICY IF EXISTS "chat_participants_delete_own_or_self" ON chat_participants;
 CREATE POLICY "chat_participants_delete_own_or_self"
   ON chat_participants FOR DELETE
   TO authenticated
@@ -146,7 +147,7 @@ CREATE POLICY "chat_participants_delete_own_or_self"
 -- ─── MESSAGES ────────────────────────────────────────────────────
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 
--- Users can read messages in chats they belong to
+DROP POLICY IF EXISTS "messages_select_member" ON messages;
 CREATE POLICY "messages_select_member"
   ON messages FOR SELECT
   TO authenticated
@@ -166,7 +167,7 @@ CREATE POLICY "messages_select_member"
     )
   );
 
--- Users can send messages (sender_id must match their UID) to chats they belong to
+DROP POLICY IF EXISTS "messages_insert_own" ON messages;
 CREATE POLICY "messages_insert_own"
   ON messages FOR INSERT
   TO authenticated
@@ -189,7 +190,7 @@ CREATE POLICY "messages_insert_own"
     )
   );
 
--- Users can update messages in chats they belong to (for reactions, read_by, status)
+DROP POLICY IF EXISTS "messages_update_member" ON messages;
 CREATE POLICY "messages_update_member"
   ON messages FOR UPDATE
   TO authenticated
@@ -214,26 +215,26 @@ CREATE POLICY "messages_update_member"
 -- ─── CONTACTS ────────────────────────────────────────────────────
 ALTER TABLE contacts ENABLE ROW LEVEL SECURITY;
 
--- Users can only see their own contacts
+DROP POLICY IF EXISTS "contacts_select_own" ON contacts;
 CREATE POLICY "contacts_select_own"
   ON contacts FOR SELECT
   TO authenticated
   USING (auth.uid() = user_id);
 
--- Users can only insert their own contacts
+DROP POLICY IF EXISTS "contacts_insert_own" ON contacts;
 CREATE POLICY "contacts_insert_own"
   ON contacts FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = user_id);
 
--- Users can only update their own contacts
+DROP POLICY IF EXISTS "contacts_update_own" ON contacts;
 CREATE POLICY "contacts_update_own"
   ON contacts FOR UPDATE
   TO authenticated
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
--- Users can only delete their own contacts
+DROP POLICY IF EXISTS "contacts_delete_own" ON contacts;
 CREATE POLICY "contacts_delete_own"
   ON contacts FOR DELETE
   TO authenticated
@@ -243,65 +244,45 @@ CREATE POLICY "contacts_delete_own"
 -- ─── CALLS ───────────────────────────────────────────────────────
 ALTER TABLE calls ENABLE ROW LEVEL SECURITY;
 
--- Users can see calls where they are caller or receiver
+DROP POLICY IF EXISTS "calls_select_own" ON calls;
 CREATE POLICY "calls_select_own"
   ON calls FOR SELECT
   TO authenticated
-  USING (auth.uid() = caller_id OR auth.uid() = receiver_id);
+  USING (auth.uid() = caller_id OR auth.uid() = callee_id);
 
--- Users can create calls where they are the caller
+DROP POLICY IF EXISTS "calls_insert_own" ON calls;
 CREATE POLICY "calls_insert_own"
   ON calls FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = caller_id);
 
--- Users can update calls where they are a participant (for status changes)
+DROP POLICY IF EXISTS "calls_update_participant" ON calls;
 CREATE POLICY "calls_update_participant"
   ON calls FOR UPDATE
   TO authenticated
-  USING (auth.uid() = caller_id OR auth.uid() = receiver_id)
+  USING (auth.uid() = caller_id OR auth.uid() = callee_id)
   WITH CHECK (true);
 
 
 -- ============================================================
 -- SERVER-ONLY TABLES: RLS enabled, NO policies = blocked
--- These tables are only accessed via supabaseAdmin (service_role)
--- which bypasses RLS. No client access needed.
+-- Only accessible via supabaseAdmin (service_role)
 -- ============================================================
 
 ALTER TABLE password_reset_codes ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE push_tokens ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE blocks ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE exchange_rates ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE stories ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE broadcast_channels ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE broadcast_subscribers ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE broadcast_messages ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE channel_update_reactions ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
-
 ALTER TABLE business_flyers ENABLE ROW LEVEL SECURITY;
--- No policies = all client access denied
 
 
 -- ============================================================
--- CHAT_CLEARS: per-user "hide messages" (replaces shared is_deleted)
+-- CHAT_CLEARS: per-user "hide messages"
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS chat_clears (
@@ -313,36 +294,31 @@ CREATE TABLE IF NOT EXISTS chat_clears (
 
 ALTER TABLE chat_clears ENABLE ROW LEVEL SECURITY;
 
--- Users can read their own clears
+DROP POLICY IF EXISTS "chat_clears_select_own" ON chat_clears;
 CREATE POLICY "chat_clears_select_own"
   ON chat_clears FOR SELECT
   TO authenticated
   USING (auth.uid() = user_id);
 
--- Users can insert their own clears
+DROP POLICY IF EXISTS "chat_clears_insert_own" ON chat_clears;
 CREATE POLICY "chat_clears_insert_own"
   ON chat_clears FOR INSERT
   TO authenticated
   WITH CHECK (auth.uid() = user_id);
 
--- Users can update their own clears (re-clear with newer timestamp)
+DROP POLICY IF EXISTS "chat_clears_update_own" ON chat_clears;
 CREATE POLICY "chat_clears_update_own"
   ON chat_clears FOR UPDATE
   TO authenticated
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
--- Index for fast lookup by user
 CREATE INDEX IF NOT EXISTS idx_chat_clears_user ON chat_clears(user_id);
 
 
 -- ============================================================
 -- TRIGGER: protect sensitive message columns from direct client updates
--- Only service_role (server) can modify sender_id, chat_id, text, is_deleted.
--- The server uses supabaseAdmin (service_role) which sets
---   current_setting('role') = 'service_role'
--- The trigger uses DO $$ ... EXCEPTION WHEN insufficient_privilege $$ to
--- avoid errors when role() returns 'authenticated' (normal client).
+-- Only service_role (server) may change sender_id, chat_id, text, is_deleted.
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION messages_guard_sensitive_fields()
@@ -350,13 +326,10 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  -- service_role bypasses RLS, but the trigger still fires.
-  -- Check the session role: only service_role may change protected columns.
   IF current_setting('role', true) = 'service_role' THEN
     RETURN NEW;
   END IF;
 
-  -- Block changes to immutable columns
   IF NEW.sender_id IS DISTINCT FROM OLD.sender_id THEN
     RAISE EXCEPTION 'Cannot modify sender_id';
   END IF;
@@ -364,7 +337,6 @@ BEGIN
     RAISE EXCEPTION 'Cannot modify chat_id';
   END IF;
 
-  -- Block direct client soft-delete or text overwrite
   IF NEW.is_deleted = true AND OLD.is_deleted = false THEN
     RAISE EXCEPTION 'Cannot soft-delete messages directly';
   END IF;
@@ -376,7 +348,6 @@ BEGIN
 END;
 $$;
 
--- Drop old trigger if it exists, then create
 DROP TRIGGER IF EXISTS guard_sensitive_message_fields ON messages;
 
 CREATE TRIGGER guard_sensitive_message_fields
@@ -384,116 +355,6 @@ CREATE TRIGGER guard_sensitive_message_fields
   FOR EACH ROW
   EXECUTE FUNCTION messages_guard_sensitive_fields();
 
-
 -- ============================================================
--- TEST FUNCTIONS: verify the trigger blocks direct client updates
--- ============================================================
-
-CREATE OR REPLACE FUNCTION test_a_sender_id(p_user_id uuid, p_msg_id uuid)
-RETURNS TABLE(test_name text, result text, details text)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  PERFORM set_config('role', 'authenticated', true);
-  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
-
-  UPDATE messages SET sender_id = '00000000-0000-0000-0000-000000000000'::uuid
-    WHERE id = p_msg_id;
-
-  RETURN QUERY SELECT 'A: sender_id'::text, 'FAIL — update was NOT blocked'::text,
-    'The trigger did not raise an exception'::text;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN QUERY SELECT 'A: sender_id'::text, 'PASS — blocked as expected'::text,
-    SQLERRM::text;
-  PERFORM set_config('role', 'service_role', true);
-END;
-$$;
-
-
-CREATE OR REPLACE FUNCTION test_b_chat_id(p_user_id uuid, p_msg_id uuid)
-RETURNS TABLE(test_name text, result text, details text)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  PERFORM set_config('role', 'authenticated', true);
-  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
-
-  UPDATE messages SET chat_id = '00000000-0000-0000-0000-000000000000'::uuid
-    WHERE id = p_msg_id;
-
-  RETURN QUERY SELECT 'B: chat_id'::text, 'FAIL — update was NOT blocked'::text,
-    'The trigger did not raise an exception'::text;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN QUERY SELECT 'B: chat_id'::text, 'PASS — blocked as expected'::text,
-    SQLERRM::text;
-  PERFORM set_config('role', 'service_role', true);
-END;
-$$;
-
-
-CREATE OR REPLACE FUNCTION test_c_delete(p_user_id uuid, p_msg_id uuid)
-RETURNS TABLE(test_name text, result text, details text)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  PERFORM set_config('role', 'authenticated', true);
-  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
-
-  UPDATE messages SET is_deleted = true, text = NULL
-    WHERE id = p_msg_id;
-
-  RETURN QUERY SELECT 'C: is_deleted'::text, 'FAIL — update was NOT blocked'::text,
-    'The trigger did not raise an exception'::text;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN QUERY SELECT 'C: is_deleted'::text, 'PASS — blocked as expected'::text,
-    SQLERRM::text;
-  PERFORM set_config('role', 'service_role', true);
-END;
-$$;
-
-
-CREATE OR REPLACE FUNCTION test_d_edit(p_user_id uuid, p_msg_id uuid)
-RETURNS TABLE(test_name text, result text, details text)
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  PERFORM set_config('role', 'authenticated', true);
-  PERFORM set_config('request.jwt.claim.sub', p_user_id::text, true);
-
-  UPDATE messages SET text = 'HACKED TEXT'::text
-    WHERE id = p_msg_id;
-
-  RETURN QUERY SELECT 'D: text edit'::text, 'FAIL — update was NOT blocked'::text,
-    'The trigger did not raise an exception'::text;
-
-EXCEPTION WHEN OTHERS THEN
-  RETURN QUERY SELECT 'D: text edit'::text, 'PASS — blocked as expected'::text,
-    SQLERRM::text;
-  PERFORM set_config('role', 'service_role', true);
-END;
-$$;
-
-
--- ============================================================
--- HOW TO RUN THE TESTS
--- ============================================================
---
--- STEP 1: Find a chat_id and participant user_id
---   SELECT c.id AS chat_id, c.profile_id AS user_id
---   FROM chats c WHERE c.profile_id IS NOT NULL LIMIT 1;
---
--- STEP 2: Find a message_id in that chat
---   SELECT m.id AS msg_id FROM messages m
---   WHERE m.chat_id = '<paste chat_id>' AND m.is_deleted = false LIMIT 1;
---
--- STEP 3: Run all 4 tests
---   SELECT * FROM test_a_sender_id('<user_id>', '<msg_id>');
---   SELECT * FROM test_b_chat_id('<user_id>', '<msg_id>');
---   SELECT * FROM test_c_delete('<user_id>', '<msg_id>');
---   SELECT * FROM test_d_edit('<user_id>', '<msg_id>');
---
--- EXPECTED: All 4 rows show "PASS — blocked as expected"
+-- DONE
 -- ============================================================

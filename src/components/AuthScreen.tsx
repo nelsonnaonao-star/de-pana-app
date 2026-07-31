@@ -1,8 +1,11 @@
 import React, { useState } from "react";
 import { login, register, resetPassword } from "../services/auth";
+import { normalizePhone } from "../utils/phone";
 import {
   Sparkles, Lock, User, Phone, Mail, AtSign, Eye, EyeOff, Smartphone, CheckCircle2, ArrowLeft, Send,
 } from "lucide-react";
+
+const PHONE_RE = /^\+?[0-9]{0,15}$/;
 
 export default function AuthScreen() {
   const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
@@ -141,9 +144,11 @@ export default function AuthScreen() {
                       <input
                         type="tel"
                         required
-                        placeholder="+58 412 1234567"
+                        placeholder="+573001234567"
                         value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
+                        onChange={(e) => {
+                          if (PHONE_RE.test(e.target.value)) setPhone(normalizePhone(e.target.value));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 text-slate-100 text-xs px-4 py-3 rounded-xl outline-none focus:border-teal-500/50 transition-colors"
                       />
                     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Filesystem, Directory } from "@capacitor/filesystem";
 import { Capacitor } from "@capacitor/core";
 
@@ -11,6 +11,15 @@ interface CachedImageProps {
   onLoad?: () => void;
   onError?: () => void;
   onClick?: () => void;
+}
+
+function getInitials(name: string): string {
+  return name
+    .split(" ")
+    .map(w => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
 }
 
 function hashUrl(url: string): string {
@@ -45,9 +54,20 @@ async function getCachedFile(fileName: string): Promise<string | null> {
   }
 }
 
+async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 async function saveToCache(fileName: string, url: string): Promise<void> {
   try {
-    const resp = await fetch(url);
+    const resp = await fetchWithTimeout(url);
     if (!resp.ok) return;
     const blob = await resp.blob();
     const reader = new FileReader();
@@ -81,11 +101,15 @@ export default function CachedImage({
   onClick,
 }: CachedImageProps) {
   const [displaySrc, setDisplaySrc] = useState<string | null>(null);
+  const [hasError, setHasError] = useState(false);
   const isCapacitor = Capacitor.isNativePlatform();
   const imgRef = useRef<HTMLImageElement>(null);
 
+  const initials = useMemo(() => alt ? getInitials(alt) : "", [alt]);
+
   useEffect(() => {
     if (!src) return;
+    setHasError(false);
 
     if (!isCapacitor) {
       setDisplaySrc(src);
@@ -112,7 +136,23 @@ export default function CachedImage({
     return () => { cancelled = true; };
   }, [src, isCapacitor]);
 
+  const handleError = () => {
+    setHasError(true);
+    setDisplaySrc(null);
+    onError?.();
+  };
+
   if (!displaySrc) {
+    if (hasError && initials) {
+      return (
+        <div
+          className={`${className} bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center`}
+          style={style}
+        >
+          <span className="text-white font-bold text-xs">{initials}</span>
+        </div>
+      );
+    }
     return (
       <div
         className={`${className} bg-slate-200 animate-pulse`}
@@ -130,7 +170,7 @@ export default function CachedImage({
       style={style}
       loading={loading}
       onLoad={onLoad}
-      onError={onError}
+      onError={handleError}
       onClick={onClick}
     />
   );

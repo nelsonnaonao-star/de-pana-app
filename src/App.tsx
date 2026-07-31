@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { Toaster } from "react-hot-toast";
 import { App as CapacitorApp } from "@capacitor/app";
 import { useSupabase } from "./contexts/SupabaseContext";
@@ -6,11 +6,13 @@ import AuthScreen from "./components/AuthScreen";
 import PhoneSimulator from "./components/PhoneSimulator";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { initSentryCapacitor } from "./lib/sentry";
+import { db } from "./services/database/DatabaseService";
 
 initSentryCapacitor();
 
 function AppContent() {
   const { user, loading } = useSupabase();
+  const [dbReady, setDbReady] = useState(false);
   const backHandlerRef = useRef<(() => boolean) | null>(null);
   const shouldExitOnBackRef = useRef(false);
 
@@ -21,6 +23,23 @@ function AppContent() {
 
   const setShouldExitOnBack = useCallback((shouldExit: boolean) => {
     shouldExitOnBackRef.current = shouldExit;
+  }, []);
+
+  useEffect(() => {
+    // Safety timeout: don't block UI if SQLite hangs (e.g. on web)
+    const t = setTimeout(() => {
+      console.warn("[APP] db.initialize() timed out — forcing dbReady");
+      setDbReady(true);
+    }, 3000);
+
+    db.initialize().then(() => {
+      clearTimeout(t);
+      db.cleanupOldData();
+    }).finally(() => {
+      setDbReady(true);
+    });
+
+    return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
@@ -62,12 +81,12 @@ function AppContent() {
       />
       {!user ? (
         <AuthScreen />
-      ) : (
+      ) : dbReady ? (
         <PhoneSimulator 
           onBackPress={registerBackHandler} 
           onSetShouldExit={setShouldExitOnBack}
         />
-      )}
+      ) : null}
     </>
   );
 }

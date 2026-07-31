@@ -9,6 +9,16 @@ self.addEventListener("push", (event) => {
     const badge = data.badge || "/vite.svg";
     const tag = data.data?.chatId || "redon-message";
 
+    // call_dismissed: close any open call notification silently
+    if (data.data?.type === "call_dismissed" && data.data?.callId) {
+      event.waitUntil(
+        self.registration.getNotifications({ tag: data.data.chatId || data.data.callId }).then((notifs) => {
+          notifs.forEach((n) => n.close());
+        })
+      );
+      return;
+    }
+
     event.waitUntil(
       self.registration.showNotification(title, {
         body,

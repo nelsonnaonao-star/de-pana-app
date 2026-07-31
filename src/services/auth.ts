@@ -30,31 +30,32 @@ async function trySignIn(email: string, password: string) {
 
 export async function login(identifier: string, password: string) {
   const input = identifier.toLowerCase().trim().replace(/^@/, "");
-  const cleanPhone = input.replace(/[\s+()\-]/g, "");
+  const cleanDigits = input.replace(/\D/g, "");
 
   console.debug("[LOGIN] Buscando perfil para:", input);
 
-  const { data: profiles, error: searchErr } = await supabase
-    .from("profiles")
-    .select("id, username, phone_number, name, avatar_url, bio")
-    .or(`username.eq.${input},phone_number.eq.${cleanPhone}`)
-    .limit(1);
+  let profile = null;
 
-  if (searchErr) {
-    console.error("[LOGIN] Error búsqueda:", searchErr);
-    throw new Error("Error al buscar usuario");
-  }
-
-  let profile = profiles?.[0] || null;
-
-  if (!profile && cleanPhone.length >= 4) {
-    console.debug("[LOGIN] Fallback ILIKE para:", cleanPhone);
-    const { data: all } = await supabase
+  if (cleanDigits.length >= 4) {
+    const { data: profiles } = await supabase
       .from("profiles")
       .select("id, username, phone_number, name, avatar_url, bio")
-      .ilike("phone_number", `%${cleanPhone}%`)
-      .limit(20);
-    profile = all?.find((p) => p.phone_number && p.phone_number.replace(/[\s+()\-]/g, "").includes(cleanPhone)) || null;
+      .or(`username.eq.${input},phone_digits.eq.${cleanDigits}`)
+      .limit(1);
+
+    if (profiles && profiles.length > 0) {
+      profile = profiles[0];
+    }
+
+    if (!profile) {
+      const last7 = cleanDigits.slice(-7);
+      const { data: fallback } = await supabase
+        .from("profiles")
+        .select("id, username, phone_number, name, avatar_url, bio")
+        .like("phone_digits", `%${last7}`)
+        .limit(1);
+      if (fallback && fallback.length > 0) profile = fallback[0];
+    }
   }
 
   if (!profile) {
@@ -126,7 +127,8 @@ export async function register(
   realEmail?: string
 ) {
   const cleanUsername = username.replace(/^@/, "").toLowerCase().trim();
-  const cleanPhone = phone.trim();
+  const cleanDigits = phone.replace(/\D/g, "");
+  const cleanPhone = cleanDigits ? "+" + cleanDigits : "";
   const cleanEmail = realEmail?.trim().toLowerCase() || "";
 
   if (!/^[a-z0-9_.-]+$/.test(cleanUsername)) {
@@ -137,7 +139,7 @@ export async function register(
   const existing = await supabase
     .from("profiles")
     .select("id")
-    .or(`username.eq.${cleanUsername},phone_number.eq.${cleanPhone}`)
+    .or(`username.eq.${cleanUsername},phone_digits.eq.${cleanDigits}`)
     .maybeSingle();
 
   if (existing.data) throw new Error("El usuario o teléfono ya está registrado");
@@ -200,14 +202,18 @@ export async function register(
 
 export async function resetPassword(identifier: string) {
   const input = identifier.toLowerCase().trim().replace(/^@/, "");
+  const cleanDigits = input.replace(/\D/g, "");
   let email = `${input}@redon.app`;
   let userFound = false;
 
   try {
+    const query = input.length > 0 && cleanDigits !== input
+      ? `username.eq.${input},phone_digits.eq.${cleanDigits}`
+      : `username.eq.${input}`;
     const { data: profile } = await supabase
       .from("profiles")
       .select("username, real_email")
-      .or(`username.eq.${input},phone_number.eq.${input}`)
+      .or(query)
       .single();
 
     if (profile) {

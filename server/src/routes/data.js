@@ -274,6 +274,31 @@ router.post('/add-contact', async (req, res) => {
   }
 });
 
+router.delete('/contacts/:contactId', async (req, res) => {
+  try {
+    const { contactId } = req.params;
+    if (!contactId) return res.status(400).json({ error: 'contactId requerido' });
+
+    const { data: contact, error: contactError } = await supabaseAdmin
+      .from('contacts')
+      .select('user_id')
+      .eq('id', contactId)
+      .maybeSingle();
+    if (contactError || !contact) return res.status(404).json({ error: 'Contacto no encontrado' });
+
+    if (req.userId !== contact.user_id && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado para eliminar este contacto' });
+    }
+
+    await supabaseAdmin.from('contacts').delete().eq('id', contactId);
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DATA] delete contact error:', err);
+    res.status(500).json({ error: 'Error al eliminar contacto' });
+  }
+});
+
 router.delete('/chats/:chatId', async (req, res) => {
   try {
     const { chatId } = req.params;

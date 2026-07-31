@@ -105,6 +105,7 @@ export async function createFlyer(flyer: {
   price?: string;
   music_url?: string;
   music_name?: string;
+  contact_phone?: string;
 }) {
   return post<any>(`${API}/flyers`, flyer);
 }

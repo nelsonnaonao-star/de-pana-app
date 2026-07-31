@@ -205,9 +205,9 @@ router.post('/webhook', async (req, res) => {
     return res.status(401).json({ error: 'invalid webhook secret' });
   }
 
-  const { type, table, record } = req.body;
+  const { type, table, record, old_record } = req.body;
 
-  if (type !== 'INSERT' || !record) {
+  if (!record) {
     return res.status(200).json({ ok: true, ignored: 'invalid shape' });
   }
 
@@ -215,7 +215,7 @@ router.post('/webhook', async (req, res) => {
     return res.status(200).json({ ok: false, error: 'Supabase not configured' });
   }
 
-  if (table === 'messages') {
+  if (type === 'INSERT' && table === 'messages') {
     const { chat_id, sender_id, text } = record;
 
     if (!chat_id || !sender_id) {
@@ -318,12 +318,141 @@ router.post('/webhook', async (req, res) => {
       // ignore
     }
 
-    // Push is handled by sendPushToChat() in messages.js (with Quick Reply support)
-    // Webhook only handles auto-reply and block checks — skip duplicate push
-    return res.json({ ok: true, note: 'push handled by sendPushToChat' });
+    // Send push notification to all participants
+    try {
+      const { data: chat } = await supabase
+        .from('chats')
+        .select('is_group, name')
+        .eq('id', chat_id)
+        .single();
+      const isGroup = chat?.is_group;
+      const chatName = chat?.name || 'RED ON';
+
+      let receiverIds = [];
+      if (isGroup) {
+        const { data: participants } = await supabase
+          .from('chat_participants')
+          .select('profile_id')
+          .eq('chat_id', chat_id)
+          .neq('profile_id', sender_id);
+        receiverIds = (participants || []).map(p => p.profile_id);
+      } else if (receiverId) {
+        receiverIds = [receiverId];
+      }
+
+      const title = isGroup ? chatName : (senderName || 'RED ON');
+      const body = showPreview ? (text || 'Nuevo mensaje') : 'Nuevo mensaje';
+
+      for (const rid of receiverIds) {
+        try {
+          const { data: blockCheck } = await supabase
+            .from('blocks')
+            .select('id')
+            .eq('blocker_id', rid)
+            .eq('blocked_id', sender_id)
+            .maybeSingle();
+          if (blockCheck) continue;
+        } catch {}
+
+        let showPreviewForUser = showPreview;
+        if (isGroup) {
+          try {
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('notif_config')
+              .eq('id', rid)
+              .single();
+            if (profile?.notif_config) {
+              showPreviewForUser = profile.notif_config.preview !== false;
+            }
+          } catch {}
+        }
+
+        const { data: tokens } = await supabase
+          .from('push_tokens')
+          .select('token, device')
+          .eq('profile_id', rid);
+        if (!tokens?.length) continue;
+
+        for (const t of tokens) {
+          if (t.device === 'android-fcm' || t.device === 'android') {
+            try {
+              await getMessaging().send({
+                token: t.token,
+                data: {
+                  title,
+                  body: showPreviewForUser ? (text || 'Nuevo mensaje') : 'Nuevo mensaje',
+                  type: 'message',
+                  chatId: chat_id,
+                  contactId: sender_id,
+                },
+                android: { priority: 'high', ttl: 86400000 },
+              });
+            } catch (e) {
+              console.error('[FCM-WEBHOOK] send error:', e.message);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[FCM-WEBHOOK] push send failed:', err.message);
+    }
+
+    return res.json({ ok: true });
 
   } else if (table === 'calls') {
     const { id: recordId, chat_id, caller_id, callee_id, call_type } = record;
+
+    if (type === 'UPDATE') {
+      const oldStatus = old_record?.status;
+      const newStatus = record?.status;
+      const endedStatuses = ['ended', 'missed'];
+
+      if (oldStatus === 'ringing' && endedStatuses.includes(newStatus) && callee_id) {
+        console.log(`[FCM-WEBHOOK] Call ${recordId} dismissed (${newStatus}) — notifying callee ${callee_id}`);
+        const tokens = await getTokens(callee_id);
+        const results = { web: 0, android: 0, errors: 0 };
+        for (const t of tokens) {
+          if (t.device === 'android-fcm' || t.device === 'android') {
+            const admin = await initFirebaseAdmin();
+            if (admin) {
+              try {
+                await admin.messaging().send({
+                  token: t.token,
+                  data: {
+                    type: 'call_dismissed',
+                    callId: recordId,
+                    chatId: chat_id || '',
+                    callerId: caller_id || '',
+                  },
+                  android: { priority: 'high', ttl: 86400000 },
+                });
+                results.android++;
+              } catch (err) {
+                results.errors++;
+              }
+            } else {
+              results.errors++;
+            }
+          } else {
+            try {
+              const subscription = JSON.parse(t.token);
+              await webpush.sendNotification(subscription, JSON.stringify({
+                title: 'Llamada finalizada',
+                body: 'La llamada entrante ha terminado',
+                data: { type: 'call_dismissed', callId: recordId, chatId: chat_id || '', callerId: caller_id || '' },
+              }));
+              results.web++;
+            } catch (err) {
+              results.errors++;
+            }
+          }
+        }
+        return res.json({ ok: true, ...results });
+      }
+
+      return res.status(200).json({ ok: true, ignored: 'no ring->end transition' });
+    }
 
     if (!chat_id || !caller_id || !callee_id) {
       return res.status(200).json({ ok: true, skipped: 'missing ids' });
@@ -392,6 +521,106 @@ router.post('/webhook', async (req, res) => {
     }
 
     return res.json({ ok: true, ...results });
+
+  } else if (type === 'INSERT' && table === 'chat_participants') {
+    const { chat_id, profile_id } = record;
+    if (!chat_id || !profile_id) {
+      return res.status(200).json({ ok: true, skipped: 'missing ids' });
+    }
+
+    try {
+      const { data: chat } = await supabase
+        .from('chats')
+        .select('name, is_group')
+        .eq('id', chat_id)
+        .single();
+
+      if (!chat || !chat.is_group) {
+        return res.status(200).json({ ok: true, ignored: 'not a group' });
+      }
+
+      // Get the person who added (the admin or whoever triggered the insert)
+      // We look up the chat admin as the adder
+      const { data: chatDetail } = await supabase
+        .from('chats')
+        .select('admin_id, name')
+        .eq('id', chat_id)
+        .single();
+
+      let adderName = 'Alguien';
+      if (chatDetail?.admin_id) {
+        const { data: adderProfile } = await supabase
+          .from('profiles')
+          .select('name')
+          .eq('id', chatDetail.admin_id)
+          .single();
+        if (adderProfile?.name) adderName = adderProfile.name;
+      }
+
+      const groupName = chatDetail?.name || 'Grupo';
+      const title = 'Nuevo grupo';
+      const body = `${adderName} te agregó a "${groupName}"`;
+
+      const tokens = await getTokens(profile_id);
+      if (!tokens.length) {
+        return res.json({ ok: true, sent: 0, reason: 'no tokens' });
+      }
+
+      const results = { web: 0, android: 0, errors: 0 };
+
+      for (const t of tokens) {
+        if (t.device === 'android-fcm' || t.device === 'android') {
+          const admin = await initFirebaseAdmin();
+          if (admin) {
+            try {
+              await admin.messaging().send({
+                token: t.token,
+                notification: { title, body },
+                data: {
+                  title, body,
+                  badge: '1', notificationCount: '1',
+                  type: 'group_added',
+                  chatId: chat_id,
+                },
+                android: {
+                  priority: 'high', ttl: 86400000,
+                  notification: {
+                    channel_id: 'redon-messages',
+                    tag: chat_id || 'redon-group',
+                    click_action: 'OPEN_APP',
+                    notification_count: 1,
+                    visibility: 'public',
+                    sound: 'notificacion',
+                  },
+                },
+              });
+              results.android++;
+            } catch (err) {
+              results.errors++;
+            }
+          } else {
+            results.errors++;
+          }
+        } else {
+          try {
+            const subscription = JSON.parse(t.token);
+            await webpush.sendNotification(subscription, JSON.stringify({
+              title, body,
+              data: { type: 'group_added', chatId: chat_id },
+              icon: '/icon.png',
+            }));
+            results.web++;
+          } catch (err) {
+            results.errors++;
+          }
+        }
+      }
+
+      return res.json({ ok: true, ...results });
+    } catch (err) {
+      console.error('[FCM-WEBHOOK] chat_participants error:', err.message);
+      return res.status(200).json({ ok: false, error: err.message });
+    }
 
   } else {
     return res.status(200).json({ ok: true, ignored: 'unknown table' });

@@ -59,7 +59,7 @@ export default function ChannelsPanel() {
         updates: [],
       }));
       setChannels(mapped);
-    }).catch(() => {});
+    }).catch(err => console.error("[ChannelsPanel] fetch channels failed:", err));
   }, [user?.id]);
 
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -88,9 +88,9 @@ export default function ChannelsPanel() {
       if (c.id === channelId) {
         const joined = !c.isJoined;
         if (joined) {
-          subscribeToChannel(channelId, user.id).catch(() => {});
+          subscribeToChannel(channelId, user.id).catch(err => console.error("[ChannelsPanel] subscribeToChannel failed:", err));
         } else {
-          unsubscribeFromChannel(channelId, user.id).catch(() => {});
+          unsubscribeFromChannel(channelId, user.id).catch(err => console.error("[ChannelsPanel] unsubscribeFromChannel failed:", err));
         }
         return {
           ...c,
@@ -132,7 +132,7 @@ export default function ChannelsPanel() {
               reactionCounts[reactionType] += 1;
             }
 
-            reactToChannelUpdate(updateId, user.id, isSelf ? prevReaction : reactionType).catch(() => {});
+            reactToChannelUpdate(updateId, user.id, isSelf ? prevReaction : reactionType).catch(err => console.error("[ChannelsPanel] reactToChannelUpdate failed:", err));
 
             return {
               ...up,
@@ -190,9 +190,9 @@ export default function ChannelsPanel() {
         created_by: user.id,
       }).then(created => {
         if (created?.id) {
-          createChannelUpdate({ channel_id: created.id, text: welcomeText }).catch(() => {});
+          createChannelUpdate({ channel_id: created.id, text: welcomeText }).catch(err => console.error("[ChannelsPanel] createChannelUpdate welcome failed:", err));
         }
-      }).catch(() => {});
+      }).catch(err => console.error("[ChannelsPanel] createChannel failed:", err));
     }
   };
 
@@ -220,7 +220,7 @@ export default function ChannelsPanel() {
 
     setNewUpdateText("");
 
-    createChannelUpdate({ channel_id: selectedChannelId, text: newUpdateText }).catch(() => {});
+    createChannelUpdate({ channel_id: selectedChannelId, text: newUpdateText }).catch(err => console.error("[ChannelsPanel] createChannelUpdate failed:", err));
   };
 
   return (

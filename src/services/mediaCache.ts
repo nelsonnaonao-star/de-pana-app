@@ -1,6 +1,17 @@
 const CACHE_NAME = "chat-media-cache";
 const blobUrlMap = new Map<string, string>();
 
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 async function ensureCacheSize(maxEntries = 100): Promise<void> {
   try {
     const cache = await caches.open(CACHE_NAME);
@@ -32,7 +43,7 @@ export async function getCachedMedia(url: string): Promise<string> {
       return blobUrl;
     }
 
-    const fetchResponse = await fetch(url, { cache: "force-cache" });
+    const fetchResponse = await fetchWithTimeout(url, { cache: "force-cache" });
     if (!fetchResponse.ok) return url;
 
     const cacheClone = fetchResponse.clone();

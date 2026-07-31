@@ -144,88 +144,35 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
   handleForwardMessage: (m: Message) => void;
   handleAddReaction: (id: string, emoji: string) => void;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isRendered, setIsRendered] = useState(false);
-  const [showReactions, setShowReactions] = useState(false);
   const { saving, save } = useSaveMedia();
 
-  useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
-    const onEnd = () => setIsPlaying(false);
-    v.addEventListener("ended", onEnd);
-    return () => v.removeEventListener("ended", onEnd);
-  }, []);
-
-  const togglePlay = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) { v.play(); setIsPlaying(true); }
-    else { v.pause(); setIsPlaying(false); }
-  };
+  const handleShare = useCallback(() => {
+    shareMedia(src, "Video");
+  }, [src]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
-      onClick={() => { if (!showReactions) onClose(); }}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md"
+      onClick={onClose}
     >
       <MediaViewerToolbar
         onClose={onClose}
         onSave={() => save(src, `redon-video-${Date.now()}.mp4`)}
-        onShare={() => shareMedia(src, "Video")}
+        onShare={handleShare}
         onForward={() => { onClose(); handleForwardMessage(msg); }}
-        onReact={() => setShowReactions(!showReactions)}
+        onReact={() => { handleAddReaction(msg.id, "👍"); onClose(); }}
         saving={saving}
       />
 
       <div className="w-full h-full flex items-center justify-center relative">
-        {/* Poster mask: covers the video until it renders real frames */}
-        {!isRendered && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black">
-            {msg.posterUrl ? (
-              <img
-                src={msg.posterUrl}
-                alt=""
-                className="max-w-[95vw] max-h-[90vh] object-contain"
-              />
-            ) : (
-              <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center">
-                <Loader2 className="w-8 h-8 text-white/40 animate-spin" />
-              </div>
-            )}
-          </div>
-        )}
-
         <video
-          ref={videoRef}
           src={src}
-          className="max-w-[95vw] max-h-[90vh] cursor-pointer"
-          style={{ opacity: isRendered ? 1 : 0, backgroundColor: 'black' }}
-          onClick={(e) => { e.stopPropagation(); togglePlay(); }}
-          onPlaying={() => setIsRendered(true)}
-          controls={true}
+          controls
           playsInline
-          preload="metadata"
+          crossOrigin="anonymous"
+          preload="auto"
+          className="w-[80vw] max-w-[320px] aspect-square object-cover rounded-2xl shadow-[0_0_40px_rgba(0,0,0,0.5)] border-4 border-[#075E54]/50"
         />
       </div>
-
-      {!isPlaying && isRendered && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" onClick={(e) => { e.stopPropagation(); togglePlay(); }}>
-          <div className="w-16 h-16 rounded-full bg-black/50 flex items-center justify-center">
-            <Play className="w-8 h-8 text-white ml-1" />
-          </div>
-        </div>
-      )}
-
-      {showReactions && (
-        <div onClick={e => e.stopPropagation()} className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden">
-          <div className="flex gap-1 px-3 py-2">
-            {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
-              <button key={emo} onClick={() => { handleAddReaction(msg.id, emo); setShowReactions(false); onClose(); }} className="text-2xl hover:scale-125 transition-transform p-1">{emo}</button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -569,7 +516,7 @@ export default React.memo(function MessageBubble({
   return (
     <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-3 py-2.5 shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
+        className={`max-w-[85%] rounded-2xl px-4 py-2.5 min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
           isMe ? activeMeBubble.css : activeThemBubble.css
         }`}
         onClick={() => setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id)}
@@ -880,7 +827,7 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
     <>
       {showViewer && (
         <VideoViewer
-          src={msg.mediaUrl!}
+          src={msg.localVideoUrl || msg.mediaUrl!}
           msg={msg}
           onClose={() => setShowViewer(false)}
           handleForwardMessage={handleForwardMessage}
@@ -897,7 +844,14 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
               <Loader2 className="w-6 h-6 text-white/40 animate-spin" />
             </div>
           ) : (
-            <video src={msg.mediaUrl} className="w-full h-full object-cover absolute inset-0" muted playsInline preload="none" />
+            <video
+              src={msg.localVideoUrl || msg.mediaUrl}
+              className="w-full h-full object-cover absolute inset-0"
+              muted
+              playsInline
+              crossOrigin="anonymous"
+              preload="auto"
+            />
           )}
           <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/20 transition-colors">
             <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">

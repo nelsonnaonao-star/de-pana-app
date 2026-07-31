@@ -282,13 +282,15 @@ router.post('/check-duplicate', profileLimiter, async (req, res) => {
       if (data) result = 'username';
     }
     if (!result && phone) {
-      const cleanPhone = sanitizeInput(phone);
-      const { data } = await supabaseAdmin
-        .from('profiles')
-        .select('id')
-        .eq('phone_number', cleanPhone)
-        .maybeSingle();
-      if (data) result = 'phone';
+      const cleanDigits = sanitizeInput(phone).replace(/\D/g, '');
+      if (cleanDigits.length > 0) {
+        const { data } = await supabaseAdmin
+          .from('profiles')
+          .select('id')
+          .eq('phone_digits', cleanDigits)
+          .maybeSingle();
+        if (data) result = 'phone';
+      }
     }
     res.json({ duplicate: result });
   } catch (err) {

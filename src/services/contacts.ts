@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { digitsOnly } from "../utils/phone";
 
 export type Contact = {
   id: string;
@@ -16,70 +17,36 @@ export type Contact = {
 };
 
 export async function searchUsers(q: string, currentUserId: string) {
-  const query = q.toLowerCase().replace(/^@/, "").trim();
+  const query = q.toLowerCase().trim();
   if (query.length < 2) return [];
   const digits = query.replace(/\D/g, "");
-
-  // Generar múltiples patrones para evadir ceros iniciales / código de país
-  const patterns = [digits];
-  if (digits.length >= 11) {
-    for (let i = 2; i <= 4; i++) {
-      if (digits[i] === "0") patterns.push(digits.slice(0, i) + digits.slice(i + 1));
+  if (digits.length >= 7) {
+    const { data: byDigits } = await supabase
+      .from("profiles")
+      .select("id, name, username, phone_number, avatar_url, bio")
+      .ilike("phone_digits", `%${digits}%`)
+      .neq("id", currentUserId)
+      .limit(10);
+    if (byDigits && byDigits.length > 0) {
+      return byDigits.map((p: any) => ({ id: p.id, name: p.name, username: p.username || "", phone: p.phone_number || "", avatar: p.avatar_url || "", bio: p.bio || "" }));
     }
-    if (digits[0] === "0") patterns.push(digits.slice(1));
-  }
-
-  // 1. Buscar coincidencia exacta de teléfono
-  let exactProfile: any = null;
-  for (const p of patterns) {
-    if (exactProfile) break;
-    if (p.length >= 7) {
-      const { data: exactPhone } = await supabase
-        .from("profiles")
-        .select("id")
-        .ilike("phone_number", `%${p}%`)
-        .neq("id", currentUserId)
-        .limit(1);
-      if (exactPhone && exactPhone.length > 0) {
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", exactPhone[0].id)
-          .single();
-        if (profile) exactProfile = profile;
-      }
+    const { data: byPhone } = await supabase
+      .from("profiles")
+      .select("id, name, username, phone_number, avatar_url, bio")
+      .ilike("phone_number", `%${digits}%`)
+      .neq("id", currentUserId)
+      .limit(10);
+    if (byPhone && byPhone.length > 0) {
+      return byPhone.map((p: any) => ({ id: p.id, name: p.name, username: p.username || "", phone: p.phone_number || "", avatar: p.avatar_url || "", bio: p.bio || "" }));
     }
   }
-
-  if (exactProfile) {
-    return [
-      {
-        id: exactProfile.id,
-        name: exactProfile.name,
-        username: exactProfile.username || "",
-        phone: exactProfile.phone_number || "",
-        avatar: exactProfile.avatar_url || "",
-        bio: exactProfile.bio || "",
-      },
-    ];
-  }
-
-  // 2. Fallback: búsqueda por username o nombre
   const { data: profiles } = await supabase
     .from("profiles")
-    .select("*")
+    .select("id, name, username, phone_number, avatar_url, bio")
     .neq("id", currentUserId)
     .or(`username.ilike.%${query}%,name.ilike.%${query}%`)
     .limit(10);
-
-  return (profiles || []).map((p: any) => ({
-    id: p.id,
-    name: p.name,
-    username: p.username || "",
-    phone: p.phone_number || "",
-    avatar: p.avatar_url || "",
-    bio: p.bio || "",
-  }));
+  return (profiles || []).map((p: any) => ({ id: p.id, name: p.name, username: p.username || "", phone: p.phone_number || "", avatar: p.avatar_url || "", bio: p.bio || "" }));
 }
 
 export async function getContacts(userId: string): Promise<Contact[]> {
@@ -144,7 +111,7 @@ export async function addContact(
   }
 
   if (phone) {
-    payload.phone = phone.replace(/[\s+()\-]/g, "").trim();
+    payload.phone = digitsOnly(phone);
   }
 
   const { data, error } = await supabase
@@ -155,6 +122,11 @@ export async function addContact(
 
   if (error) throw error;
   return data as Contact;
+}
+
+export async function deleteContact(contactId: string) {
+  const { error } = await supabase.from("contacts").delete().eq("id", contactId);
+  if (error) throw error;
 }
 
 export async function toggleFavorite(contactId: string, isFavorite: boolean) {

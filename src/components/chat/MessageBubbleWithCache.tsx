@@ -42,6 +42,14 @@ function MessageBubbleWithCache(props: MessageBubbleWithCacheProps) {
   });
 
   useEffect(() => {
+    setCachedMsg(prev => ({
+      ...msg,
+      mediaUrl: prev.mediaUrl?.startsWith("blob:") ? prev.mediaUrl : msg.mediaUrl,
+      posterUrl: prev.posterUrl?.startsWith("blob:") ? prev.posterUrl : msg.posterUrl,
+    }));
+  }, [msg.id, msg.status, msg.text, msg.reactions, msg.edited, msg.forwarded, msg.pollQuestion, msg.price]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       let newMediaUrl = msg.mediaUrl;

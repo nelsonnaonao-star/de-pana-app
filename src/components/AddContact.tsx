@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { apiUrl } from "../lib/api";
+import { normalizePhone, digitsOnly } from "../utils/phone";
 import {
   ArrowLeft, Phone, User, Check, Loader2, UserPlus, X, Shield, Smartphone, ExternalLink
 } from "lucide-react";
+
+const PHONE_RE = /^\+?[0-9]{0,15}$/;
 
 interface AddContactProps {
   currentUserId: string;
@@ -18,14 +21,6 @@ interface FoundUser {
   avatar?: string;
   avatar_url?: string;
   bio?: string;
-}
-
-function formatPhone(value: string): string {
-  const digits = value.replace(/\D/g, "");
-  if (digits.length <= 3) return digits;
-  if (digits.length <= 6) return `+${digits.slice(0, 1)} ${digits.slice(1, 3)} ${digits.slice(3)}`.trim();
-  if (digits.length <= 10) return `+${digits.slice(0, 1)} ${digits.slice(1, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`.trim();
-  return `+${digits.slice(0, 1)} ${digits.slice(1, 4)} ${digits.slice(4, 7)} ${digits.slice(7, 10)} ${digits.slice(10, 12)}`.trim();
 }
 
 function getInitials(name: string): string {
@@ -53,7 +48,7 @@ export default function AddContact({ currentUserId, onBack, onContactAdded }: Ad
     inputRef.current?.focus();
   }, []);
 
-  const cleanDigits = phoneRaw.replace(/\D/g, "").trim();
+  const cleanDigits = digitsOnly(phoneRaw);
 
   const doSearch = useCallback(async (digits: string) => {
     if (digits.length < 7) {
@@ -97,7 +92,7 @@ export default function AddContact({ currentUserId, onBack, onContactAdded }: Ad
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    const digits = phoneRaw.replace(/\D/g, "").trim();
+    const digits = digitsOnly(phoneRaw);
     if (digits.length >= 7) {
       debounceRef.current = setTimeout(() => doSearch(digits), 500);
     } else {
@@ -196,12 +191,11 @@ export default function AddContact({ currentUserId, onBack, onContactAdded }: Ad
                 <input
                   ref={inputRef}
                   type="tel"
-                  value={formatPhone(phoneRaw)}
+                  value={phoneRaw}
                   onChange={(e) => {
-                    const raw = e.target.value.replace(/\D/g, "");
-                    if (raw.length <= 12) setPhoneRaw(raw);
+                    if (PHONE_RE.test(e.target.value)) setPhoneRaw(normalizePhone(e.target.value));
                   }}
-                  placeholder="+58 412 1234567"
+                  placeholder="+573001234567"
                   className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-sm pl-10 pr-4 py-3.5 rounded-xl outline-none focus:border-teal-400/50 focus:ring-2 focus:ring-teal-500/10 transition-all"
                 />
                 {searching && (

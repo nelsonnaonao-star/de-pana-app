@@ -34,6 +34,7 @@ interface EditorTabPanelsProps {
   selectedStickerIdx: number;
   setSelectedStickerIdx: (v: number) => void;
   isPremiumUnlocked: boolean;
+  isValidating: boolean;
   activationCodeInput: string;
   setActivationCodeInput: (v: string) => void;
   codeFeedback: { status: "idle" | "success" | "error"; message: string };
@@ -60,7 +61,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
     textAnimation, setTextAnimation,
     textSizePercent, setTextSizePercent,
     selectedStickerIdx, setSelectedStickerIdx,
-    isPremiumUnlocked,
+    isPremiumUnlocked, isValidating,
     activationCodeInput, setActivationCodeInput,
     codeFeedback, handleValidatePremiumCode,
     selectedMusicId, setSelectedMusicId,
@@ -307,7 +308,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
               <input type="text" required placeholder="Ej: REDON2026" value={activationCodeInput}
                 onChange={(e) => setActivationCodeInput(e.target.value)}
                 className="flex-1 bg-slate-950 border border-white/10 text-[9.5px] px-3.5 py-2.5 rounded-xl outline-none focus:border-teal-500 text-center font-mono font-bold tracking-widest text-teal-300 placeholder-slate-600" />
-              <button type="submit" className="bg-teal-400 hover:bg-teal-500 text-white font-extrabold text-[9px] px-4 rounded-xl transition-all cursor-pointer shadow-sm shrink-0">Verificar</button>
+              <button type="submit" disabled={isValidating} className={`${isValidating ? "bg-teal-700 cursor-not-allowed" : "bg-teal-400 hover:bg-teal-500 cursor-pointer"} text-white font-extrabold text-[9px] px-4 rounded-xl transition-all shadow-sm shrink-0`}>{isValidating ? "Validando..." : "Verificar"}</button>
             </div>
           </form>
           {codeFeedback.message && (

@@ -9,40 +9,20 @@ async function uploadDirectToSupabase(
 ): Promise<string> {
   const baseType = blob.type.split(";")[0];
   const ext = baseType.split("/")[1] || "bin";
-  const contentType = baseType || "application/octet-stream";
   const fileName = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.access_token) throw new Error("No auth session");
-
-  const url = `${supabaseUrl}/storage/v1/object/${BUCKET}/${fileName}`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "Content-Type": contentType,
-      },
-      body: blob,
-      signal: controller.signal,
+  const { data: uploadData, error } = await supabase.storage
+    .from(BUCKET)
+    .upload(fileName, blob, {
+      contentType: baseType || "video/webm",
+      cacheControl: "3600",
+      upsert: false,
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Upload failed (${res.status}): ${text}`);
-    }
+  if (error) throw error;
 
-    const publicUrl = `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${fileName}`;
-    return publicUrl;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(fileName);
+  return urlData?.publicUrl || `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${fileName}`;
 }
 
 const MAX_W = 800;

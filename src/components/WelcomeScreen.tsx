@@ -1,5 +1,8 @@
 import React, { useState } from "react";
 import { ArrowRight, Phone, User, CheckCircle, Sparkles } from "lucide-react";
+import { normalizePhone } from "../utils/phone";
+
+const PHONE_RE = /^\+?[0-9]{0,15}$/;
 
 interface WelcomeScreenProps {
   onRegister: (name: string, phone: string, avatar: string) => void;
@@ -167,9 +170,11 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
             <input
               type="tel"
               required
-              placeholder="Ej: +58 412 1234567"
+              placeholder="+573001234567"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => {
+                if (PHONE_RE.test(e.target.value)) setPhone(normalizePhone(e.target.value));
+              }}
               className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-teal-400 focus:bg-white text-xs px-4 py-3 rounded-xl outline-none transition-all text-slate-800 font-mono font-medium"
             />
           </div>

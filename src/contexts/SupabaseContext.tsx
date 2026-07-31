@@ -1,4 +1,13 @@
 import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
+
+declare global {
+  interface Window {
+    __debugChats: () => Promise<void>;
+    __startAutoDebug: () => void;
+    __stopAutoDebug: () => void;
+    __autoDebugInterval: ReturnType<typeof setInterval> | null;
+  }
+}
 import { supabase } from "../lib/supabase";
 import { Profile, signOut as authSignOut } from "../services/auth";
 import { Chat, getChats } from "../services/chats";
@@ -6,6 +15,8 @@ import { Contact, getContacts } from "../services/contacts";
 import { Call, getCalls } from "../services/calls";
 import { registerPushNotifications, unregisterPushNotifications } from "../services/pushNotifications";
 import { setupCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
+import { chatRepo } from "../services/database/repositories/ChatRepository";
+import { contactRepo } from "../services/database/repositories/ContactRepository";
 import toast from "react-hot-toast";
 
 const CACHE_PREFIX = "redon_cache_";
@@ -73,19 +84,26 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const loadedUserId = useRef<string | null>(null);
+  const loadingUserDataRef = useRef(false);
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const profilesChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const participantsChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const discoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chatsRef = useRef<Chat[]>([]);
   const cleanupListenersRef = useRef<(() => void) | null>(null);
+
+  // Keep chatsRef in sync with chats state (used by discovery poll)
+  useEffect(() => { chatsRef.current = chats; }, [chats]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       console.log("[SUPABASE] Session on mount:", session ? "EXISTS" : "NULL", "Error:", error);
       setUser(session?.user || null);
-      if (session?.user) {
+      if (session?.user && !loadedUserId.current) {
         loadUserData(session.user.id);
       } else {
-        setLoading(false);
+        setLoading(false); // Either no session, or already handled by INITIAL_SESSION
       }
     });
 
@@ -95,7 +113,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
       switch (event) {
         case "SIGNED_IN":
-          if (userId) {
+          if (userId && !loadedUserId.current) {
             setUser(session.user);
             loadUserData(userId);
           }
@@ -132,22 +150,27 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
     return () => {
       listener?.subscription?.unsubscribe();
-      // Clean up presence, heartbeat, profiles channel, event listeners on unmount
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
       if (profilesChannelRef.current) supabase.removeChannel(profilesChannelRef.current);
+      if (participantsChannelRef.current) supabase.removeChannel(participantsChannelRef.current);
       presenceChannelRef.current?.untrack();
       cleanupListenersRef.current?.();
     };
   }, []);
 
   async function loadUserData(userId: string) {
+    if (loadedUserId.current === userId) return;
     loadedUserId.current = userId;
+    loadingUserDataRef.current = true;
     debugLog("loadUserData start", { userId });
 
     // Load cached data immediately for instant UI (scoped to userId)
     const cachedProfile = loadCache<Profile | null>(cacheKey(userId, "profile"), null);
-    const cachedChats = loadCache<Chat[]>(cacheKey(userId, "chats"), []);
-    const cachedContacts = loadCache<Contact[]>(cacheKey(userId, "contacts"), []);
+    const [cachedChats, cachedContacts] = await Promise.all([
+      chatRepo.getChats(userId),
+      contactRepo.getContacts(userId),
+    ]);
     const cachedCalls = loadCache<Call[]>(cacheKey(userId, "calls"), []);
     
     debugLog("cache loaded", { 
@@ -181,10 +204,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         calls: callsResult.status,
       });
 
-      if (profilesResult.status === "fulfilled" && profilesResult.value.error) {
+      const hasProfileError = profilesResult.status === "fulfilled" && profilesResult.value?.error;
+      if (hasProfileError) {
         debugLog("Profile fetch error", { message: profilesResult.value.error.message, code: profilesResult.value.error.code, details: profilesResult.value.error.details, hint: profilesResult.value.error.hint });
       }
-      const newProfile = profilesResult.status === "fulfilled" ? (profilesResult.value.data as Profile) || null : cachedProfile;
+      const newProfile = profilesResult.status === "fulfilled" && profilesResult.value?.data ? (profilesResult.value.data as Profile) : cachedProfile;
       const newChats = chatsResult.status === "fulfilled" ? chatsResult.value || [] : cachedChats;
       const newContacts = contactsResult.status === "fulfilled" ? contactsResult.value || [] : cachedContacts;
       const newCalls = callsResult.status === "fulfilled" ? callsResult.value || [] : cachedCalls;
@@ -203,17 +227,19 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
       // Update cache with fresh data (always save, even if empty, to overwrite stale data)
       saveCache(cacheKey(userId, "profile"), newProfile);
-      saveCache(cacheKey(userId, "chats"), newChats);
-      saveCache(cacheKey(userId, "contacts"), newContacts);
+      chatRepo.saveChats(userId, newChats);
+      contactRepo.saveContacts(userId, newContacts);
       saveCache(cacheKey(userId, "calls"), newCalls);
       
+      loadingUserDataRef.current = false;
       debugLog("loadUserData complete");
     } catch (err) {
+      loadingUserDataRef.current = false;
       debugLog("loadUserData error", err);
     }
 
-    registerPushNotifications(userId).catch(() => {});
-    setupCapacitorPush(userId).catch(() => {});
+    registerPushNotifications(userId).catch(err => console.error("[SupabaseContext] registerPushNotifications failed:", err));
+    setupCapacitorPush(userId).catch(err => console.error("[SupabaseContext] setupCapacitorPush failed:", err));
 
     // Clean up any existing presence channel for this user before creating a new one
     if (presenceChannelRef.current) {
@@ -282,6 +308,80 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     profilesChannel.subscribe();
     profilesChannelRef.current = profilesChannel;
 
+    // Subscribe to chat_participants to detect when user is added to a group
+    if (participantsChannelRef.current) {
+      supabase.removeChannel(participantsChannelRef.current);
+    }
+    const participantsChannel = supabase.channel(`chat-participants-${userId}`);
+    participantsChannel.on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "chat_participants", filter: `profile_id=eq.${userId}` },
+      async (payload: any) => {
+        console.log("🔥 REALTIME chat_participants INSERT received:", payload);
+        const chatId = payload.new?.chat_id;
+        if (!chatId) {
+          console.warn("[SUPABASE] chat_participants INSERT event missing chat_id", payload);
+          return;
+        }
+        console.log("[SUPABASE] New chat_participant for chat:", chatId);
+        try {
+          const { data: chatData, error: chatError } = await supabase
+            .from("chats")
+            .select("*")
+            .eq("id", chatId)
+            .single();
+          if (chatError) {
+            console.error("[SUPABASE] Failed to fetch new chat (RLS?):", chatError);
+            return;
+          }
+          if (!chatData) {
+            console.warn("[SUPABASE] New chat not found:", chatId);
+            return;
+          }
+          console.log("[SUPABASE] Fetched new chat data:", chatData);
+
+          // Update React state (prepend to chat list)
+          setChats(prev => {
+            if (prev.some(c => c.id === chatId)) {
+              console.log("[SUPABASE] Chat already in list, skipping:", chatId);
+              return prev;
+            }
+            console.log("[SUPABASE] Prepending chat to list:", chatId);
+            return [chatData as Chat, ...prev];
+          });
+
+          // Persist to SQLite so the chat survives app restarts
+          try {
+            const existingChats = await chatRepo.getChats(userId);
+            if (!existingChats.some(c => c.id === chatId)) {
+              await chatRepo.saveChats(userId, [chatData as Chat, ...existingChats]);
+              console.log("[SUPABASE] Saved new chat to SQLite:", chatId);
+            }
+          } catch (sqliteErr) {
+            console.warn("[SUPABASE] Failed to persist new chat to SQLite:", sqliteErr);
+          }
+
+          const groupName = (chatData as any).name || "Grupo";
+          toast.success(`Te agregaron al grupo "${groupName}"`);
+        } catch (e) {
+          console.error("[SUPABASE] Error processing chat_participants event:", e);
+        }
+      }
+    );
+    participantsChannel.subscribe((status: string) => {
+      console.log("[SUPABASE] chat_participants channel status:", status, "for user:", userId);
+      if (status === "CHANNEL_ERROR") {
+        console.error("[SUPABASE] ❌ CHANNEL_ERROR on chat_participants — Realtime may not be enabled for this table in Supabase dashboard, or RLS is blocking.");
+      } else if (status === "TIMED_OUT") {
+        console.error("[SUPABASE] ❌ TIMED_OUT on chat_participants — network issue or server unreachable.");
+      } else if (status === "CLOSED") {
+        console.warn("[SUPABASE] chat_participants channel CLOSED, will not receive events.");
+      } else if (status === "SUBSCRIBED") {
+        console.log("[SUPABASE] ✅ chat_participants SUBSCRIBED — listening for new groups.");
+      }
+    });
+    participantsChannelRef.current = participantsChannel;
+
     // beforeunload: set offline on tab/browser close
     const handleBeforeUnload = () => {
       presenceChannelRef.current?.untrack();
@@ -305,11 +405,42 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
             supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
           }, 30000);
         }
+        // Refresh chats when user returns to the tab
+        getChats(userId).then(fresh => {
+          if (!fresh) return;
+          setChats(prev => {
+            const merged = new Map<string, Chat>();
+            for (const c of fresh) merged.set(c.id, c);
+            for (const c of prev) if (!merged.has(c.id)) merged.set(c.id, c);
+            return Array.from(merged.values());
+          });
+        });
       }
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("visibilitychange", handleVisibility);
+
+    // Fallback: poll for new chats every 6s (catches anything Realtime misses)
+    if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
+    discoveryPollRef.current = setInterval(async () => {
+      try {
+        const fresh = await getChats(userId);
+        if (!fresh || fresh.length === 0) return;
+        const knownIds = new Set(chatsRef.current.map(c => c.id));
+        const newChats = fresh.filter(c => !knownIds.has(c.id));
+        if (newChats.length === 0) return;
+        console.log("[SUPABASE] Poll found new chat(s):", newChats.map(c => c.id));
+        setChats(prev => {
+          const existing = new Set(prev.map(c => c.id));
+          const toAdd = newChats.filter(c => !existing.has(c.id));
+          if (toAdd.length === 0) return prev;
+          return [...toAdd, ...prev];
+        });
+      } catch (e) {
+        console.warn("[SUPABASE] Discovery poll error:", e);
+      }
+    }, 6000);
 
     // Store cleanup for use in logout/unmount
     if (cleanupListenersRef.current) cleanupListenersRef.current();
@@ -336,14 +467,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     const ch = await getChats(user.id);
     setChats(ch);
-    saveCache(cacheKey(user.id, "chats"), ch);
+    chatRepo.saveChats(user.id, ch);
   };
 
   const refreshContacts = async () => {
     if (!user) return;
     const cont = await getContacts(user.id);
     setContacts(cont);
-    saveCache(cacheKey(user.id, "contacts"), cont);
+    contactRepo.saveContacts(user.id, cont);
   };
 
   const refreshCalls = async () => {
@@ -353,10 +484,74 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     saveCache(cacheKey(user.id, "calls"), cl);
   };
 
+  // Helper: POST logs to debug server (for terminal viewing)
+  function sendLog(level: string, ...args: any[]) {
+    try {
+      fetch("http://localhost:3456", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level, args: args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)) }),
+      }).catch(() => {});
+    } catch {}
+  }
+
+  // Expose debug function globally so user can run it from browser console
+  window.__debugChats = async () => {
+    if (!user) { console.error("No user logged in"); return; }
+    const lines: string[] = [];
+    const log = (msg: string) => { lines.push(msg); console.log(msg); sendLog("info", msg); };
+    log("=== CHAT DIAGNOSTIC ===");
+    log("User ID: " + user.id);
+    // 1. Check chat_participants
+    const { data: myParts, error: partErr } = await supabase
+      .from("chat_participants")
+      .select("chat_id, profile_id");
+    log("chat_participants: " + JSON.stringify(myParts) + " Error: " + JSON.stringify(partErr));
+    // 2. Check chats SELECT via RLS
+    const { data: allChats, error: chatErr } = await supabase
+      .from("chats")
+      .select("*");
+    log("chats (all via RLS): " + (allChats?.length || 0) + " Error: " + JSON.stringify(chatErr));
+    if (allChats) {
+      for (const c of allChats) log("  Chat: " + c.id + " " + c.name + " is_group:" + c.is_group + " profile_id:" + c.profile_id + " admin_id:" + c.admin_id);
+    }
+    // 3. Check direct participant chats
+    const { data: directChats } = await supabase
+      .from("chats")
+      .select("*")
+      .or(`profile_id.eq.${user.id},admin_id.eq.${user.id}`);
+    log("direct chats count: " + (directChats?.length || 0));
+    // 4. Try fetching chat_participants for each chat
+    if (myParts) {
+      for (const p of myParts) {
+        const { data: chat } = await supabase.from("chats").select("*").eq("id", p.chat_id).single();
+        log("Participant chat_id: " + p.chat_id + " fetched: " + (chat?.name || "NULL (RLS BLOCKED)"));
+      }
+    }
+    // 5. Current context chats
+    log("Context chats count: " + chats.length);
+    log("=== END DIAGNOSTIC ===");
+  };
+
+  window.__startAutoDebug = () => {
+    console.log("Auto-debug started (every 5s). Run __stopAutoDebug() to stop.");
+    if (window.__autoDebugInterval) clearInterval(window.__autoDebugInterval);
+    window.__autoDebugInterval = setInterval(() => window.__debugChats(), 5000);
+  };
+  window.__stopAutoDebug = () => {
+    if (window.__autoDebugInterval) {
+      clearInterval(window.__autoDebugInterval);
+      window.__autoDebugInterval = null;
+      console.log("Auto-debug stopped.");
+    }
+  };
+
   const logout = async () => {
-    // Clean up heartbeat, profiles channel, presence channel, event listeners
+    // Clean up heartbeat, discovery poll, channels, presence channel, event listeners
     if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+    if (discoveryPollRef.current) { clearInterval(discoveryPollRef.current); discoveryPollRef.current = null; }
     if (profilesChannelRef.current) { supabase.removeChannel(profilesChannelRef.current); profilesChannelRef.current = null; }
+    if (participantsChannelRef.current) { supabase.removeChannel(participantsChannelRef.current); participantsChannelRef.current = null; }
     presenceChannelRef.current?.untrack();
     presenceChannelRef.current?.unsubscribe();
     cleanupListenersRef.current?.();
@@ -367,7 +562,13 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     await unregisterPushNotifications();
     await unregisterCapacitorPush();
     await authSignOut();
-    if (user) clearUserCache(user.id);
+    if (user) {
+      clearUserCache(user.id);
+      await Promise.all([
+        chatRepo.clearChats(user.id),
+        contactRepo.clearContacts(user.id),
+      ]);
+    }
     loadedUserId.current = null;
     setUser(null);
     setProfile(null);

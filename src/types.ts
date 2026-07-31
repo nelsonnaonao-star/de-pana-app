@@ -23,6 +23,9 @@ export interface Message {
   replyToSender?: string;
   price?: string;
   posterUrl?: string;
+  localVideoUrl?: string;
+  synced?: boolean;
+  chatId?: string;
 }
 
 export interface Chat {
@@ -36,6 +39,8 @@ export interface Chat {
   messages: Message[];
   partnerUserId?: string;
   isGroup?: boolean;
+  lastMessageTimeRaw?: string;
+  updated_at?: string;
 }
 
 export interface ActiveCall {

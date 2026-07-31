@@ -33,6 +33,7 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
   useEffect(() => {
     const audio = new Audio();
     audio.preload = "metadata";
+    audio.crossOrigin = "anonymous";
     audio.src = audioUrl;
     audioRef.current = audio;
 
@@ -61,7 +62,8 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
       setSpeed(1);
       currentAudioId = null;
     };
-    const onError = () => {
+    const onError = (e: Event | string) => {
+      console.warn("[AudioPlayer] error for", audioUrl, e);
       setHasError(true);
       setIsLoading(false);
     };
@@ -107,7 +109,7 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
       audio.pause();
       setIsPlaying(false);
     } else {
-      audio.play().then(() => setIsPlaying(true)).catch(() => {});
+      audio.play().then(() => setIsPlaying(true)).catch((err) => console.warn("[AudioPlayer] play() rejected:", err));
     }
   }, [isPlaying, msgId, hasError]);
 

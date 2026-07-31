@@ -579,6 +579,7 @@ router.post('/flyers', async (req, res) => {
         price: flyer.price || '',
         music_url: flyer.music_url || '',
         music_name: flyer.music_name || '',
+        contact_phone: flyer.contact_phone || '',
         views: 0,
         clicks: 0,
       })

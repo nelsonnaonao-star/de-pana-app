@@ -21,20 +21,26 @@ export interface BusinessFlyer {
   price?: string;
   musicUrl?: string;
   musicName?: string;
+  contactPhone?: string;
   views: number;
   clicks: number;
+  ownerId?: string;
   ownerName: string;
   ownerAvatar: string;
   ownerPhone: string;
 }
 
 interface BusinessPanelProps {
-  onStartBusinessChat: (businessName: string, avatar: string, initialText: string, flyerId: string) => void;
+  onStartBusinessChat: (businessName: string, avatar: string, initialText: string, flyerId: string, contactPhone?: string) => void;
   flyers: BusinessFlyer[];
   onAddFlyer: (flyer: BusinessFlyer) => void;
   onIncrementView: (flyerId: string) => void;
   onIncrementClick: (flyerId: string) => void;
   onEditingChange?: (isEditing: boolean) => void;
+  currentUserId?: string;
+  currentUserName?: string;
+  currentUserAvatar?: string;
+  currentUserPhone?: string;
 }
 
 // Preset Premium Background Music
@@ -46,13 +52,7 @@ const MUSIC_PRESETS = [
   { id: "epic", name: "Upbeat Entrepreneur 🎉", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3" }
 ];
 
-// Preset Premium Sample Flyers (for the upload flow)
-const FLYER_SAMPLES = [
-  "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=400&q=80", // Red Shoes
-  "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=400&q=80", // Headphones
-  "https://images.unsplash.com/photo-1511556532299-8f662fc26c06?auto=format&fit=crop&w=400&q=80", // Tech Fashion
-  "https://images.unsplash.com/photo-1485968579580-b6d095142e6e?auto=format&fit=crop&w=400&q=80"  // Hamburguesa Gourmet
-];
+
 
 // Presets for pre-designed Templates
 const TEMPLATE_PRESETS = [
@@ -104,7 +104,11 @@ export default function BusinessPanel({
   onAddFlyer,
   onIncrementView,
   onIncrementClick,
-  onEditingChange
+  onEditingChange,
+  currentUserId,
+  currentUserName,
+  currentUserAvatar,
+  currentUserPhone,
 }: BusinessPanelProps) {
   // Navigation: "feed" (Explorar), "create" (Publicar), "editor" (Editor Pro), "stats" (Mis Estadísticas)
   const [activeSubTab, setActiveSubTab] = useState<"feed" | "create" | "editor" | "stats">("feed");
@@ -127,7 +131,8 @@ export default function BusinessPanel({
   const [upName, setUpName] = useState("");
   const [upDesc, setUpDesc] = useState("");
   const [upLoc, setUpLoc] = useState("");
-  const [upFlyerUrl, setUpFlyerUrl] = useState(FLYER_SAMPLES[0]);
+  const [upPhone, setUpPhone] = useState("");
+  const [upFlyerUrl, setUpFlyerUrl] = useState("");
   const [upMusicId, setUpMusicId] = useState("none");
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -137,6 +142,7 @@ export default function BusinessPanel({
   const [genProducts, setGenProducts] = useState<{ name: string; price: string }[]>([{ name: "", price: "" }]);
   const [genDesc, setGenDesc] = useState("");
   const [genLoc, setGenLoc] = useState("");
+  const [genPhone, setGenPhone] = useState("");
   const [genTemplateId, setGenTemplateId] = useState<"cyber" | "gold" | "blue" | "sunset">("cyber");
   const [genMusicId, setGenMusicId] = useState("none");
 
@@ -206,11 +212,13 @@ export default function BusinessPanel({
       isGenerated: false,
       musicUrl: selectedMusic?.url || undefined,
       musicName: selectedMusic?.name !== "Sin Música" ? selectedMusic?.name : undefined,
+      contactPhone: upPhone.trim() || currentUserPhone || "",
       views: 1,
       clicks: 0,
-      ownerName: "Nelson Castro (Tú)",
-      ownerAvatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
-      ownerPhone: "+58 412 1234567"
+      ownerId: currentUserId,
+      ownerName: currentUserName || "Usuario",
+      ownerAvatar: currentUserAvatar || "",
+      ownerPhone: currentUserPhone || ""
     };
 
     // Simulate upload/processing time
@@ -222,6 +230,7 @@ export default function BusinessPanel({
     setUpName("");
     setUpDesc("");
     setUpLoc("");
+    setUpPhone("");
 
     setPublishing(false);
     setPublishSuccess(true);
@@ -252,11 +261,13 @@ export default function BusinessPanel({
       price: validProducts.find(p => p.price.trim())?.price.trim() || validProducts[0]?.name.trim() || "",
       musicUrl: selectedMusic?.url || undefined,
       musicName: selectedMusic?.name !== "Sin Música" ? selectedMusic?.name : undefined,
+      contactPhone: genPhone.trim() || currentUserPhone || "",
       views: 1,
       clicks: 0,
-      ownerName: "Nelson Castro (Tú)",
-      ownerAvatar: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80",
-      ownerPhone: "+58 412 1234567"
+      ownerId: currentUserId,
+      ownerName: currentUserName || "Usuario",
+      ownerAvatar: currentUserAvatar || "",
+      ownerPhone: currentUserPhone || ""
     };
 
     // Simulate generation + upload time
@@ -269,6 +280,7 @@ export default function BusinessPanel({
     setGenProducts([{ name: "", price: "" }]);
     setGenDesc("");
     setGenLoc("");
+    setGenPhone("");
 
     setPublishing(false);
     setPublishSuccess(true);
@@ -282,7 +294,7 @@ export default function BusinessPanel({
   const handleChatAction = (flyer: BusinessFlyer) => {
     onIncrementClick(flyer.id);
     const initialText = `¡Hola! Me interesó tu anuncio en Red On Negocios: "${flyer.isGenerated ? flyer.productName : flyer.businessName}". ¿Está disponible?`;
-    onStartBusinessChat(flyer.businessName, flyer.flyerUrl || flyer.ownerAvatar, initialText, flyer.id);
+    onStartBusinessChat(flyer.businessName, flyer.flyerUrl || flyer.ownerAvatar, initialText, flyer.id, flyer.contactPhone || "");
   };
 
   // Filtered public flyers based on search
@@ -292,6 +304,9 @@ export default function BusinessPanel({
     f.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
     f.location.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // My own flyers (for stats)
+  const myFlyers = flyers.filter(f => !!f.ownerId && f.ownerId === currentUserId);
 
   // Active template styling configurations
   const activeTemplate = TEMPLATE_PRESETS.find(t => t.id === genTemplateId) || TEMPLATE_PRESETS[0];
@@ -370,7 +385,7 @@ export default function BusinessPanel({
             {/* List of Published flyers */}
             <div className="space-y-4">
               {filteredFlyers.map((flyer) => {
-                const isMyFlyer = flyer.ownerName.includes("Tú");
+                const isMyFlyer = !!flyer.ownerId && flyer.ownerId === currentUserId;
                 const isPlaying = playingMusicUrl === flyer.musicUrl && flyer.musicUrl;
 
                 return (
@@ -608,27 +623,27 @@ export default function BusinessPanel({
                     />
                   </div>
 
-                  {/* Select Flyer Image from Samples or Upload */}
+                  {/* Contact Phone */}
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">
+                      Número de teléfono de contacto
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="Ej: +58 412 1234567"
+                      value={upPhone}
+                      onChange={(e) => setUpPhone(e.target.value)}
+                      className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
+                    />
+                    <p className="text-[8px] text-slate-400">Con este número los clientes se comunicarán contigo en RED ON.</p>
+                  </div>
+
+                  {/* Upload Flyer Image */}
                   <div className="space-y-1.5">
                     <label className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">
-                      Selecciona una Imagen de Flyer
+                      Imagen de tu Flyer
                     </label>
-                    <div className="grid grid-cols-4 gap-2">
-                      {FLYER_SAMPLES.map((sample, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setUpFlyerUrl(sample)}
-                          className={`aspect-square rounded-xl overflow-hidden border-2 relative hover:scale-105 transition-all ${
-                            upFlyerUrl === sample ? "border-teal-400" : "border-transparent opacity-75 hover:opacity-100"
-                          }`}
-                        >
-                          <img src={sample} alt="Option" className="w-full h-full object-cover" />
-                        </button>
-                      ))}
-                    </div>
 
-                    {/* Upload custom image */}
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -647,31 +662,33 @@ export default function BusinessPanel({
                         setUploadingImage(false);
                       }}
                     />
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadingImage}
-                      className="w-full mt-2 flex items-center justify-center gap-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-bold py-2.5 rounded-xl transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      {uploadingImage ? (
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Upload className="w-3.5 h-3.5" />
-                      )}
-                      {uploadingImage ? "Subiendo imagen..." : "Subir tu propia imagen"}
-                    </button>
-                    {upFlyerUrl && !FLYER_SAMPLES.includes(upFlyerUrl) && (
-                      <div className="relative mt-2 rounded-xl overflow-hidden border-2 border-teal-400">
-                        <img src={upFlyerUrl} alt="Tu imagen" className="w-full h-28 object-cover" />
+
+                    {!upFlyerUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploadingImage}
+                        className="w-full aspect-video flex flex-col items-center justify-center gap-2 bg-slate-50 hover:bg-slate-100 border-2 border-dashed border-slate-300 hover:border-teal-400 text-slate-500 hover:text-teal-600 text-[10px] font-bold rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {uploadingImage ? (
+                          <RefreshCw className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <Upload className="w-5 h-5" />
+                        )}
+                        {uploadingImage ? "Subiendo imagen..." : "Subir tu flyer"}
+                      </button>
+                    ) : (
+                      <div className="relative rounded-xl overflow-hidden border-2 border-teal-400">
+                        <img src={upFlyerUrl} alt="Tu flyer" className="w-full h-28 object-cover" />
                         <button
                           type="button"
-                          onClick={() => setUpFlyerUrl(FLYER_SAMPLES[0])}
+                          onClick={() => setUpFlyerUrl("")}
                           className="absolute top-1 right-1 bg-black/60 hover:bg-black/80 rounded-full p-0.5 transition-colors cursor-pointer"
                         >
                           <X className="w-3.5 h-3.5 text-white" />
                         </button>
                         <span className="absolute bottom-1 left-1 bg-black/60 text-white text-[7px] font-bold px-1.5 py-0.5 rounded">
-                          TU IMAGEN
+                          TU FLYER
                         </span>
                       </div>
                     )}
@@ -838,6 +855,21 @@ export default function BusinessPanel({
                       />
                     </div>
 
+                    {/* Contact Phone */}
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-bold uppercase text-slate-400 tracking-wider">
+                        Número de teléfono de contacto
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="Ej: +58 412 1234567"
+                        value={genPhone}
+                        onChange={(e) => setGenPhone(e.target.value)}
+                        className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
+                      />
+                      <p className="text-[8px] text-slate-400">Con este número los clientes se comunicarán contigo en RED ON.</p>
+                    </div>
+
                     {/* Select Flyer Background Music */}
                     <div className="space-y-1">
                       <label className="text-[9px] font-bold uppercase text-slate-400 tracking-wider flex items-center gap-1">
@@ -942,7 +974,7 @@ export default function BusinessPanel({
                   </span>
                   <div className="flex items-baseline gap-1 mt-2">
                     <span className="text-2xl font-black text-[#10646a]">
-                      {flyers.filter(f => f.ownerName.includes("Tú")).reduce((acc, curr) => acc + curr.views, 0)}
+                      {myFlyers.reduce((acc, curr) => acc + curr.views, 0)}
                     </span>
                     <span className="text-[9px] text-slate-400">vistas</span>
                   </div>
@@ -954,7 +986,7 @@ export default function BusinessPanel({
                   </span>
                   <div className="flex items-baseline gap-1 mt-2">
                     <span className="text-2xl font-black text-indigo-600">
-                      {flyers.filter(f => f.ownerName.includes("Tú")).reduce((acc, curr) => acc + curr.clicks, 0)}
+                      {myFlyers.reduce((acc, curr) => acc + curr.clicks, 0)}
                     </span>
                     <span className="text-[9px] text-slate-400">clics</span>
                   </div>
@@ -965,10 +997,10 @@ export default function BusinessPanel({
             {/* List of my published flyers with specific statistics */}
             <div className="space-y-3">
               <h5 className="text-[10px] font-bold uppercase text-slate-400 tracking-wider px-1">
-                Tus Flyers Activos ({flyers.filter(f => f.ownerName.includes("Tú")).length})
+                Tus Flyers Activos ({myFlyers.length})
               </h5>
 
-              {flyers.filter(f => f.ownerName.includes("Tú")).map((flyer) => (
+              {myFlyers.map((flyer) => (
                 <div
                   key={flyer.id}
                   className="bg-white p-3.5 rounded-2xl border border-slate-100 shadow-sm space-y-3"
@@ -1002,7 +1034,7 @@ export default function BusinessPanel({
                 </div>
               ))}
 
-              {flyers.filter(f => f.ownerName.includes("Tú")).length === 0 && (
+              {myFlyers.length === 0 && (
                 <div className="text-center py-10 bg-white rounded-2xl border border-slate-100 text-slate-400 space-y-2">
                   <p className="text-xs font-semibold">Aún no has publicado ningún flyer</p>
                   <button

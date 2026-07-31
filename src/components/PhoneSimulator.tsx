@@ -32,16 +32,23 @@ import { getAllUserData } from "../services/server-api";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { clearForMe, sendMessage as apiSendMessage } from "../services/messages";
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
-import { getMyFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
+import { getAllFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
+import { deleteContact } from "../services/contacts";
+
 import { WebRTCService } from "../services/webrtc";
 import { startCall as apiStartCall, updateCallRating, updateCallStatus } from "../services/calls";
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
-import { uploadAvatar } from "../services/storage";
+import { uploadAvatar, uploadChatMedia } from "../services/storage";
 import { updateProfile } from "../services/auth";
+import { db } from "../services/database/DatabaseService";
 import CallRatingModal from "./CallRatingModal";
+import SimulatorTabHeader from "./simulator/SimulatorTabHeader";
+import SimulatorCreateGroup from "./simulator/SimulatorCreateGroup";
+import SimulatorForwardModal from "./simulator/SimulatorForwardModal";
+import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
 interface PhoneSimulatorProps {
   isCorrected?: boolean;
   onToggle?: (val: boolean) => void;
@@ -137,7 +144,9 @@ export default function PhoneSimulator({
 
   // Android back button handler — registered ONCE, reads state from refs (no race condition)
   useEffect(() => {
-    if (!onBackPress) return;
+    const bp = onBackPressRef.current;
+    const sse = onSetShouldExitRef.current;
+    if (!bp) return;
 
     const backScreens: Record<string, string> = {
       chat_room: "chats",
@@ -156,7 +165,7 @@ export default function PhoneSimulator({
       synced_contacts: "chats",
     };
 
-    onBackPress(() => {
+    bp(() => {
       if (activeCallRef.current) {
         console.log("[BACK] Active call — ending call");
         cleanupCallRef.current?.();
@@ -190,18 +199,18 @@ export default function PhoneSimulator({
         return true;
       }
       console.log("[BACK] Root screen — should exit app");
-      onSetShouldExit?.(true);
+      sse?.(true);
       return false;
     });
 
-    onSetShouldExit?.(shouldExitRef.current);
-  }, [onBackPress, onSetShouldExit]);
+    sse?.(shouldExitRef.current);
+  }, []);
 
   useEffect(() => {
     const isOnMainScreen = currentScreen === "chats" || currentScreen === "welcome";
     shouldExitRef.current = !isOnMainScreen;
-    onSetShouldExit?.(!isOnMainScreen);
-  }, [currentScreen, onSetShouldExit]);
+    onSetShouldExitRef.current?.(!isOnMainScreen);
+  }, [currentScreen]);
 
   // Active Chats & Selected Chat
   const [chats, setChats] = useState<Chat[]>([]);
@@ -209,6 +218,8 @@ export default function PhoneSimulator({
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [clearedAtMap, setClearAtMap] = useState<Record<string, string>>({});
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const selectedChatIdRef = useRef(selectedChatId);
+  selectedChatIdRef.current = selectedChatId;
   const [refetchTrigger, setRefetchTrigger] = useState(0);
   const deletedChatIdsRef = useRef<Set<string>>(new Set());
 
@@ -332,6 +343,7 @@ export default function PhoneSimulator({
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
   const forwardingSearchRef = useRef<HTMLInputElement>(null);
   const [forwardSearchQuery, setForwardSearchQuery] = useState("");
+  const [contactProfile, setContactProfile] = useState<ContactProfileData | null>(null);
 
   // Group creation state
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
@@ -395,11 +407,12 @@ export default function PhoneSimulator({
 
   const [flyers, setFlyers] = useState<BusinessFlyer[]>([]);
 
-  // Load flyers from API on mount
-  useEffect(() => {
+  // Load ALL public flyers (feed) from API on mount and when the tab opens
+  const loadFlyers = useCallback(async () => {
     if (!user) return;
-    getMyFlyers(user.id).then(apiFlyers => {
-      if (!apiFlyers || apiFlyers.length === 0) return;
+    try {
+      const apiFlyers = await getAllFlyers();
+      if (!apiFlyers) return;
       const mapped: BusinessFlyer[] = apiFlyers.map((f: any) => ({
         id: f.id,
         businessName: f.business_name,
@@ -412,15 +425,30 @@ export default function PhoneSimulator({
         price: f.price || undefined,
         musicUrl: f.music_url || '',
         musicName: f.music_name || '',
+        contactPhone: f.contact_phone || '',
         views: f.views || 0,
         clicks: f.clicks || 0,
-        ownerName: profile?.name || 'Usuario',
-        ownerAvatar: profile?.avatar || profile?.avatar_url || '',
-        ownerPhone: profile?.phone_number || '',
+        ownerId: f.user_id,
+        ownerName: f.owner_name || 'Usuario',
+        ownerAvatar: f.owner_avatar || '',
+        ownerPhone: f.owner_phone || '',
       }));
       setFlyers(mapped);
-    }).catch(() => {});
-  }, [user?.id]);
+    } catch (err) {
+      console.error("[PhoneSimulator] fetch flyers failed:", err);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    loadFlyers();
+  }, [loadFlyers, currentScreen]);
+
+  // Lightweight polling while the Business tab is open so new flyers appear live
+  useEffect(() => {
+    if (currentScreen !== "business") return;
+    const timer = setInterval(loadFlyers, 30000);
+    return () => clearInterval(timer);
+  }, [currentScreen, loadFlyers]);
 
   const handleAddNewFlyer = async (newFlyer: BusinessFlyer) => {
     setFlyers(prev => [newFlyer, ...prev]);
@@ -437,21 +465,129 @@ export default function PhoneSimulator({
         price: newFlyer.price,
         music_url: newFlyer.musicUrl,
         music_name: newFlyer.musicName,
+        contact_phone: newFlyer.contactPhone,
       });
     } catch {}
   };
 
   const handleIncrementView = (flyerId: string) => {
     setFlyers(prev => prev.map(f => f.id === flyerId ? { ...f, views: f.views + 1 } : f));
-    incrementFlyerView(flyerId).catch(() => {});
+    incrementFlyerView(flyerId).catch(err => console.error("[PhoneSimulator] incrementFlyerView failed:", err));
+  };
+
+  const handleForwardMessage = async (chatId: string) => {
+    const msg = forwardingMessage;
+    if (!msg || !user) return;
+    const mediaTypes = ["image", "video", "audio", "voice_note", "video_note", "sticker", "file"];
+    const needsMedia = mediaTypes.includes(msg.type);
+
+    let resolvedUrl: string | undefined;
+    if (needsMedia) {
+      try {
+        resolvedUrl = await resolveMediaUrl(msg);
+      } catch {
+        toast.error("No se pudo obtener la URL pública del archivo. Verificá tu conexión.");
+        return;
+      }
+      if (!resolvedUrl) return;
+    }
+
+    try {
+      await apiSendMessage({
+        chat_id: chatId,
+        sender_id: user.id,
+        text: msg.text || "",
+        type: msg.type as any,
+        image_url: msg.type === "image" || msg.type === "video" ? resolvedUrl : undefined,
+        video_url: msg.type === "video" ? resolvedUrl : undefined,
+        audio_url: msg.type === "audio" || msg.type === "voice_note" ? resolvedUrl : undefined,
+        sticker_url: msg.type === "sticker" ? resolvedUrl : undefined,
+        document_name: msg.type === "file" ? msg.fileName : undefined,
+        forwarded: true,
+      });
+      setForwardingMessage(null);
+      setForwardSearchQuery("");
+    } catch (e) {
+      console.error("[FORWARD] Error:", e);
+      toast.error("Error al reenviar mensaje");
+    }
   };
 
   const handleIncrementClick = (flyerId: string) => {
     setFlyers(prev => prev.map(f => f.id === flyerId ? { ...f, clicks: f.clicks + 1 } : f));
-    incrementFlyerClick(flyerId).catch(() => {});
+    incrementFlyerClick(flyerId).catch(err => console.error("[PhoneSimulator] incrementFlyerClick failed:", err));
   };
 
-  const handleStartBusinessChat = (businessName: string, avatar: string, initialText: string, flyerId: string) => {
+  const handleStartBusinessChat = async (businessName: string, avatar: string, initialText: string, flyerId: string, contactPhone?: string) => {
+    const businessDigits = contactPhone ? contactPhone.replace(/\D/g, "") : "";
+
+    // Try to find the real app user by the flyer's contact phone number
+    if (businessDigits.length >= 7 && user) {
+      try {
+        const { searchUsers } = await import("../services/contacts");
+        const matches = await searchUsers(contactPhone || "", user.id);
+        const match = matches.find(m => {
+          const d = (m.phone || "").replace(/\D/g, "");
+          if (!d) return false;
+          return d === businessDigits || d.endsWith(businessDigits) || businessDigits.endsWith(d);
+        }) || matches[0];
+
+        if (match) {
+          // Real chat with the business owner
+          const existing = getChatByPartnerId(match.id);
+          if (existing) {
+            setSelectedChatId(existing.id);
+            await apiSendMessage({
+              chat_id: existing.id,
+              sender_id: user.id,
+              text: initialText,
+              type: "text" as any,
+              status: "sent" as any,
+            }).catch(() => {});
+            setCurrentScreen("chat_room");
+            refreshChats().catch(() => {});
+            return;
+          }
+          const chat = await createChatInSupabase({
+            name: match.name || businessName,
+            avatar: match.avatar || avatar,
+            profile_id: match.id,
+            admin_id: user.id,
+          });
+          if (chat?.id) {
+            setChats(prev => {
+              if (prev.some(c => c.id === chat.id)) return prev;
+              return [{
+                id: chat.id,
+                name: match.name || businessName,
+                avatar: match.avatar || avatar,
+                status: "online" as const,
+                lastMessage: initialText,
+                lastMessageTime: "Ahora mismo",
+                unreadCount: 0,
+                partnerUserId: match.id,
+                messages: [],
+              }, ...prev];
+            });
+            setSelectedChatId(chat.id);
+            await apiSendMessage({
+              chat_id: chat.id,
+              sender_id: user.id,
+              text: initialText,
+              type: "text" as any,
+              status: "sent" as any,
+            }).catch(() => {});
+            setCurrentScreen("chat_room");
+            refreshChats().catch(() => {});
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("[BIZ] phone lookup failed:", e);
+      }
+    }
+
+    // Fallback: local (offline) chat
     const existing = chats.find(c => c.name.toLowerCase() === businessName.toLowerCase());
     let targetId = "";
 
@@ -587,6 +723,8 @@ export default function PhoneSimulator({
               })()
             : "";
         })(),
+        lastMessageTimeRaw: sc.last_message_time || "",
+        updated_at: sc.updated_at || sc.last_message_time || "",
         unreadCount: sc.unread_count || 0,
         partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
         isGroup: sc.is_group || false,
@@ -702,105 +840,105 @@ export default function PhoneSimulator({
     }
   }, [externalCallTrigger, onClearExternalCallTrigger]);
 
-  // Realtime subscription for incoming messages — update unreadCount badge
+  // Track when we send a message to avoid counting own messages as unread
+  const lastSentAtRef = useRef<Record<string, number>>({});
   const chatsRef = useRef(chats);
   chatsRef.current = chats;
   const clearedAtMapRef = useRef(clearedAtMap);
   clearedAtMapRef.current = clearedAtMap;
-
-  useEffect(() => {
-    if (!user) return;
-    const channel = supabase
-      .channel(`messages-unread-${user.id}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-      }, (payload: any) => {
-        const msg = payload.new;
-        if (!msg || msg.sender_id === user.id) return;
-        const isCurrentChat = currentScreen === "chat_room" && selectedChatId === msg.chat_id;
-        if (isCurrentChat) return;
-
-        setChats(prev => {
-          const idx = prev.findIndex(c => c.id === msg.chat_id);
-
-          // Chat doesn't exist locally — fetch full data and insert
-          if (idx === -1) {
-            getChatWithPartner(msg.chat_id, user.id).then(full => {
-              if (!full) return;
-              setChats(later => {
-                if (later.some(c => c.id === full.id)) return later;
-                const clearedAt = clearedAtMapRef.current[msg.chat_id];
-                const isCleared = clearedAt && msg.created_at && msg.created_at <= clearedAt;
-                const chatWithMsg = {
-                  ...full,
-                  lastMessage: isCleared ? "" : (msg.text || (full as any).last_message || ""),
-                  lastMessageTime: isCleared ? "" : (msg.created_at || (full as any).last_message_time || ""),
-                  unreadCount: isCleared ? 0 : 1,
-                };
-                return [chatWithMsg, ...later].sort((a, b) => {
-                  const ta = a.lastMessageTime || a.updated_at || "";
-                  const tb = b.lastMessageTime || b.updated_at || "";
-                  return tb.localeCompare(ta);
-                });
-              });
-            });
-            return prev;
-          }
-
-          // Chat exists — check cleared status then update
-          const clearedAt = clearedAtMapRef.current[msg.chat_id];
-          const isCleared = clearedAt && msg.created_at && msg.created_at <= clearedAt;
-          const updated = [...prev];
-          updated[idx] = {
-            ...updated[idx],
-            lastMessage: isCleared ? "" : (msg.text || updated[idx].lastMessage),
-            unreadCount: isCleared ? 0 : (updated[idx].unreadCount + 1),
-            lastMessageTime: msg.created_at || updated[idx].lastMessageTime,
-          };
-          return updated.sort((a, b) => {
-            const ta = a.lastMessageTime || a.updated_at || "";
-            const tb = b.lastMessageTime || b.updated_at || "";
-            return tb.localeCompare(ta);
-          });
-        });
-      })
-      .subscribe((status) => {
-        console.log('[UNREAD] 📡 Messages unread subscription:', status);
-      });
-    return () => { supabase.removeChannel(channel); };
-  }, [user?.id, currentScreen, selectedChatId]);
 
   // Realtime subscription for chats table (INSERT/UPDATE) — detects new chats from other users
   useEffect(() => {
     if (!user) return;
     const sub = subscribeToChats(user.id, async (event, chat) => {
       if (event === "INSERT") {
-        // New chat created by the other user — fetch full data + partner profile
-        const full = await getChatWithPartner(chat.id, user.id);
-        if (!full) return;
-        setChats(prev => {
-          const exists = prev.some(c => c.id === full.id);
-          if (exists) return prev;
-          return [full, ...prev].sort((a, b) => {
-            const ta = a.lastMessageTime || a.updated_at || "";
-            const tb = b.lastMessageTime || b.updated_at || "";
-            return tb.localeCompare(ta);
+        // New chat — fetch full data
+        const { data: full } = await supabase
+          .from("chats")
+          .select("*")
+          .eq("id", chat.id)
+          .single();
+        if (!full) {
+          const fetched = await getChatWithPartner(chat.id, user.id);
+          if (!fetched) return;
+          setChats(prev => {
+            if (prev.some(c => c.id === fetched.id)) return prev;
+            return [fetched, ...prev].sort(sortChats);
           });
+          refreshChats();
+          return;
+        }
+        setChats(prev => {
+          if (prev.some(c => c.id === full.id)) return prev;
+          return [full as any, ...prev].sort(sortChats);
         });
+        // Also sync context
+        refreshChats();
       } else if (event === "UPDATE") {
-        // Chat updated (e.g. new message bumped updated_at)
         setChats(prev => {
           const idx = prev.findIndex(c => c.id === chat.id);
           if (idx === -1) return prev;
+          const existing = prev[idx];
+          const newRawTime = chat.last_message_time || "";
+          const isNewMessage = newRawTime && newRawTime !== (existing as any).lastMessageTimeRaw;
+
+          if (!isNewMessage) {
+            const updated = [...prev];
+            updated[idx] = { ...existing, updated_at: chat.updated_at };
+            return updated.sort(sortChats);
+          }
+
+          // New message detected — check if it's our own or if we're viewing this chat
+          const isCurrentChat = currentScreenRef.current === "chat_room" && selectedChatIdRef.current === chat.id;
+          const lastSent = lastSentAtRef.current[chat.id];
+          const isOwnRecent = lastSent && (Date.now() - lastSent < 20000);
+
+          if (isCurrentChat || isOwnRecent) {
+            // Own message or currently viewing — update metadata only, no unread increment
+            const updated = [...prev];
+            updated[idx] = {
+              ...existing,
+              lastMessage: (chat.last_message || existing.lastMessage) as any,
+              lastMessageTime: newRawTime
+                ? (() => {
+                    const d = new Date(newRawTime);
+                    const now = new Date();
+                    return d.toDateString() === now.toDateString()
+                      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      : d.toLocaleDateString([], { day: "numeric", month: "short" });
+                  })()
+                : existing.lastMessageTime,
+              lastMessageTimeRaw: newRawTime,
+              updated_at: chat.updated_at,
+            };
+            db.run("UPDATE chats SET updated_at = ? WHERE id = ?", [chat.updated_at, chat.id]);
+            return updated.sort(sortChats);
+          }
+
+          // Someone else sent a message while we're not viewing — increment unread
+          const clearedAt = clearedAtMapRef.current[chat.id];
+          const isCleared = clearedAt && newRawTime && newRawTime <= clearedAt;
           const updated = [...prev];
-          updated[idx] = { ...updated[idx], updated_at: chat.updated_at };
-          return updated.sort((a, b) => {
-            const ta = a.lastMessageTime || a.updated_at || "";
-            const tb = b.lastMessageTime || b.updated_at || "";
-            return tb.localeCompare(ta);
-          });
+          updated[idx] = {
+            ...existing,
+            lastMessage: isCleared ? "" : (chat.last_message || existing.lastMessage) as any,
+            lastMessageTime: isCleared
+              ? ""
+              : newRawTime
+                ? (() => {
+                    const d = new Date(newRawTime);
+                    const now = new Date();
+                    return d.toDateString() === now.toDateString()
+                      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      : d.toLocaleDateString([], { day: "numeric", month: "short" });
+                  })()
+                : existing.lastMessageTime,
+            lastMessageTimeRaw: newRawTime,
+            unreadCount: isCleared ? 0 : (existing.unreadCount + 1),
+            updated_at: chat.updated_at,
+          };
+          db.run("UPDATE chats SET updated_at = ? WHERE id = ?", [chat.updated_at, chat.id]);
+          return updated.sort(sortChats);
         });
       }
     });
@@ -815,6 +953,10 @@ export default function PhoneSimulator({
 
   // ChatRoom internal back handler (replyTo, editingMessage, etc.)
   const chatRoomBackHandlerRef = useRef<(() => boolean) | null>(null);
+  const onBackPressRef = useRef(onBackPress);
+  const onSetShouldExitRef = useRef(onSetShouldExit);
+  onBackPressRef.current = onBackPress;
+  onSetShouldExitRef.current = onSetShouldExit;
 
   useEffect(() => {
     if (!user) return;
@@ -848,6 +990,19 @@ export default function PhoneSimulator({
           if (data) {
             callerName = data.name || "Desconocido";
             callerAvatar = data.avatar || data.avatar_url || "";
+          }
+        } catch {}
+        if (activeCallRef.current) return;
+        // Safety: verify call is still ringing in DB (may have been cancelled)
+        try {
+          const { data: freshCall } = await supabase
+            .from("calls")
+            .select("status")
+            .eq("id", call.id)
+            .single();
+          if (freshCall && freshCall.status !== "ringing") {
+            console.log('[WEBRTC SIGNALING] ❌ Call already ended, skipping incoming UI — status:', freshCall.status);
+            return;
           }
         } catch {}
         if (activeCallRef.current) return;
@@ -904,13 +1059,37 @@ export default function PhoneSimulator({
 
   useEffect(() => {
     if (!user) return;
-    const handleIncomingCall = (e: Event) => {
+    const handleIncomingCall = async (e: Event) => {
       const detail = (e as CustomEvent).detail;
       const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
       const chatId = d?.chatId || d?.roomId || '';
       const incomingCallId = d?.callId;
       console.log('[WEBRTC SIGNALING] 📱 FCM incoming-call event received:', JSON.stringify(d));
+
+      if (d?.type === 'call_dismissed') {
+        console.log('[WEBRTC SIGNALING] 📱 FCM call_dismissed received — stopping ringing');
+        if (activeCallRef.current && incomingCallId && activeCallRef.current.id === incomingCallId) {
+          stopIncomingRingtone();
+          setActiveCall(null);
+        }
+        return;
+      }
+
       if (chatId && d?.callerId && !activeCallRef.current) {
+        // Safety: verify call is still ringing in DB
+        if (incomingCallId && !incomingCallId.startsWith('call_')) {
+          try {
+            const { data: freshCall } = await supabase
+              .from("calls")
+              .select("status")
+              .eq("id", incomingCallId)
+              .single();
+            if (freshCall && freshCall.status !== "ringing") {
+              console.log('[WEBRTC SIGNALING] ❌ FCM call already ended, skipping UI — status:', freshCall.status);
+              return;
+            }
+          } catch {}
+        }
         console.log('[WEBRTC SIGNALING] ✅ Setting activeCall from FCM — caller:', d.callerName, 'status: incoming, callId:', incomingCallId);
         playIncomingRingtone();
         setActiveCall({
@@ -962,11 +1141,7 @@ export default function PhoneSimulator({
             if (!full) return;
             setChats(later => {
               if (later.some(c => c.id === full.id)) return later;
-              return [{ ...full, lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 }, ...later].sort((a, b) => {
-                const ta = a.lastMessageTime || a.updated_at || "";
-                const tb = b.lastMessageTime || b.updated_at || "";
-                return tb.localeCompare(ta);
-              });
+              return [{ ...full, lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 }, ...later].sort(sortChats);
             });
           });
           return prev;
@@ -974,21 +1149,19 @@ export default function PhoneSimulator({
         const updated = [...prev];
         updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
         if (d.body) updated[idx].lastMessage = d.body;
-        return updated.sort((a, b) => {
-          const ta = a.lastMessageTime || a.updated_at || "";
-          const tb = b.lastMessageTime || b.updated_at || "";
-          return tb.localeCompare(ta);
-        });
+        return updated.sort(sortChats);
       });
       if (selectedChatId === d.chatId && currentScreen === 'chat_room') {
         setRefetchTrigger(n => n + 1);
       }
     };
     window.addEventListener('incoming-call', handleIncomingCall);
+    window.addEventListener('call_dismissed', handleIncomingCall);
     window.addEventListener('open-chat', handleOpenChat);
     window.addEventListener('new-message-received', handleNewMessage);
     return () => {
       window.removeEventListener('incoming-call', handleIncomingCall);
+      window.removeEventListener('call_dismissed', handleIncomingCall);
       window.removeEventListener('open-chat', handleOpenChat);
       window.removeEventListener('new-message-received', handleNewMessage);
     };
@@ -997,6 +1170,7 @@ export default function PhoneSimulator({
   useEffect(() => {
     if (externalMessageTrigger) {
       const chatTarget = "nelson"; // Default target
+      const msgIso = new Date().toISOString();
       setChats((prevChats) =>
         prevChats.map((c) => {
           if (c.id === chatTarget) {
@@ -1005,15 +1179,13 @@ export default function PhoneSimulator({
               unreadCount: currentScreen !== "chat_room" || selectedChatId !== chatTarget ? c.unreadCount + 1 : 0,
               lastMessage: externalMessageTrigger.text || "¡Archivo recibido!",
               lastMessageTime: externalMessageTrigger.timestamp,
+              lastMessageTimeRaw: msgIso,
+              updated_at: msgIso,
               messages: [...c.messages, externalMessageTrigger]
             };
           }
           return c;
-        }).sort((a, b) => {
-          const ta = a.lastMessageTime || a.updated_at || "";
-          const tb = b.lastMessageTime || b.updated_at || "";
-          return tb.localeCompare(ta);
-        })
+        }).sort(sortChats)
       );
       onClearExternalMessageTrigger();
     }
@@ -1025,23 +1197,28 @@ export default function PhoneSimulator({
   const handleSendMessageInRoom = (newMsg: Message) => {
     if (!selectedChatId) return;
 
-    setChats((prevChats) =>
-      prevChats.map((c) => {
+    // Mark this chat as "just sent to" so the chats subscription won't count it as unread
+    lastSentAtRef.current[selectedChatId] = Date.now();
+    const isoNow = new Date().toISOString();
+
+    setChats((prevChats) => {
+      const updated = prevChats.map((c) => {
         if (c.id === selectedChatId) {
           return {
             ...c,
             lastMessage: newMsg.text || "Archivo multimedia",
             lastMessageTime: newMsg.timestamp,
+            lastMessageTimeRaw: isoNow,
+            updated_at: isoNow,
             messages: [...c.messages, newMsg]
           };
         }
         return c;
-      }).sort((a, b) => {
-        const ta = a.lastMessageTime || a.updated_at || "";
-        const tb = b.lastMessageTime || b.updated_at || "";
-        return tb.localeCompare(ta);
-      })
-    );
+      });
+      updated.sort(sortChats);
+      db.run("UPDATE chats SET updated_at = ?, last_message_time = ? WHERE id = ?", [isoNow, isoNow, selectedChatId]);
+      return updated;
+    });
   };
 
   const cleanupCall = useCallback(() => {
@@ -1121,6 +1298,10 @@ export default function PhoneSimulator({
 
       webrtc.onCallEnded = () => {
         console.log('[WEBRTC SIGNALING] 📞 Call ended');
+        const endedCallId = activeCallRef.current?.id;
+        if (endedCallId && !endedCallId.startsWith('call_')) {
+          updateCallStatus(endedCallId, 'ended').catch(e => console.warn('[CALL] Failed to update call status on ended:', e));
+        }
         stopRingbackTone();
         cleanupCall();
       };
@@ -1295,7 +1476,14 @@ export default function PhoneSimulator({
         }));
       const finalGroupName = groupNameInput.trim() || 
         memberProfiles.map(m => m.name.split(" ")[0]).slice(0, 5).join(", ") + (memberProfiles.length > 5 ? "..." : "");
-      const groupChat = await createGroupChat(finalGroupName, user.id, selectedGroupMembers, groupAdminOnly);
+      // Map selected member ids to real profile ids (chat_participants.profile_id references profiles.id)
+      const memberIds = selectedGroupMembers
+        .map(id => {
+          const c = appContacts.find(ct => (ct.id || ct.contact_user_id || "") === id);
+          return c?.contact_user_id || c?.id || id;
+        })
+        .filter(Boolean);
+      const groupChat = await createGroupChat(finalGroupName, user.id, memberIds, groupAdminOnly);
       refreshChats();
       setSelectedGroupMembers([]);
       setGroupSearchQuery("");
@@ -1324,6 +1512,41 @@ export default function PhoneSimulator({
       console.error("[GROUP] Error creating group:", e);
     }
   };
+
+  const handleDeleteContact = async (contactId: string) => {
+    if (!user?.id) return;
+    try {
+      await deleteContact(contactId);
+      await refreshContacts();
+      showToast("Contacto eliminado");
+    } catch (e) {
+      console.warn("[CONTACT] Delete error:", e);
+      showToast("Error al eliminar contacto");
+    }
+  };
+
+  const handleOpenProfile = useCallback(async () => {
+    if (!activeChat?.partnerUserId || !user?.id) return;
+    try {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, name, username, phone_number, avatar_url, bio")
+        .eq("id", activeChat.partnerUserId)
+        .single();
+      if (data) {
+        setContactProfile({
+          id: data.id,
+          name: data.name,
+          phone: data.phone_number || "",
+          avatar: data.avatar_url || "",
+          bio: data.bio || "",
+          username: data.username || "",
+        });
+      }
+    } catch (e) {
+      console.warn("[PROFILE] Error fetching contact profile:", e);
+    }
+  }, [activeChat, user?.id]);
 
   const handleDeleteChat = async (chatId: string) => {
     setSwipedChatId(null);
@@ -1403,6 +1626,14 @@ export default function PhoneSimulator({
     c.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
   );
 
+  console.log("[PHONESIM] Rendering:", { 
+    currentScreen,
+    registeredUser: !!registeredUser, 
+    user: !!user, 
+    filteredChats: filteredChats.length,
+    chatsLoaded,
+    supabaseChats: supabaseChats.length
+  });
   return (
     <div className="relative w-screen h-screen bg-white flex flex-col overflow-hidden select-none">
       {/* Toast Alert Notification */}
@@ -1498,6 +1729,10 @@ export default function PhoneSimulator({
           }}
           onEndCall={async () => {
             console.log('[WEBRTC SIGNALING] 📞 Ending call');
+            const endedCallId = activeCallRef.current?.id;
+            if (endedCallId && !endedCallId.startsWith('call_')) {
+              updateCallStatus(endedCallId, 'ended').catch(e => console.warn('[CALL] Failed to update call status on end:', e));
+            }
             stopRingbackTone();
             await webrtcRef.current?.endCall();
             cleanupCall();
@@ -1569,6 +1804,7 @@ export default function PhoneSimulator({
               currentUserName={profile?.name}
               refetchTrigger={refetchTrigger}
               onRegisterBackHandler={(handler) => { chatRoomBackHandlerRef.current = handler; }}
+              onOpenProfile={handleOpenProfile}
             />
           ) : currentScreen === "qr_scanner" ? (
             <QrScanner
@@ -1604,249 +1840,38 @@ export default function PhoneSimulator({
               onStartChat={handleStartChatFromSynced}
             />
           ) : currentScreen === "create_group" ? (
-            // GROUP CREATION SCREEN
-            <div className="flex-1 flex flex-col overflow-hidden bg-white">
-              <div className="bg-[#0a4d52] px-4 pt-5 pb-4 shrink-0">
-                <div className="flex items-center gap-3">
-                  <button onClick={() => setCurrentScreen("chats")} className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer">
-                    <ArrowLeft className="w-5 h-5 text-teal-100" />
-                  </button>
-                  <div>
-                    <h3 className="text-sm font-bold text-white">Nuevo Grupo</h3>
-                    <p className="text-[10px] text-teal-200">{selectedGroupMembers.length} participantes</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Group name input */}
-              <div className="px-4 py-3 border-b border-slate-100">
-                <input
-                  type="text"
-                  placeholder="Nombre del grupo (opcional)"
-                  value={groupNameInput}
-                  onChange={e => setGroupNameInput(e.target.value)}
-                  className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-xs px-4 py-2.5 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
-                />
-              </div>
-
-              {/* Search contacts */}
-              <div className="px-4 py-2 border-b border-slate-100">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Buscar contactos..."
-                    value={groupSearchQuery}
-                    onChange={e => setGroupSearchQuery(e.target.value)}
-                    className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-xs pl-9 pr-4 py-2 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
-                  />
-                </div>
-              </div>
-
-              {/* Contact list */}
-              <div className="flex-1 overflow-y-auto px-4 py-2 space-y-0.5">
-                {appContacts
-                  .filter(c => c.name?.toLowerCase().includes(groupSearchQuery.toLowerCase()) || c.phone?.toLowerCase().includes(groupSearchQuery.toLowerCase()))
-                  .map(contact => {
-                    const isSelected = selectedGroupMembers.includes(contact.id || contact.contact_user_id || "");
-                    const contactId = contact.id || contact.contact_user_id || "";
-                    return (
-                      <button
-                        key={contactId}
-                        onClick={() => {
-                          setSelectedGroupMembers(prev =>
-                            isSelected ? prev.filter(id => id !== contactId) : [...prev, contactId]
-                          );
-                        }}
-                        className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors"
-                      >
-                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                          isSelected ? "bg-teal-500 border-teal-500" : "border-slate-300"
-                        }`}>
-                          {isSelected && <Check className="w-3 h-3 text-white" />}
-                        </div>
-                        {contact.avatar ? (
-                          <img src={contact.avatar} alt={contact.name} className="w-9 h-9 rounded-full object-cover" loading="lazy" />
-                        ) : (
-                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
-                            <span className="text-white font-bold text-[10px]">
-                              {(contact.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                            </span>
-                          </div>
-                        )}
-                        <div className="text-left">
-                          <p className="text-[11px] font-bold text-slate-800">{contact.name}</p>
-                          <p className="text-[9px] text-slate-400">{contact.phone || "Sin teléfono"}</p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                {appContacts.length === 0 && (
-                  <p className="text-[10px] text-slate-400 text-center py-8">No hay contactos disponibles</p>
-                )}
-              </div>
-
-              {selectedGroupMembers.length >= 1 && (
-                <div className="px-4 py-3 border-t border-slate-100 bg-white space-y-2.5">
-                  {/* Mute toggle */}
-                  <label className="flex items-center justify-between cursor-pointer">
-                    <div className="flex items-center gap-2">
-                      <svg className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-                      </svg>
-                      <span className="text-[11px] font-semibold text-slate-700">Silenciar grupo</span>
-                    </div>
-                    <button
-                      onClick={() => setGroupMuted(!groupMuted)}
-                      className={`w-9 h-5 rounded-full transition-colors relative ${groupMuted ? "bg-teal-500" : "bg-slate-300"}`}
-                    >
-                      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${groupMuted ? "translate-x-4.5 left-0.5" : "left-0.5"}`}></span>
-                    </button>
-                  </label>
-
-                  {/* Admin-only posting toggle */}
-                  <label className="flex items-center justify-between cursor-pointer">
-                    <div className="flex items-center gap-2">
-                      <svg className="w-4 h-4 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-                      </svg>
-                      <span className="text-[11px] font-semibold text-slate-700">Solo admins pueden escribir</span>
-                    </div>
-                    <button
-                      onClick={() => setGroupAdminOnly(!groupAdminOnly)}
-                      className={`w-9 h-5 rounded-full transition-colors relative ${groupAdminOnly ? "bg-teal-500" : "bg-slate-300"}`}
-                    >
-                      <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${groupAdminOnly ? "translate-x-4.5 left-0.5" : "left-0.5"}`}></span>
-                    </button>
-                  </label>
-
-                  <button
-                    onClick={handleCreateGroup}
-                    className="w-full py-2.5 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-xl text-xs font-bold transition-colors"
-                  >
-                    Crear Grupo
-                  </button>
-                </div>
-              )}
-            </div>
+            <SimulatorCreateGroup
+              onBack={() => setCurrentScreen("chats")}
+              groupName={groupNameInput}
+              onGroupNameChange={setGroupNameInput}
+              searchQuery={groupSearchQuery}
+              onSearchChange={setGroupSearchQuery}
+              contacts={dedupedContacts}
+              selectedMembers={selectedGroupMembers}
+              onToggleMember={(id) =>
+                setSelectedGroupMembers(prev =>
+                  prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+                )
+              }
+              isMuted={groupMuted}
+              onToggleMute={() => setGroupMuted(!groupMuted)}
+              isAdminOnly={groupAdminOnly}
+              onToggleAdminOnly={() => setGroupAdminOnly(!groupAdminOnly)}
+              onCreateGroup={handleCreateGroup}
+            />
           ) : (
             // Tab screen (Chats, Contacts, States, Channels, Rates, Business, Profile)
             <div className="flex-1 flex flex-col overflow-hidden h-full relative">
               
-              {/* Header section based on selected tab */}
-              {currentScreen === "chats" && (
-                <div className="absolute top-0 left-0 right-0 text-white px-5 pt-6 pb-12 overflow-hidden z-20 h-[170px] pointer-events-none">
-                  <svg
-                    viewBox="0 0 320 180"
-                    className="absolute inset-0 w-full h-full z-0 select-none"
-                    preserveAspectRatio="none"
-                  >
-                    <defs>
-                      <linearGradient id="headerGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="#14b8a6" />
-                        <stop offset="50%" stopColor="#197a82" />
-                        <stop offset="100%" stopColor="#3ab3b8" />
-                      </linearGradient>
-                      <linearGradient id="headerGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="#0a4c51" />
-                        <stop offset="50%" stopColor="#10646a" />
-                        <stop offset="100%" stopColor="#188c94" />
-                      </linearGradient>
-                      <linearGradient id="headerGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor="#073337" />
-                        <stop offset="50%" stopColor="#0a4d52" />
-                        <stop offset="100%" stopColor="#116b72" />
-                      </linearGradient>
-                    </defs>
-                    <path d="M0,0 L0,150 C80,210 200,90 320,165 L320,0 Z" fill="url(#headerGrad1)" opacity="0.3" />
-                    <path d="M0,0 L0,135 C100,195 220,105 320,145 L320,0 Z" fill="url(#headerGrad2)" opacity="0.55" />
-                    <path d="M0,0 L0,115 C80,165 180,75 320,120 L320,0 Z" fill="url(#headerGrad3)" />
-                  </svg>
-
-                  <div className="relative z-10 flex justify-between items-center mb-3.5 pointer-events-auto">
-                    <div className="flex items-center gap-2">
-                      <h1 className="text-2xl font-extrabold tracking-tight text-white drop-shadow-md">Messages</h1>
-                    </div>
-                    
-                    <div className="flex items-center gap-2.5">
-                      <button 
-                        onClick={() => setCurrentScreen("qr_scanner")}
-                        className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center border border-white/10 text-white transition-all cursor-pointer"
-                        title="Escanear QR"
-                      >
-                        <QrCode className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => setCurrentScreen("profile")}
-                        className="w-8 h-8 rounded-full border border-white/20 overflow-hidden transition-all cursor-pointer hover:scale-110 shadow-sm"
-                        title="Tu Perfil"
-                      >
-                        <img 
-                          src={registeredUser?.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80"} 
-                          alt="Profile" 
-                          className="w-full h-full object-cover" 
-                        />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="relative z-10 pointer-events-auto">
-                    <Search className="absolute left-4 top-2.5 w-4 h-4 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full bg-white text-slate-800 placeholder-slate-400 text-xs pl-10 pr-4 py-2.5 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100 outline-none transition-all focus:ring-2 focus:ring-teal-400/20"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {currentScreen === "states" && (
-                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Estados Red On</h3>
-                  <p className="text-[10px] text-teal-100/85">Visualiza y responde a estados</p>
-                </div>
-              )}
-
-              {currentScreen === "channels" && (
-                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Canales Informativos</h3>
-                  <p className="text-[10px] text-teal-100/85">Sigue canales seguros y oficiales</p>
-                </div>
-              )}
-
-              {currentScreen === "calls" && (
-                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Historial de Llamadas</h3>
-                  <p className="text-[10px] text-teal-100/85">Llamadas recientes de audio y video</p>
-                </div>
-              )}
-
-              {currentScreen === "rates" && (
-                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Tasas de Cambio</h3>
-                  <p className="text-[10px] text-teal-100/85">Calculadora de divisas oficial</p>
-                </div>
-              )}
-
-              {currentScreen === "business" && (
-                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Modo Emprendedor</h3>
-                  <p className="text-[10px] text-teal-100/85">Folletería digital interactiva</p>
-                </div>
-              )}
-
-              {currentScreen === "profile" && (
-                <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Tu Perfil Seguro</h3>
-                  <p className="text-[10px] text-teal-100/85">Datos e información de sesión</p>
-                </div>
-              )}
+              <SimulatorTabHeader
+                currentScreen={currentScreen}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                registeredUserAvatar={registeredUser?.avatar}
+                onNavigateToQr={() => setCurrentScreen("qr_scanner")}
+                onNavigateToProfile={() => setCurrentScreen("profile")}
+                onSync={() => { refreshChats(); toast.success("Sincronizando..."); }}
+              />
 
               {/* STATES TAB — outside main content for stable flex layout */}
               <div className={currentScreen === "states" ? "flex flex-1" : "hidden"}>
@@ -2098,6 +2123,7 @@ export default function PhoneSimulator({
                       }
                     }}
                     onAddContact={() => setCurrentScreen("add_contact_manual")}
+                    onDeleteContact={handleDeleteContact}
                   />
                 )}
 
@@ -2124,6 +2150,10 @@ export default function PhoneSimulator({
                     onIncrementView={handleIncrementView}
                     onIncrementClick={handleIncrementClick}
                     onEditingChange={setIsEditingMedia}
+                    currentUserId={user?.id}
+                    currentUserName={registeredUser?.name}
+                    currentUserAvatar={registeredUser?.avatar}
+                    currentUserPhone={registeredUser?.phone}
                   />
                 )}
 
@@ -2162,7 +2192,7 @@ export default function PhoneSimulator({
                               avatarManualRef.current = true;
                               await updateProfile(user.id, { avatar_url: url, avatar: url });
                               setRegisteredUser(prev => prev ? { ...prev, avatar: url } : prev);
-                              refreshProfile().catch(() => {});
+                              refreshProfile().catch(err => console.error("[PhoneSimulator] refreshProfile failed:", err));
                               showToast("Foto de perfil actualizada ✅");
                             } catch (err) {
                               console.error("Avatar upload failed:", err);
@@ -2993,81 +3023,54 @@ export default function PhoneSimulator({
             </div>
           )}
 
-          {/* FORWARD MESSAGE MODAL */}
-          {forwardingMessage && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60" onClick={() => setForwardingMessage(null)}>
-              <div className="bg-white rounded-2xl p-4 w-[90vw] max-w-[360px] max-h-[80vh] overflow-y-auto shadow-lg" onClick={e => e.stopPropagation()}>
-                <div className="flex items-center gap-2 mb-3">
-                  <Forward className="w-4 h-4 text-teal-600" />
-                  <h3 className="text-sm font-extrabold text-slate-900">Reenviar mensaje</h3>
-                </div>
-                <div className="relative mb-3">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                  <input
-                    ref={forwardingSearchRef}
-                    type="text"
-                    placeholder="Buscar chat..."
-                    value={forwardSearchQuery}
-                    onChange={e => setForwardSearchQuery(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-[11px] rounded-lg border border-slate-200 bg-slate-50 outline-none focus:border-tele-400 transition-colors"
-                    autoFocus
-                  />
-                </div>
-                <div className="space-y-0.5 max-h-[50vh] overflow-y-auto">
-                  {chats
-                    .filter(c => c.name.toLowerCase().includes(forwardSearchQuery.toLowerCase()))
-                    .map(chat => (
-                      <button
-                        key={chat.id}
-                        onClick={async () => {
-                          if (forwardingMessage.mediaUrl?.startsWith("blob:")) {
-                            toast.error("Espera a que el archivo termine de subirse");
-                            return;
-                          }
-                          try {
-                            await apiSendMessage({
-                              chat_id: chat.id,
-                              sender_id: user?.id,
-                              text: forwardingMessage.text || "",
-                              type: forwardingMessage.type as any,
-                              image_url: forwardingMessage.type === "image" || forwardingMessage.type === "video" ? forwardingMessage.mediaUrl : undefined,
-                              video_url: forwardingMessage.type === "video" ? forwardingMessage.mediaUrl : undefined,
-                              audio_url: forwardingMessage.type === "audio" || forwardingMessage.type === "voice_note" ? forwardingMessage.mediaUrl : undefined,
-                              document_name: forwardingMessage.type === "file" ? forwardingMessage.fileName : undefined,
-                              forwarded: true,
-                            });
-                            setForwardingMessage(null);
-                            setForwardSearchQuery("");
-                          } catch (e) {
-                            console.error("[FORWARD] Error:", e);
-                          }
-                        }}
-                        className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors text-left"
-                      >
-                        {chat.avatar ? (
-                          <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover" />
-                        ) : (
-                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
-                            <span className="text-white font-bold text-[10px]">
-                              {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                            </span>
-                          </div>
-                        )}
-                        <span className="flex-1 text-[11px] font-bold text-slate-800 truncate">{chat.name}</span>
-                        <ArrowRight className="w-3.5 h-3.5 text-slate-300" />
-                      </button>
-                    ))}
-                  {chats.length === 0 && (
-                    <p className="text-[10px] text-slate-400 text-center py-4">No hay chats para reenviar</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          <SimulatorForwardModal
+            message={forwardingMessage}
+            onClose={() => { setForwardingMessage(null); setForwardSearchQuery(""); }}
+            searchQuery={forwardSearchQuery}
+            onSearchChange={setForwardSearchQuery}
+            chats={chats}
+            searchRef={forwardingSearchRef}
+            onForwardMessage={handleForwardMessage}
+          />
+
+          <ContactProfile
+            isOpen={contactProfile !== null}
+            profile={contactProfile}
+            onClose={() => setContactProfile(null)}
+          />
 
         </div>
       )}
 
     </div>
   );
+}
+
+async function resolveMediaUrl(msg: Message): Promise<string | undefined> {
+  const url = msg.mediaUrl;
+  if (!url) return undefined;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error("fetch failed");
+    const blob = await resp.blob();
+    const folder =
+      msg.type === "video" || msg.type === "video_note" ? "video"
+      : msg.type === "audio" || msg.type === "voice_note" ? "voice"
+      : msg.type === "sticker" ? "stickers"
+      : "uploads";
+    return await uploadChatMedia(blob, folder);
+  } catch (e) {
+    console.warn("[FORWARD] resolveMediaUrl failed for", url, e);
+    throw e;
+  }
+}
+
+function getChatTime(x: any): number {
+  return new Date(x.updated_at || x.lastMessageTimeRaw || 0).getTime();
+}
+
+function sortChats(a: any, b: any): number {
+  return getChatTime(b) - getChatTime(a);
 }

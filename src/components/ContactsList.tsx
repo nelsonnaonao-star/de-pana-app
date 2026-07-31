@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft, Trash2 } from "lucide-react";
 import { Contact } from "../services/contacts";
 import CachedImage from "./CachedImage";
 
@@ -7,6 +7,7 @@ interface ContactsListProps {
   contacts: Contact[];
   onSelectContact: (contact: Contact) => void;
   onAddContact: () => void;
+  onDeleteContact: (contactId: string) => void;
   onBack?: () => void;
 }
 
@@ -14,8 +15,42 @@ function getInitials(name: string): string {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
-export default function ContactsList({ contacts, onSelectContact, onAddContact, onBack }: ContactsListProps) {
+export default function ContactsList({ contacts, onSelectContact, onAddContact, onDeleteContact, onBack }: ContactsListProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [menuContact, setMenuContact] = useState<Contact | null>(null);
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const menuRef = useRef<HTMLDivElement>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuContact(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const handleContextMenu = (contact: Contact, e: React.MouseEvent) => {
+    e.preventDefault();
+    setMenuContact(contact);
+    setMenuPos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleTouchStart = (contact: Contact) => {
+    longPressTimer.current = setTimeout(() => {
+      setMenuContact(contact);
+      longPressTimer.current = null;
+    }, 500);
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
 
   const filtered = contacts.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -86,7 +121,14 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
             <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">Favoritos</h4>
             <div className="space-y-0.5">
               {favorites.map((contact) => (
-                <ContactRow key={contact.id} contact={contact} onClick={onSelectContact} />
+                <ContactRow
+                  key={contact.id}
+                  contact={contact}
+                  onClick={onSelectContact}
+                  onContextMenu={(e) => handleContextMenu(contact, e)}
+                  onTouchStart={() => handleTouchStart(contact)}
+                  onTouchEnd={handleTouchEnd}
+                />
               ))}
             </div>
           </div>
@@ -99,17 +141,51 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
             )}
             <div className="space-y-0.5">
               {others.map((contact) => (
-                <ContactRow key={contact.id} contact={contact} onClick={onSelectContact} />
+                <ContactRow
+                  key={contact.id}
+                  contact={contact}
+                  onClick={onSelectContact}
+                  onContextMenu={(e) => handleContextMenu(contact, e)}
+                  onTouchStart={() => handleTouchStart(contact)}
+                  onTouchEnd={handleTouchEnd}
+                />
               ))}
             </div>
           </div>
         )}
       </div>
+
+      {menuContact && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1 min-w-[180px]"
+          style={{ left: menuPos.x, top: menuPos.y }}
+        >
+          <button
+            onClick={() => {
+              onDeleteContact(menuContact.id);
+              setMenuContact(null);
+            }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+          >
+            <Trash2 className="w-4 h-4" />
+            Eliminar contacto
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-function ContactRow({ contact, onClick }: { contact: Contact; onClick: (c: Contact) => void }) {
+function ContactRow({
+  contact, onClick, onContextMenu, onTouchStart, onTouchEnd
+}: {
+  contact: Contact;
+  onClick: (c: Contact) => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+  onTouchStart: () => void;
+  onTouchEnd: () => void;
+}) {
   const avatarColors = [
     "from-teal-400 to-emerald-600",
     "from-blue-400 to-indigo-600",
@@ -123,6 +199,9 @@ function ContactRow({ contact, onClick }: { contact: Contact; onClick: (c: Conta
   return (
     <button
       onClick={() => onClick(contact)}
+      onContextMenu={onContextMenu}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
       className="w-full bg-white rounded-xl p-3 flex items-center gap-3 hover:shadow-md hover:bg-slate-50 transition-all text-left cursor-pointer border border-transparent hover:border-slate-200"
     >
       <div className={`w-11 h-11 rounded-full overflow-hidden bg-gradient-to-br ${avatarColors[colorIndex]} shrink-0 shadow-sm flex items-center justify-center`}>

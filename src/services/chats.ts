@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { apiUrl } from "../lib/api";
 
 export type Chat = {
   id: string;
@@ -232,20 +233,96 @@ export async function createGroupChat(
   if (error) throw error;
 
   // Add all members to chat_participants
-  const participantRows = [...new Set([creatorId, ...memberIds])].map(profile_id => ({
+  const allMemberIds = [...new Set([creatorId, ...memberIds])].filter(Boolean);
+  const participantRows = allMemberIds.map(profile_id => ({
     chat_id: data.id,
     profile_id,
   }));
-  await supabase.from("chat_participants").insert(participantRows);
+
+  // Client-side upsert FIRST (reliable — works with or without RLS)
+  const { error: upsertErr } = await supabase.from("chat_participants").upsert(
+    participantRows.map(({ chat_id, profile_id }) => ({ chat_id, profile_id })),
+    { onConflict: "chat_id,profile_id", ignoreDuplicates: true }
+  );
+  if (upsertErr) {
+    console.error("[CHATS] Failed to upsert participants:", upsertErr);
+  } else {
+    console.log("[CHATS] Participants inserted:", allMemberIds.length);
+  }
+
+  // Then try server endpoint as a safety net (bypasses RLS in case policies get stricter)
+  try {
+    const { authFetch } = await import("../lib/api");
+    const resp = await authFetch(apiUrl("/api/groups/add-participants"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: data.id, member_ids: allMemberIds }),
+    });
+    const result = await resp.json();
+    if (!result.ok) {
+      console.warn("[CHATS] Server add-participants responded but not ok:", result);
+    }
+  } catch (fetchErr) {
+    console.warn("[CHATS] Server endpoint unavailable (ignored):", fetchErr?.message);
+  }
+
+  // Insert system message so the chat appears in participants' lists and triggers push
+  const systemText = `Grupo creado`;
+  try {
+    await supabase.from("messages").insert({
+      chat_id: data.id,
+      sender_id: creatorId,
+      text: systemText,
+      type: "text",
+      status: "sent",
+      created_at: new Date().toISOString(),
+      edited: false,
+      forwarded: false,
+      is_deleted: false,
+      is_ephemeral: false,
+      has_image: false,
+      has_audio: false,
+      has_video: false,
+      has_document: false,
+      has_location: false,
+      is_animated: false,
+    });
+    await supabase
+      .from("chats")
+      .update({
+        last_message: systemText,
+        last_message_time: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", data.id);
+  } catch (e) {
+    console.error("[CHATS] Failed to insert system message:", e);
+  }
 
   return data as Chat;
 }
 
 export async function addGroupMember(chatId: string, profileId: string) {
-  const { error } = await supabase
-    .from("chat_participants")
-    .insert({ chat_id: chatId, profile_id: profileId });
-  if (error) throw error;
+  try {
+    const { authFetch } = await import("../lib/api");
+    const resp = await authFetch(apiUrl("/api/groups/add-participants"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, member_ids: [profileId] }),
+    });
+    const result = await resp.json();
+    if (!result.ok) throw new Error(result.error || "Server add-participants failed");
+    return;
+  } catch (fetchErr) {
+    // Fallback to client-side upsert
+    const { error } = await supabase
+      .from("chat_participants")
+      .upsert(
+        { chat_id: chatId, profile_id: profileId },
+        { onConflict: "chat_id,profile_id", ignoreDuplicates: true }
+      );
+    if (error) throw error;
+  }
 }
 
 export async function removeGroupMember(chatId: string, profileId: string) {
@@ -311,5 +388,29 @@ export function subscribeToChats(userId: string, callback: (event: "INSERT" | "U
     )
     .subscribe();
 
-  return { unsubscribe: () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); } };
+  // Subscribe to ALL group INSERTs — filter by participant check in callback
+  const ch3 = supabase
+    .channel("chats-as-participant")
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "chats" },
+      (payload) => {
+        const chat = payload.new as Chat;
+        if (!chat.is_group) return;
+        // Check if user is a participant of this new chat
+        supabase
+          .from("chat_participants")
+          .select("chat_id", { count: "exact", head: true })
+          .eq("chat_id", chat.id)
+          .eq("profile_id", userId)
+          .then(({ count }) => {
+            if (count && count > 0) {
+              callback("INSERT", chat);
+            }
+          });
+      }
+    )
+    .subscribe();
+
+  return { unsubscribe: () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); supabase.removeChannel(ch3); } };
 }

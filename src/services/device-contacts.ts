@@ -1,5 +1,6 @@
 import { Contacts } from "@capacitor-community/contacts";
 import { supabase } from "../lib/supabase";
+import { digitsOnly } from "../utils/phone";
 
 export interface DeviceContact {
   name: string;
@@ -17,7 +18,7 @@ export interface MatchedProfile {
 }
 
 function cleanPhone(phone: string): string {
-  return phone.replace(/[\s\-().–—\+]/g, "").replace(/^00/, "").replace(/^1/, "").trim();
+  return digitsOnly(phone).replace(/^00/, "");
 }
 
 export async function requestContactPermission(): Promise<boolean> {
@@ -79,10 +80,21 @@ export async function matchContactsWithSupabase(
   for (let i = 0; i < uniqueNumbers.length; i += BATCH_SIZE) {
     const batch = uniqueNumbers.slice(i, i + BATCH_SIZE);
 
+    const searchVariants = batch.flatMap((n) => {
+      const variants = [n];
+      if (n.length >= 11) {
+        for (let i = 1; i <= 3; i++) {
+          const sliced = n.slice(i);
+          if (sliced.length >= 7) variants.push(sliced);
+        }
+      }
+      return variants;
+    });
+
     const { data, error } = await supabase
       .from("profiles")
       .select("id, username, name, phone_number, avatar_url")
-      .in("phone_number", batch);
+      .in("phone_digits", searchVariants);
 
     if (error) {
       console.error("[DEVICE-CONTACTS] Supabase query error:", error);
@@ -90,8 +102,9 @@ export async function matchContactsWithSupabase(
     }
 
     for (const profile of data || []) {
+      const profileDigits = digitsOnly(profile.phone_number);
       const deviceContact = contacts.find(
-        (c) => c.cleanedPhone === profile.phone_number
+        (c) => digitsOnly(c.cleanedPhone) === profileDigits
       );
       matched.push({
         ...profile,
@@ -115,11 +128,11 @@ export async function searchByPhone(
   const cleaned = cleanPhone(query);
   if (cleaned.length < 4) return [];
 
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id, username, name, phone_number, avatar_url")
-    .ilike("phone_number", `%${cleaned}%`)
-    .limit(20);
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, name, phone_number, avatar_url")
+      .ilike("phone_digits", `%${cleaned}%`)
+      .limit(20);
 
   if (error) {
     console.error("[DEVICE-CONTACTS] Search error:", error);

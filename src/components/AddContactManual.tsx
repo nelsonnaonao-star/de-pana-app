@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { searchUsers, addContact } from "../services/contacts";
+import { normalizePhone, digitsOnly } from "../utils/phone";
 import {
   ArrowLeft, Phone, User, Check, Loader2, UserPlus, X, Smartphone, ExternalLink, Shield
 } from "lucide-react";
+
+const PHONE_RE = /^\+?[0-9]{0,15}$/;
 import { useSupabase } from "../contexts/SupabaseContext";
 
 interface AddContactManualProps {
@@ -41,7 +44,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
     inputRef.current?.focus();
   }, []);
 
-  const cleanDigits = phoneRaw.replace(/\D/g, "").trim();
+  const cleanDigits = digitsOnly(phoneRaw);
 
   // Live search as user types (handlePhoneChange pattern from provided code)
   const handlePhoneChange = useCallback(async (phone: string) => {
@@ -49,10 +52,10 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
     setError("");
     setDetectedUser(null);
 
-    const digits = phone.replace(/\D/g, "").trim();
+    const digits = digitsOnly(phone);
 
     // Self-check
-    const ownDigits = currentUserPhone.replace(/\D/g, "").trim();
+    const ownDigits = digitsOnly(currentUserPhone);
     if (ownDigits && digits.length >= 7 && (digits === ownDigits || digits.slice(-10) === ownDigits.slice(-10))) {
       setError("No puedes agregarte a ti mismo como contacto");
       return;
@@ -62,7 +65,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
       setSearching(true);
       try {
         const users = await searchUsers(phone, currentUserId);
-        const phoneDigits = phone.replace(/\D/g, "");
+        const phoneDigits = digitsOnly(phone);
         const match = users.find((u: any) => (u.phone || "").replace(/\D/g, "").includes(phoneDigits));
         if (match) {
           setDetectedUser(match);
@@ -78,7 +81,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
   // Debounce the phone input
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (phoneRaw.replace(/\D/g, "").length >= 7) {
+    if (digitsOnly(phoneRaw).length >= 7) {
       debounceRef.current = setTimeout(() => handlePhoneChange(phoneRaw), 400);
     } else {
       setDetectedUser(null);
@@ -151,13 +154,9 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
                   type="tel"
                   value={phoneRaw}
                   onChange={(e) => {
-                    const raw = e.target.value.replace(/[^\d+]/g, "");
-                    if (raw.length <= 13) {
-                      setPhoneRaw(raw);
-                      // Live search triggered via debounce effect
-                    }
+                    if (PHONE_RE.test(e.target.value)) setPhoneRaw(normalizePhone(e.target.value));
                   }}
-                  placeholder="04241305887"
+                  placeholder="+573001234567"
                   className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-sm pl-10 pr-10 py-3.5 rounded-xl outline-none focus:border-teal-400/50 focus:ring-2 focus:ring-teal-500/10 transition-all"
                 />
                 {searching && (

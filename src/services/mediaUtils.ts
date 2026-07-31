@@ -23,6 +23,17 @@ async function getAlbumId(): Promise<string> {
   return cachedAlbumId;
 }
 
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 async function fetchWithAuth(url: string): Promise<Blob> {
   const headers: Record<string, string> = {};
   try {
@@ -31,7 +42,7 @@ async function fetchWithAuth(url: string): Promise<Blob> {
       headers["Authorization"] = `Bearer ${session.access_token}`;
     }
   } catch { /* proceed without auth */ }
-  const response = await fetch(url, { headers });
+  const response = await fetchWithTimeout(url, { headers });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.blob();
 }

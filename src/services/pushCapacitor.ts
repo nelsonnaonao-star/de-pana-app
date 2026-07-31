@@ -97,7 +97,12 @@ export async function setupCapacitorPush(userId: string) {
     PushNotifications.addListener('pushNotificationReceived', (notification: any) => {
       const data = notification.data;
       console.log('[PUSH] pushNotificationReceived:', JSON.stringify(data));
-      if (data?.type === 'call' && data?.chatId) {
+      if (data?.type === 'call_dismissed' && data?.callId) {
+        console.log('[PUSH] Dispatching call_dismissed CustomEvent');
+        window.dispatchEvent(new CustomEvent('call_dismissed', {
+          detail: { callId: data.callId, chatId: data.chatId || '', callerId: data.callerId || '' },
+        }));
+      } else if (data?.type === 'call' && data?.chatId) {
         console.log('[PUSH] Dispatching incoming-call CustomEvent from FCM');
         try { new Audio('/sounds/ringtone.mp3').play().catch(() => {}); } catch {}
         window.dispatchEvent(new CustomEvent('incoming-call', {
@@ -129,15 +134,29 @@ export async function setupCapacitorPush(userId: string) {
   } catch {}
 }
 
-export async function sendFcmPush(profileId: string, title: string, body: string, data?: Record<string, string>) {
+export async function sendFcmPush(profileId: string, title: string, body: string, data?: Record<string, string>): Promise<boolean> {
   const baseUrl = getServerUrl();
-  if (!baseUrl) return;
+  if (!baseUrl) return false;
   try {
     const res = await authFetch(`${baseUrl}/api/fcm/send`, {
       method: 'POST',
       body: JSON.stringify({ profile_id: profileId, title, body, data }),
     });
-  } catch {}
+    if (!res.ok) {
+      console.error('[PUSH] Error sending push:', res.status, await res.text().catch(() => ''));
+      return false;
+    }
+    const result = await res.json();
+    const totalSent = result.sent || result.android || result.web || 0;
+    if (totalSent === 0) {
+      console.error('[PUSH] No push tokens found or send failed:', result);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[PUSH] sendFcmPush exception:', err);
+    return false;
+  }
 }
 
 export async function unregisterCapacitorPush() {
