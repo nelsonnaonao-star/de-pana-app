@@ -152,6 +152,10 @@ router.post('/send', sendLimiter, async (req, res) => {
         reply_to_id: msg.reply_to_id || null,
         reply_to_text: msg.reply_to_text || null,
         reply_to_sender: msg.reply_to_sender || null,
+        poll_question: msg.poll_question || null,
+        poll_options: msg.poll_options
+          ? (typeof msg.poll_options === 'string' ? msg.poll_options : JSON.stringify(msg.poll_options))
+          : null,
         is_animated: !!msg.is_animated,
         is_deleted: false,
         is_ephemeral: false,
