@@ -18,6 +18,7 @@ export type Chat = {
   bio?: string;
   profile_id?: string;
   admin_id?: string;
+  ephemeral_timer?: number | null;
 };
 
 export async function getChats(userId: string): Promise<Chat[]> {

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { Mic, Play, Pause, BarChart2, Forward, MapPin, Loader2, X, Download, Share2 } from "lucide-react";
+import { Mic, Play, Pause, BarChart2, Forward, MapPin, Loader2, X, Download, Share2, Clock } from "lucide-react";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
@@ -75,6 +75,14 @@ function parseJsonSafe(value: any): any {
     }
   }
   return value;
+}
+
+function EphemeralBadge({ isMe }: { isMe: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-0.5 ${isMe ? "" : ""}`}>
+      <Clock className="w-2.5 h-2.5" />
+    </span>
+  );
 }
 
 function extractPollData(msg: Message) {
@@ -341,6 +349,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
         )}
 
         <div className="absolute bottom-1 right-1 bg-black/50 text-white/90 text-[10px] px-1.5 py-0.5 rounded-full backdrop-blur-xs font-medium pointer-events-none flex items-center gap-1">
+          {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
           <span>{msg.timestamp}</span>
           {isMe && (
             <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
@@ -516,6 +525,7 @@ export default React.memo(function MessageBubble({
           <span className="text-7xl leading-none select-none px-1">{msg.text}</span>
           <div className={`flex items-center gap-1 px-2 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
             {msg.edited && <span className="italic opacity-60">editado</span>}
+            {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
             <span>{msg.timestamp}</span>
             {isMe && (
               <span className={`text-[10px] leading-none ${msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"}`}>
@@ -706,6 +716,7 @@ export default React.memo(function MessageBubble({
 
         <div className={`flex items-center justify-end gap-1 mt-1 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
           {msg.edited && <span className="italic opacity-60">editado</span>}
+          {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
           <span>{msg.timestamp}</span>
           {isMe && (
             <span className={`text-[10px] leading-none ${
@@ -847,6 +858,7 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
           </div>
 
           <div className="absolute bottom-1 right-1 bg-black/50 text-white/90 text-[10px] px-1.5 py-0.5 rounded-full backdrop-blur-xs font-medium pointer-events-none flex items-center gap-1 z-10">
+            {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
             <span>{msg.timestamp}</span>
             {isMe && (
               <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>

@@ -32,7 +32,7 @@ export async function getAllStories() {
   return get<any[]>(`${API}/stories`);
 }
 
-export async function createStory(story: { user_id: string; type: string; content: string; caption?: string; background?: string }) {
+export async function createStory(story: { user_id: string; type: string; content: string; caption?: string; background?: string; audience?: string }) {
   return post<any>(`${API}/stories`, story);
 }
 

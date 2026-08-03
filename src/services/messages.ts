@@ -41,6 +41,7 @@ export type Message = {
   is_animated: boolean;
   is_ephemeral: boolean;
   ephemeral_expires_at?: string;
+  ephemeral_timer?: number;
   poll_id?: string;
   poll_question?: string;
   poll_options?: { id: string; text: string; votes: number; votedUsers: string[] }[];
@@ -139,6 +140,8 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
       sticker_url: message.sticker_url,
       gif_url: message.gif_url,
       is_animated: message.is_animated,
+      ephemeral_timer: message.ephemeral_timer,
+      ephemeral_expires_at: message.ephemeral_expires_at,
       poll_question: message.poll_question,
       poll_options: message.poll_options ? JSON.stringify(message.poll_options) : undefined,
     }),
@@ -207,6 +210,18 @@ export async function clearForMe(chatId: string) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || "Error al vaciar chat");
+  }
+  return res.json();
+}
+
+export async function setEphemeralTimer(chatId: string, timer: number) {
+  const res = await authFetch(apiUrl("/api/messages/ephemeral-setting"), {
+    method: "POST",
+    body: JSON.stringify({ chat_id: chatId, timer }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al configurar mensajes temporales");
   }
   return res.json();
 }

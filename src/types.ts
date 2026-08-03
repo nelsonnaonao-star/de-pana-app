@@ -26,6 +26,8 @@ export interface Message {
   localVideoUrl?: string;
   synced?: boolean;
   chatId?: string;
+  isEphemeral?: boolean;
+  ephemeralExpiresAt?: string;
 }
 
 export interface Chat {

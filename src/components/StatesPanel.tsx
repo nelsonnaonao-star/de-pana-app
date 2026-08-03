@@ -13,6 +13,7 @@ import { useStatesManagement, Story, UserState } from "../hooks/useStatesManagem
 import StoryViewer from "./states/StoryViewer";
 import StateViewersModal from "./states/StateViewersModal";
 import CreateStateModal from "./states/CreateStateModal";
+import StoryAudiencePicker from "./states/StoryAudiencePicker";
 
 interface StatesPanelProps {
   onStartChat: (name: string, avatar: string, initialText: string) => void;
@@ -20,7 +21,7 @@ interface StatesPanelProps {
 }
 
 export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelProps) {
-  const { user, profile } = useSupabase();
+  const { user, profile, contacts } = useSupabase();
 
   const {
     userStates, myStories, subView,
@@ -37,10 +38,12 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
     handlePublishOriginal, handlePublishNow, handleGoToProEditor, handlePublishProState,
     handleDeleteMyStory, handleToggleReaction,
     setPublishStep, setIsEditingProState, setShowPublishDecisionModal,
+    audience, handleSetAudience,
   } = useStatesManagement({
     userId: user?.id || "",
     profileName: profile?.name,
     profileAvatar: profile?.avatar || profile?.avatar_url,
+    defaultAudience: profile?.default_story_audience,
     onStartChat,
     onHasUnseen,
   });
@@ -220,6 +223,8 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
             >
               <Check className="w-4 h-4" /> Compartir en Mi Estado
             </button>
+
+            <StoryAudiencePicker audience={audience} onChange={handleSetAudience} contacts={contacts} />
           </div>
         )}
 
@@ -303,6 +308,8 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
             >
               <Check className="w-4 h-4" /> Compartir en Mi Estado
             </button>
+
+            <StoryAudiencePicker audience={audience} onChange={handleSetAudience} contacts={contacts} />
           </div>
         )}
 

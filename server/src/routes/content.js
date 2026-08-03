@@ -16,7 +16,33 @@ function mapStoryFromDb(s) {
     type: s.type,
     content: s.type === 'text' ? (s.text || '') : s.type === 'image' ? (s.image_url || '') : (s.video_url || ''),
     created_at: s.created_at,
+    audience: s.audience || null,
   };
+}
+
+// Parse/validate the story audience JSON.
+// tipo: "todos" (all mutual contacts) | "solo" (only listed ids) | "ocultar" (all mutual except listed ids) | "nadie"
+function parseAudience(raw) {
+  if (!raw) return { tipo: 'todos', ids: [] };
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      tipo: ['todos', 'solo', 'ocultar', 'nadie'].includes(parsed.tipo) ? parsed.tipo : 'todos',
+      ids: Array.isArray(parsed.ids) ? parsed.ids.filter(Boolean) : [],
+    };
+  } catch {
+    return { tipo: 'todos', ids: [] };
+  }
+}
+
+function canViewStoryByAudience(audienceRaw, viewerId, storyUserId) {
+  if (storyUserId === viewerId) return true;
+  const aud = parseAudience(audienceRaw);
+  if (aud.tipo === 'todos') return true;
+  if (aud.tipo === 'nadie') return false;
+  if (aud.tipo === 'solo') return aud.ids.includes(viewerId);
+  if (aud.tipo === 'ocultar') return !aud.ids.includes(viewerId);
+  return true;
 }
 
 function mapStoryToDb(body) {
@@ -61,6 +87,11 @@ async function canAccessStory(userId, storyUserId) {
   return visible.includes(storyUserId);
 }
 
+async function canViewStory(userId, story) {
+  if (!(await canAccessStory(userId, story.user_id))) return false;
+  return canViewStoryByAudience(story.audience, userId, story.user_id);
+}
+
 // ─── STORIES ───────────────────────────────────────────────────────
 
 router.get('/stories/:userId', async (req, res) => {
@@ -96,10 +127,24 @@ router.get('/stories', async (req, res) => {
       .gte('created_at', cutoff)
       .order('created_at', { ascending: false });
     if (error) throw error;
+
+    // Which of these stories has the current user already viewed?
+    let viewedIds = new Set();
+    if (data && data.length > 0) {
+      const storyIds = data.map(s => s.id);
+      const { data: views } = await supabaseAdmin
+        .from('story_views')
+        .select('story_id')
+        .eq('viewer_id', req.userId)
+        .in('story_id', storyIds);
+      viewedIds = new Set((views || []).map(v => v.story_id));
+    }
+
     const mapped = (data || []).map(s => ({
       ...mapStoryFromDb(s),
       profiles: s.profiles ? { name: s.profiles.name, avatar_url: s.profiles.avatar_url } : undefined,
-    }));
+      viewed: viewedIds.has(s.id),
+    })).filter(s => canViewStoryByAudience(s.audience, req.userId, s.user_id));
     res.json(mapped);
   } catch (err) {
     console.error('[CONTENT] all stories error:', err);
@@ -117,6 +162,8 @@ router.post('/stories', async (req, res) => {
       return res.status(403).json({ error: 'No puedes crear stories como otro usuario' });
     }
     const insertData = mapStoryToDb(req.body);
+    const audience = parseAudience(req.body.audience);
+    insertData.audience = JSON.stringify(audience);
     const { data, error } = await supabaseAdmin
       .from('stories')
       .insert(insertData)
@@ -159,13 +206,13 @@ router.post('/stories/:storyId/view', async (req, res) => {
     const { storyId } = req.params;
     const { data: story, error: storyErr } = await supabaseAdmin
       .from('stories')
-      .select('user_id')
+      .select('user_id, audience')
       .eq('id', storyId)
       .maybeSingle();
     if (storyErr) throw storyErr;
     if (!story) return res.status(404).json({ error: 'Estado no encontrado' });
     if (story.user_id === req.userId) return res.json({ ok: true });
-    if (!(await canAccessStory(req.userId, story.user_id))) {
+    if (!(await canViewStory(req.userId, story))) {
       return res.status(403).json({ error: 'No autorizado' });
     }
     await supabaseAdmin
@@ -230,12 +277,12 @@ router.post('/stories/:storyId/react', async (req, res) => {
     if (!reaction) return res.status(400).json({ error: 'reaction requerida' });
     const { data: story, error: storyErr } = await supabaseAdmin
       .from('stories')
-      .select('user_id')
+      .select('user_id, audience')
       .eq('id', storyId)
       .maybeSingle();
     if (storyErr) throw storyErr;
     if (!story) return res.status(404).json({ error: 'Estado no encontrado' });
-    if (!(await canAccessStory(req.userId, story.user_id))) {
+    if (!(await canViewStory(req.userId, story))) {
       return res.status(403).json({ error: 'No autorizado' });
     }
     const { data: existing } = await supabaseAdmin

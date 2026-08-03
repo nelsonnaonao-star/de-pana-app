@@ -1,6 +1,30 @@
 import { useState, useEffect, useRef, FormEvent, ChangeEvent, MouseEvent } from "react";
 import { getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
+import { updateProfile } from "../services/auth";
 import { storyRepo } from "../services/database/repositories/StoryRepository";
+
+export type StoryAudience =
+  | { tipo: "todos" }
+  | { tipo: "solo"; ids: string[] }
+  | { tipo: "ocultar"; ids: string[] }
+  | { tipo: "nadie" };
+
+export function parseStoryAudience(raw?: string | null): StoryAudience {
+  if (!raw) return { tipo: "todos" };
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.tipo === "solo" && Array.isArray(parsed.ids)) return { tipo: "solo", ids: parsed.ids };
+    if (parsed?.tipo === "ocultar" && Array.isArray(parsed.ids)) return { tipo: "ocultar", ids: parsed.ids };
+    if (parsed?.tipo === "nadie") return { tipo: "nadie" };
+    return { tipo: "todos" };
+  } catch {
+    return { tipo: "todos" };
+  }
+}
+
+export function audienceToJson(audience: StoryAudience): string {
+  return JSON.stringify(audience);
+}
 
 export interface Story {
   id: string;
@@ -33,14 +57,16 @@ interface UseStatesManagementParams {
   userId: string;
   profileName?: string;
   profileAvatar?: string;
+  defaultAudience?: string;
   onStartChat: (name: string, avatar: string, initialText: string) => void;
   onHasUnseen?: (unseen: boolean) => void;
 }
 
-export function useStatesManagement({ userId, profileName, profileAvatar, onStartChat, onHasUnseen }: UseStatesManagementParams) {
+export function useStatesManagement({ userId, profileName, profileAvatar, defaultAudience, onStartChat, onHasUnseen }: UseStatesManagementParams) {
   const [userStates, setUserStates] = useState<UserState[]>([]);
   const [myStories, setMyStories] = useState<Story[]>([]);
   const [subView, setSubView] = useState<"list" | "create_text" | "create_image">("list");
+  const [audience, setAudience] = useState<StoryAudience>(() => parseStoryAudience(defaultAudience));
 
   const [uploadedMedia, setUploadedMedia] = useState<{ url: string; type: "image" | "video"; name: string } | null>(null);
   const [showPublishDecisionModal, setShowPublishDecisionModal] = useState(false);
@@ -86,9 +112,12 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
             id: s.user_id + '_state',
             userName: s.profiles?.name || 'Usuario',
             userAvatar: s.profiles?.avatar_url || '',
-            hasUnseen: !cached,
+            hasUnseen: false,
             stories: [],
           };
+        }
+        if (!cached && !s.viewed) {
+          grouped[s.user_id].hasUnseen = true;
         }
         grouped[s.user_id].stories.push({
           id: s.id,
@@ -265,6 +294,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
       user_id: userId,
       type: story.type,
       content: story.content,
+      audience: audienceToJson(audience),
     }).catch(err => console.error("[StatesPanel] createStory failed:", err));
   };
 
@@ -395,6 +425,16 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
     }).catch(err => console.error("[StatesPanel] toggleStoryReaction failed:", err));
   };
 
+  const handleSetAudience = (next: StoryAudience) => {
+    setAudience(next);
+    if (userId) {
+      const json = audienceToJson(next);
+      updateProfile(userId, { default_story_audience: json }).catch(err =>
+        console.error("[StatesPanel] save default audience failed:", err)
+      );
+    }
+  };
+
   const setStoryPaused = (paused: boolean) => {
     isStoryPausedRef.current = paused;
     setIsStoryPaused(paused);
@@ -404,6 +444,8 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
     userStates,
     myStories,
     subView,
+    audience,
+    handleSetAudience,
     uploadedMedia,
     showPublishDecisionModal,
     isEditingProState,

@@ -15,7 +15,7 @@ import ChatSearchBar from "./chat/overlays/ChatSearchBar";
 import AttachmentTray from "./chat/overlays/AttachmentTray";
 import PollFormModal from "./chat/overlays/PollFormModal";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { getMessages, markAsRead, clearForMe } from "../services/messages";
+import { getMessages, markAsRead, clearForMe, setEphemeralTimer } from "../services/messages";
 import { deleteChat as apiDeleteChat } from "../services/chats";
 import toast from "react-hot-toast";
 import { CHAT_BACKGROUNDS } from "./chat/chatConstants";
@@ -113,6 +113,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       latitude: m.latitude,
       longitude: m.longitude,
       locationName: m.location_name,
+      isEphemeral: m.is_ephemeral,
+      ephemeralExpiresAt: m.ephemeral_expires_at,
     };
   };
 
@@ -292,6 +294,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [ephemeralTimer, setEphemeralTimerState] = useState<number | null>(() => (chat as any)?.ephemeral_timer ?? null);
 
   // Synchronize style choices with localStorage
   useEffect(() => {
@@ -598,6 +601,38 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     videoPreviewRef,
   });
 
+  const handleSetEphemeralTimer = useCallback(async (timer: number) => {
+    try {
+      await setEphemeralTimer(chat.id, timer);
+      setEphemeralTimerState(timer === 0 ? null : timer);
+      onChatUpdated?.(chat.id, { ephemeral_timer: timer === 0 ? null : timer } as any);
+      toast.success(timer === 0 ? "Mensajes temporales desactivados" : "Mensajes temporales activados");
+    } catch (e: any) {
+      console.error("[CHAT] setEphemeralTimer error:", e);
+      toast.error(e?.message || "Error al configurar mensajes temporales");
+    }
+  }, [chat.id, onChatUpdated]);
+
+  // Hide ephemeral messages locally once their expiry passes (countdown sweep)
+  useEffect(() => {
+    if (!messages.some(m => m.isEphemeral && m.ephemeralExpiresAt)) return;
+    const sweep = () => {
+      setMessages(prev => {
+        const now = new Date().toISOString();
+        const next = prev.filter(m => {
+          if (m.isEphemeral && m.ephemeralExpiresAt) {
+            return m.ephemeralExpiresAt > now;
+          }
+          return true;
+        });
+        return next.length === prev.length ? prev : next;
+      });
+    };
+    sweep();
+    const t = setInterval(sweep, 15000);
+    return () => clearInterval(t);
+  }, [messages]);
+
   // Register Android back handler for ChatRoom internal overlays
   useEffect(() => {
     if (!onRegisterBackHandler) return;
@@ -688,6 +723,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         onOpenGroupInfo={() => { setShowGroupInfo(true); setShowDropdown(false); }}
         onOpenDeleteConfirm={() => { setShowDeleteConfirm(true); setShowDropdown(false); }}
         onOpenProfile={onOpenProfile}
+        ephemeralTimer={ephemeralTimer}
+        onSetEphemeralTimer={handleSetEphemeralTimer}
       />
 
       {/* CHAT CUSTOMIZER DRAWER */}

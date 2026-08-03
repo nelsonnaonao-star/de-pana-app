@@ -18,6 +18,7 @@ export type Profile = {
   bubble_color?: string;
   partner_bubble_color?: string;
   notif_config?: Record<string, boolean>;
+  default_story_audience?: string;
   created_at: string;
   updated_at: string;
 };
@@ -265,7 +266,8 @@ export async function getCurrentProfile(): Promise<Profile | null> {
 export async function updateProfile(id: string, updates: Partial<Profile>) {
   const ALLOWED_FIELDS = [
     "name", "bio", "avatar", "avatar_url", "username",
-    "bubble_color", "partner_bubble_color", "notif_config", "status"
+    "bubble_color", "partner_bubble_color", "notif_config", "status",
+    "default_story_audience"
   ];
   const safeUpdates: Record<string, any> = {};
   for (const key of ALLOWED_FIELDS) {

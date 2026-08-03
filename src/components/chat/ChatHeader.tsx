@@ -1,5 +1,5 @@
-import React from "react";
-import { ArrowLeft, Phone, Video, Search, MoreVertical, Palette } from "lucide-react";
+import React, { useState } from "react";
+import { ArrowLeft, Phone, Video, Search, MoreVertical, Palette, Clock } from "lucide-react";
 import CachedImage from "../CachedImage";
 import { Chat } from "../../types";
 
@@ -18,15 +18,26 @@ interface ChatHeaderProps {
   onOpenGroupInfo: () => void;
   onOpenDeleteConfirm: () => void;
   onOpenProfile?: () => void;
+  ephemeralTimer?: number | null;
+  onSetEphemeralTimer?: (timer: number) => void;
 }
+
+const EPHEMERAL_OPTIONS = [
+  { value: 0, label: "Desactivado" },
+  { value: 86400, label: "24 horas" },
+  { value: 604800, label: "7 días" },
+  { value: 7776000, label: "90 días" },
+];
 
 export default function ChatHeader({
   chat, onBack, partnerTyping, onTriggerCall, callInProgress,
   showSearch, onToggleSearch, showDropdown, setShowDropdown,
   onClearChat, onOpenCustomizer, onOpenGroupInfo, onOpenDeleteConfirm,
-  onOpenProfile,
+  onOpenProfile, ephemeralTimer, onSetEphemeralTimer,
 }: ChatHeaderProps) {
   const isGroup = chat.isGroup ?? false;
+  const [showEphemeral, setShowEphemeral] = useState(false);
+  const activeTimer = ephemeralTimer ?? 0;
   return (
     <div className="relative text-white px-4 pt-5 pb-9 shrink-0 z-40 bg-[#0a4d52]">
       <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
@@ -147,7 +158,41 @@ export default function ChatHeader({
             {showDropdown && (
               <>
                 <div className="fixed inset-0 z-[100]" onClick={() => setShowDropdown(false)} />
-                <div className="fixed right-4 top-[72px] bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-[110] min-w-[170px] animate-fade-in">
+                <div className="fixed right-4 top-[72px] bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-[110] min-w-[190px] animate-fade-in">
+                  {onSetEphemeralTimer && (
+                    <div className="px-2 py-1.5 border-b border-slate-100">
+                      <button
+                        onClick={() => setShowEphemeral(v => !v)}
+                        className="w-full flex items-center gap-2 px-1 py-1.5 rounded-lg text-[11px] font-semibold text-teal-700 hover:bg-teal-50 transition-colors cursor-pointer"
+                      >
+                        <Clock className="w-3.5 h-3.5 text-teal-600" />
+                        <span className="flex-1 text-left">Mensajes temporales</span>
+                        <span className="text-[9px] text-slate-400 font-medium">
+                          {EPHEMERAL_OPTIONS.find(o => o.value === activeTimer)?.label || "Desactivado"}
+                        </span>
+                      </button>
+                      {showEphemeral && (
+                        <div className="space-y-0.5 pt-1">
+                          {EPHEMERAL_OPTIONS.map(opt => (
+                            <button
+                              key={opt.value}
+                              onClick={() => { onSetEphemeralTimer(opt.value); setShowEphemeral(false); }}
+                              className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-[10px] font-medium transition-colors cursor-pointer ${
+                                activeTimer === opt.value
+                                  ? "bg-teal-50 text-teal-700 font-bold"
+                                  : "text-slate-600 hover:bg-slate-50"
+                              }`}
+                            >
+                              {opt.label}
+                              {activeTimer === opt.value && (
+                                <span className="text-teal-600 text-[9px]">✓</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <button
                     onClick={onClearChat}
                     className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"

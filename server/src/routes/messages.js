@@ -120,6 +120,29 @@ router.post('/send', sendLimiter, async (req, res) => {
 
     const sanitizedText = sanitizeText(msg.text);
 
+    // Disappearing messages:
+    // - explicit ephemeral_expires_at wins
+    // - else an ephemeral_timer (seconds) sent by the client
+    // - else falls back to the chat's default ephemeral_timer
+    let ephemeralExpiresAt = null;
+    if (msg.ephemeral_expires_at) {
+      ephemeralExpiresAt = new Date(msg.ephemeral_expires_at);
+    } else {
+      let timerSeconds = parseInt(msg.ephemeral_timer, 10);
+      if (Number.isNaN(timerSeconds) || timerSeconds <= 0) {
+        const { data: chatTimer } = await supabaseAdmin
+          .from('chats')
+          .select('ephemeral_timer')
+          .eq('id', msg.chat_id)
+          .maybeSingle();
+        timerSeconds = chatTimer?.ephemeral_timer || 0;
+      }
+      if (timerSeconds > 0) {
+        ephemeralExpiresAt = new Date(Date.now() + timerSeconds * 1000);
+      }
+    }
+    const isEphemeral = !!ephemeralExpiresAt;
+
     const { data: message, error } = await supabaseAdmin
       .from('messages')
       .insert({
@@ -158,7 +181,8 @@ router.post('/send', sendLimiter, async (req, res) => {
           : null,
         is_animated: !!msg.is_animated,
         is_deleted: false,
-        is_ephemeral: false,
+        is_ephemeral: isEphemeral,
+        ephemeral_expires_at: ephemeralExpiresAt ? ephemeralExpiresAt.toISOString() : null,
         reactions: {},
         read_by: [],
       })
@@ -187,7 +211,7 @@ router.post('/send', sendLimiter, async (req, res) => {
         .select('name')
         .eq('id', msg.sender_id)
         .maybeSingle();
-      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, sanitizedText || 'Nuevo mensaje');
+      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, isEphemeral ? 'Mensaje temporal' : (sanitizedText || 'Nuevo mensaje'));
     } catch (e) {
       console.error('[MESSAGES] push/profile failed:', e.message);
     }
@@ -225,6 +249,9 @@ router.get('/:chatId', async (req, res) => {
       .select('*')
       .eq('chat_id', chatId)
       .eq('is_deleted', false);
+
+    // Never return expired ephemeral messages
+    query = query.or(`ephemeral_expires_at.is.null,ephemeral_expires_at.gt.${new Date().toISOString()}`);
 
     if (clearedAt) {
       query = query.gt('created_at', clearedAt);
@@ -433,8 +460,7 @@ router.post('/delete', async (req, res) => {
 });
 
 // ─── Edit message text ─────────────────────────────────────────
-router.post('/edit', async (req, res) => {
-  try {
+router.post('/edit', async (req, res) => {  try {
     const { message_id, new_text } = req.body;
     if (!message_id || new_text === undefined || new_text === null) {
       return res.status(400).json({ error: 'message_id y new_text requeridos' });
@@ -528,6 +554,73 @@ router.post('/react', reactLimiter, async (req, res) => {
     res.json({ reactions });
   } catch (err) {
     console.error('[MESSAGES] react error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Set the chat's disappearing-messages timer ──────────────────
+// ephemeral_timer in seconds, or 0/null to disable. Must be one of the allowed values.
+router.post('/ephemeral-setting', async (req, res) => {
+  try {
+    const { chat_id, timer } = req.body;
+    if (!chat_id) return res.status(400).json({ error: 'chat_id requerido' });
+
+    if (!(await isChatMember(chat_id, req.userId))) {
+      return res.status(403).json({ error: 'No eres miembro de este chat' });
+    }
+
+    const allowedTimers = [0, 86400, 604800, 7776000]; // off, 24h, 7d, 90d
+    const parsed = parseInt(timer, 10);
+    if (Number.isNaN(parsed) || !allowedTimers.includes(parsed)) {
+      return res.status(400).json({ error: 'Timer inválido' });
+    }
+
+    const { data: chat } = await supabaseAdmin
+      .from('chats')
+      .select('profile_id, admin_id')
+      .eq('id', chat_id)
+      .maybeSingle();
+    if (!chat) return res.status(404).json({ error: 'Chat no encontrado' });
+
+    // Only the chat's direct participants (admin/profile) can change the setting.
+    if (chat.profile_id !== req.userId && chat.admin_id !== req.userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('chats')
+      .update({ ephemeral_timer: parsed === 0 ? null : parsed })
+      .eq('id', chat_id);
+    if (error) throw error;
+
+    res.json({ ok: true, timer: parsed === 0 ? null : parsed });
+  } catch (err) {
+    console.error('[MESSAGES] ephemeral-setting error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Purge expired ephemeral messages (callable by server/cron) ──
+router.post('/purge-ephemeral', async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.rpc('purge_expired_ephemeral_messages');
+    if (error) {
+      // Fallback: inline delete if the DB function isn't installed yet.
+      const { data: expired } = await supabaseAdmin
+        .from('messages')
+        .select('id')
+        .eq('is_ephemeral', true)
+        .not('ephemeral_expires_at', 'is', null)
+        .lt('ephemeral_expires_at', new Date().toISOString());
+      const ids = (expired || []).map(m => m.id);
+      if (ids.length > 0) {
+        await supabaseAdmin.from('messages').delete().in('id', ids);
+      }
+      return res.json({ purged: ids.length, fallback: true });
+    }
+    res.json({ purged: data || 0, fallback: false });
+  } catch (err) {
+    console.error('[MESSAGES] purge-ephemeral error:', err);
     res.status(500).json({ error: err.message });
   }
 });
