@@ -345,6 +345,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           {isMe && (
             <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
               {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
+              {msg.status === "error" && <span className="text-red-400 font-bold">!</span>}
               {msg.status === "sent" && "✓"}
               {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
               {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
@@ -519,6 +520,7 @@ export default React.memo(function MessageBubble({
             {isMe && (
               <span className={`text-[10px] leading-none ${msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"}`}>
                 {msg.status === "sending" && "🕒"}
+                {msg.status === "error" && <span className="text-red-400 font-bold">!</span>}
                 {msg.status === "sent" && "✓"}
                 {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
                 {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}

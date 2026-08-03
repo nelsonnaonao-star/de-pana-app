@@ -28,11 +28,47 @@ function mapStoryToDb(body) {
   return row;
 }
 
+// Only users that are MUTUAL contacts of `viewerId` (plus the viewer themself)
+// can see/view/react to their stories. This guarantees "mis estados solo a mis
+// contactos y viceversa": both must have added each other.
+async function getVisibleStoryUserIds(viewerId) {
+  const { data: contacts } = await supabaseAdmin
+    .from('contacts')
+    .select('contact_user_id')
+    .eq('user_id', viewerId);
+
+  const myContactIds = (contacts || [])
+    .map(c => c.contact_user_id)
+    .filter(Boolean);
+
+  const visibleIds = [viewerId];
+  if (myContactIds.length > 0) {
+    const { data: reverse } = await supabaseAdmin
+      .from('contacts')
+      .select('user_id')
+      .eq('contact_user_id', viewerId)
+      .in('user_id', myContactIds);
+    for (const r of reverse || []) {
+      if (!visibleIds.includes(r.user_id)) visibleIds.push(r.user_id);
+    }
+  }
+  return visibleIds;
+}
+
+async function canAccessStory(userId, storyUserId) {
+  if (userId === storyUserId) return true;
+  const visible = await getVisibleStoryUserIds(userId);
+  return visible.includes(storyUserId);
+}
+
 // ─── STORIES ───────────────────────────────────────────────────────
 
 router.get('/stories/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (req.userId !== userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await supabaseAdmin
       .from('stories')
@@ -51,18 +87,7 @@ router.get('/stories/:userId', async (req, res) => {
 router.get('/stories', async (req, res) => {
   try {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-    const { data: contacts } = await supabaseAdmin
-      .from('contacts')
-      .select('contact_user_id')
-      .eq('user_id', req.userId);
-
-    const visibleIds = [req.userId];
-    if (contacts) {
-      for (const c of contacts) {
-        if (c.contact_user_id && !visibleIds.includes(c.contact_user_id)) visibleIds.push(c.contact_user_id);
-      }
-    }
+    const visibleIds = await getVisibleStoryUserIds(req.userId);
 
     const { data, error } = await supabaseAdmin
       .from('stories')
@@ -140,6 +165,9 @@ router.post('/stories/:storyId/view', async (req, res) => {
     if (storyErr) throw storyErr;
     if (!story) return res.status(404).json({ error: 'Estado no encontrado' });
     if (story.user_id === req.userId) return res.json({ ok: true });
+    if (!(await canAccessStory(req.userId, story.user_id))) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     await supabaseAdmin
       .from('story_views')
       .upsert({ story_id: storyId, viewer_id: req.userId }, { onConflict: 'story_id,viewer_id' });
@@ -200,6 +228,16 @@ router.post('/stories/:storyId/react', async (req, res) => {
     const { storyId } = req.params;
     const { reaction } = req.body;
     if (!reaction) return res.status(400).json({ error: 'reaction requerida' });
+    const { data: story, error: storyErr } = await supabaseAdmin
+      .from('stories')
+      .select('user_id')
+      .eq('id', storyId)
+      .maybeSingle();
+    if (storyErr) throw storyErr;
+    if (!story) return res.status(404).json({ error: 'Estado no encontrado' });
+    if (!(await canAccessStory(req.userId, story.user_id))) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
     const { data: existing } = await supabaseAdmin
       .from('story_reactions')
       .select('*')

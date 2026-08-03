@@ -1,5 +1,4 @@
 import { apiUrl, authFetch } from "../lib/api";
-import { fetchWithRetry } from "../utils/fetchWithRetry";
 
 export type Message = {
   id: string;
@@ -113,7 +112,7 @@ export async function getMessages(chatId: string, options?: { limit?: number; be
 }
 
 export async function sendMessage(message: Partial<Message>): Promise<Message> {
-  const res = await fetchWithRetry(apiUrl("/api/messages/send"), {
+  const res = await authFetch(apiUrl("/api/messages/send"), {
     method: "POST",
     body: JSON.stringify({
       chat_id: message.chat_id,

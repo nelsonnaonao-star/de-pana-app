@@ -356,7 +356,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           if (alreadyInState) return prev;
           const pendingIndex = prev.findIndex(m =>
             (m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) &&
-            m.status === 'sending'
+            (m.status === 'sending' || m.status === 'error')
           );
           if (pendingIndex !== -1) {
             const reconciled = { ...mapped, id: raw.id, status: "sent" as const, synced: true };
@@ -403,6 +403,28 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       });
     }
   };
+
+  // Watchdog: mark temp messages stuck in "sending" as "error" after 30s (no eternal clock)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMessages(prev => {
+        const now = Date.now();
+        let changed = false;
+        const next = prev.map(m => {
+          if ((m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) && m.status === 'sending') {
+            const ts = Number(m.id.split('_')[1]);
+            if (!isNaN(ts) && now - ts > 30000) {
+              changed = true;
+              return { ...m, status: "error" as const };
+            }
+          }
+          return m;
+        });
+        return changed ? next : prev;
+      });
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleReconnect = (lastSyncTimestamp: string) => {
     getMessages(chat.id, { after: lastSyncTimestamp }).then(newMsgs => {

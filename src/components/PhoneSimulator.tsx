@@ -7,7 +7,7 @@ import {
   Check, AlertTriangle, Info, Search, Plus, 
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
-  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy
+  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy, User
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Chat, Message, ActiveCall } from "../types";
@@ -49,6 +49,7 @@ import SimulatorTabHeader from "./simulator/SimulatorTabHeader";
 import SimulatorCreateGroup from "./simulator/SimulatorCreateGroup";
 import SimulatorForwardModal from "./simulator/SimulatorForwardModal";
 import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
+import ImageLightbox from "./chat/overlays/ImageLightbox";
 
 // Module-level set of chat ids already animated this session — survives remounts
 // so returning to the chats list doesn't replay the fade-in on seen items.
@@ -349,6 +350,7 @@ export default function PhoneSimulator({
   const forwardingSearchRef = useRef<HTMLInputElement>(null);
   const [forwardSearchQuery, setForwardSearchQuery] = useState("");
   const [contactProfile, setContactProfile] = useState<ContactProfileData | null>(null);
+  const [showMyAvatarLightbox, setShowMyAvatarLightbox] = useState(false);
 
   // Group creation state
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
@@ -2216,11 +2218,18 @@ export default function PhoneSimulator({
                         VERSIÓN PRO
                       </div>
                       <div className="relative inline-block mt-2 group">
-                        <img 
-                          src={registeredUser.avatar} 
-                          alt="Profile" 
-                          className={`w-14 h-14 rounded-full mx-auto object-cover border-4 border-white/20 shadow-lg transition-opacity ${isUploadingAvatar ? "opacity-50" : ""}`}
-                        />
+                        {registeredUser.avatar ? (
+                          <img 
+                            src={registeredUser.avatar} 
+                            alt="Profile" 
+                            onClick={() => !isUploadingAvatar && setShowMyAvatarLightbox(true)}
+                            className={`w-14 h-14 rounded-full mx-auto object-cover border-4 border-white/20 shadow-lg transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-full mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/20 shadow-lg flex items-center justify-center">
+                            <User className="w-6 h-6 text-white" />
+                          </div>
+                        )}
                         {isUploadingAvatar && (
                           <div className="absolute inset-0 flex items-center justify-center">
                             <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -2252,13 +2261,14 @@ export default function PhoneSimulator({
                             }
                           }}
                         />
-                        <button
-                          onClick={() => !isUploadingAvatar && fileInputRef.current?.click()}
-                          className={`absolute inset-0 bg-black/0 group-hover:bg-black/40 rounded-full transition-all flex items-center justify-center ${isUploadingAvatar ? "cursor-wait" : "cursor-pointer"}`}
-                        >
-                          <Camera className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-md" />
-                        </button>
                       </div>
+                      <button
+                        onClick={() => !isUploadingAvatar && fileInputRef.current?.click()}
+                        className={`mt-2 mx-auto flex items-center gap-1 bg-white/15 hover:bg-white/25 text-white text-[10px] font-semibold px-3 py-1 rounded-full transition-colors ${isUploadingAvatar ? "cursor-wait opacity-60" : "cursor-pointer"}`}
+                      >
+                        <Camera className="w-3 h-3" />
+                        {isUploadingAvatar ? "Subiendo..." : "Cambiar foto"}
+                      </button>
                       {isEditingProfile ? (
                         <div className="mt-3 flex flex-col items-center gap-2">
                           <input
@@ -3087,6 +3097,14 @@ export default function PhoneSimulator({
             profile={contactProfile}
             onClose={() => setContactProfile(null)}
           />
+
+          {showMyAvatarLightbox && registeredUser?.avatar && (
+            <ImageLightbox
+              src={registeredUser.avatar}
+              alt={registeredUser.name || "Mi perfil"}
+              onClose={() => setShowMyAvatarLightbox(false)}
+            />
+          )}
 
         </div>
       )}

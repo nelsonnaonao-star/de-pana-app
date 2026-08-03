@@ -1,6 +1,7 @@
 import React from "react";
-import { X, Phone, User, Shield } from "lucide-react";
+import { X, Phone, User, Shield, Maximize2 } from "lucide-react";
 import CachedImage from "../../CachedImage";
+import ImageLightbox from "./ImageLightbox";
 
 export interface ContactProfileData {
   id: string;
@@ -22,6 +23,7 @@ function getInitials(name: string): string {
 }
 
 export default function ContactProfile({ isOpen, profile, onClose }: ContactProfileProps) {
+  const [showPhoto, setShowPhoto] = React.useState(false);
   if (!isOpen || !profile) return null;
 
   return (
@@ -37,9 +39,18 @@ export default function ContactProfile({ isOpen, profile, onClose }: ContactProf
               <X className="w-4 h-4" />
             </button>
             <div className="flex flex-col items-center">
-              <div className="w-20 h-20 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shadow-lg border-2 border-white/30 flex items-center justify-center mb-3">
+              <div className="w-20 h-20 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shadow-lg border-2 border-white/30 flex items-center justify-center mb-3 relative group">
                 {profile.avatar ? (
-                  <CachedImage src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />
+                  <>
+                    <CachedImage src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />
+                    <button
+                      onClick={() => setShowPhoto(true)}
+                      title="Ver foto en pantalla completa"
+                      className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center cursor-pointer"
+                    >
+                      <Maximize2 className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow" />
+                    </button>
+                  </>
                 ) : (
                   <span className="text-white font-black text-xl">{getInitials(profile.name)}</span>
                 )}
@@ -88,6 +99,9 @@ export default function ContactProfile({ isOpen, profile, onClose }: ContactProf
           </div>
         </div>
       </div>
+      {showPhoto && profile.avatar && (
+        <ImageLightbox src={profile.avatar} alt={profile.name} onClose={() => setShowPhoto(false)} />
+      )}
     </>
   );
 }
