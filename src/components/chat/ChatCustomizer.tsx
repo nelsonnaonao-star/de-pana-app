@@ -1,6 +1,7 @@
-import React from "react";
-import { Palette, Check, X } from "lucide-react";
+import React, { useRef } from "react";
+import { Palette, Check, X, Upload } from "lucide-react";
 import { CHAT_BACKGROUNDS, BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
+import { compressImage } from "../../services/storage";
 
 interface ChatCustomizerProps {
   showCustomizer: boolean;
@@ -12,6 +13,8 @@ interface ChatCustomizerProps {
   bubbleColorThemId: string;
   setBubbleColorThemId: (id: string) => void;
   chatName: string;
+  customBgImage: string | null;
+  onSetCustomBgImage: (dataUrl: string | null) => void;
 }
 
 export default function ChatCustomizer({
@@ -20,7 +23,31 @@ export default function ChatCustomizer({
   bubbleColorMeId, setBubbleColorMeId,
   bubbleColorThemId, setBubbleColorThemId,
   chatName,
+  customBgImage,
+  onSetCustomBgImage,
 }: ChatCustomizerProps) {
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleCustomBgFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const compressed = await compressImage(file);
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("FileReader failed"));
+        reader.readAsDataURL(compressed);
+      });
+      onSetCustomBgImage(dataUrl);
+      setSelectedBgId("custom");
+    } catch (err) {
+      console.error("[ChatCustomizer] custom background failed:", err);
+    } finally {
+      e.target.value = "";
+    }
+  };
+
   if (!showCustomizer) return null;
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60" onClick={() => setShowCustomizer(false)}>
@@ -125,6 +152,44 @@ export default function ChatCustomizer({
       <div className="space-y-1.5 text-left border-t border-slate-800 pt-2.5">
         <span className="text-[8px] font-extrabold text-teal-300 uppercase block">{CHAT_BACKGROUNDS.length} Fondos para el Chat</span>
         <div className="grid grid-cols-5 gap-1.5 max-h-[140px] overflow-y-auto p-0.5">
+          <button
+            type="button"
+            title={customBgImage ? "Usar mi foto subida" : "Subir mi propia foto de fondo"}
+            onClick={() => {
+              if (customBgImage) setSelectedBgId("custom");
+              else fileRef.current?.click();
+            }}
+            className={`relative aspect-square rounded-lg border flex items-center justify-center overflow-hidden transition-all cursor-pointer ${
+              selectedBgId === "custom" ? "border-white scale-105 shadow-md ring-2 ring-teal-500/50" : "border-white/10 hover:border-white/30"
+            }`}
+            style={customBgImage
+              ? { backgroundImage: `url(${customBgImage})`, backgroundSize: "cover", backgroundPosition: "center" }
+              : { background: "repeating-conic-gradient(rgba(255,255,255,0.3) 0% 25%, rgba(255,255,255,0.08) 0% 50%) 0 0 / 8px 8px" }}
+          >
+            {customBgImage ? (
+              <>
+                <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[6px] text-white text-center py-0.5 leading-none truncate px-0.5">Mi Foto</span>
+                <button
+                  type="button"
+                  title="Quitar mi foto"
+                  onClick={(ev) => { ev.stopPropagation(); onSetCustomBgImage(null); setSelectedBgId("default"); }}
+                  className="absolute top-0 right-0 bg-red-600 text-white rounded-bl-md p-0.5 cursor-pointer"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              </>
+            ) : (
+              <span className="flex flex-col items-center gap-0.5 text-teal-300">
+                <Upload className="w-4 h-4" />
+                <span className="text-[6px] font-bold">Subir</span>
+              </span>
+            )}
+            {selectedBgId === "custom" && (
+              <div className="w-4 h-4 rounded-full bg-teal-400 flex items-center justify-center shadow-lg absolute">
+                <Check className="w-2.5 h-2.5 text-white stroke-[4]" />
+              </div>
+            )}
+          </button>
           {CHAT_BACKGROUNDS.map((bg, idx) => {
             const isSelected = selectedBgId === bg.id;
             const isGradient = bg.value.startsWith("linear-gradient");
@@ -183,6 +248,7 @@ export default function ChatCustomizer({
         </div>
       </div>
       </div>
+      <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleCustomBgFile} />
     </div>
   );
 }

@@ -283,6 +283,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [selectedBgId, setSelectedBgId] = useState(() => {
     return localStorage.getItem("chat_bg_id") || "default";
   });
+  const [customBgImage, setCustomBgImage] = useState<string | null>(() => {
+    return localStorage.getItem("chat_bg_custom");
+  });
   const [bubbleColorMeId, setBubbleColorMeId] = useState(() => {
     return localStorage.getItem("bubble_color_me") || "teal_dark";
   });
@@ -300,6 +303,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   useEffect(() => {
     localStorage.setItem("chat_bg_id", selectedBgId);
   }, [selectedBgId]);
+
+  useEffect(() => {
+    if (customBgImage) localStorage.setItem("chat_bg_custom", customBgImage);
+    else localStorage.removeItem("chat_bg_custom");
+  }, [customBgImage]);
 
   useEffect(() => {
     localStorage.setItem("bubble_color_me", bubbleColorMeId);
@@ -654,8 +662,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   }, [editingMessage, replyTo, showAttachments, activeReactionMenu, showSearch, showGifPicker, showCustomizer, showDeleteConfirm, showGroupInfo, showDropdown, onRegisterBackHandler]);
 
 
-  const bgPreset = CHAT_BACKGROUNDS.find(bg => bg.id === selectedBgId);
-  const rawBg = bgPreset?.value || "#f8fafc";
+  const isCustomBg = selectedBgId === "custom" && !!customBgImage;
+  const bgPreset = isCustomBg ? undefined : CHAT_BACKGROUNDS.find(bg => bg.id === selectedBgId);
+  const rawBg = isCustomBg
+    ? `url("${customBgImage}") center/cover no-repeat`
+    : (bgPreset?.value || "#f8fafc");
   const isPatternBg = rawBg.startsWith("pattern:");
   const isGradientBg = rawBg.startsWith("linear-gradient");
   const isImageBg = rawBg.startsWith("url");
@@ -738,6 +749,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         bubbleColorThemId={bubbleColorThemId}
         setBubbleColorThemId={setBubbleColorThemId}
         chatName={chat.name}
+        customBgImage={customBgImage}
+        onSetCustomBgImage={setCustomBgImage}
       />
 
       <DeleteConfirmModal
