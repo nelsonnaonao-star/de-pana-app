@@ -13,6 +13,10 @@ interface CachedImageProps {
   onClick?: () => void;
 }
 
+// Memory cache (session-level) keyed by `src` — survives remounts so avatars
+// never show a placeholder when the same URL was already resolved this session.
+const memoryCache = new Map<string, string>();
+
 function getInitials(name: string): string {
   return name
     .split(" ")
@@ -41,13 +45,22 @@ function getExtension(url: string): string {
 }
 
 async function getCachedFile(fileName: string): Promise<string | null> {
+  const ext = fileName.split(".").pop() || "jpg";
+  const mime = ext === "gif" ? "image/gif" : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  // Prefer persistent storage (Directory.Data) so images survive offline/OS cache
+  // cleanups. Fall back to the old Directory.Cache location (migration).
+  try {
+    const result = await Filesystem.readFile({
+      path: `image_cache/${fileName}`,
+      directory: Directory.Data,
+    });
+    return `data:${mime};base64,${result.data}`;
+  } catch {}
   try {
     const result = await Filesystem.readFile({
       path: `image_cache/${fileName}`,
       directory: Directory.Cache,
     });
-    const ext = fileName.split(".").pop() || "jpg";
-    const mime = ext === "gif" ? "image/gif" : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
     return `data:${mime};base64,${result.data}`;
   } catch {
     return null;
@@ -82,7 +95,7 @@ async function saveToCache(fileName: string, url: string): Promise<void> {
       await Filesystem.writeFile({
         path: `image_cache/${fileName}`,
         data: base64,
-        directory: Directory.Cache,
+        directory: Directory.Data,
       });
     }
   } catch {
@@ -100,7 +113,9 @@ export default function CachedImage({
   onError,
   onClick,
 }: CachedImageProps) {
-  const [displaySrc, setDisplaySrc] = useState<string | null>(null);
+  const [displaySrc, setDisplaySrc] = useState<string | null>(
+    () => memoryCache.get(src) ?? null
+  );
   const [hasError, setHasError] = useState(false);
   const isCapacitor = Capacitor.isNativePlatform();
   const imgRef = useRef<HTMLImageElement>(null);
@@ -112,6 +127,7 @@ export default function CachedImage({
     setHasError(false);
 
     if (!isCapacitor) {
+      memoryCache.set(src, src);
       setDisplaySrc(src);
       return;
     }
@@ -126,8 +142,10 @@ export default function CachedImage({
       if (cancelled) return;
 
       if (cached) {
+        memoryCache.set(src, cached);
         setDisplaySrc(cached);
       } else {
+        memoryCache.set(src, src);
         setDisplaySrc(src);
         saveToCache(fileName, src);
       }

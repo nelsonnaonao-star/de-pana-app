@@ -1,5 +1,5 @@
 import { X, Send, Eye, ChevronLeft } from "lucide-react";
-import { FormEvent } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import CachedImage from "../CachedImage";
 import { GRADIENTS, UserState } from "../../hooks/useStatesManagement";
 
@@ -12,6 +12,8 @@ interface StoryViewerProps {
   viewersData: { viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null;
   showViewersSheet: boolean;
   storyReplyText: string;
+  isPaused: boolean;
+  onSetPaused: (paused: boolean) => void;
   onClose: () => void;
   onTap: (direction: "prev" | "next") => void;
   onSendReply: (e: FormEvent) => void;
@@ -23,10 +25,65 @@ interface StoryViewerProps {
 export default function StoryViewer({
   activeUserStates, activeStoryIdx, storyProgress,
   reactionFeedback, myCurrentReaction, viewersData, storyReplyText,
+  isPaused, onSetPaused,
   onClose, onTap, onSendReply, onToggleReaction,
   onSetStoryReplyText, onShowViewersSheet,
 }: StoryViewerProps) {
   const currentStory = activeUserStates.stories[activeStoryIdx];
+  const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressRef = useRef(false);
+  const longPressReleaseRef = useRef(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [videoReady, setVideoReady] = useState(false);
+
+  useEffect(() => {
+    setVideoReady(false);
+  }, [activeStoryIdx]);
+
+  const handlePointerDown = () => {
+    longPressRef.current = false;
+    longPressReleaseRef.current = false;
+    onSetPaused(true);
+    if (pressTimerRef.current !== null) clearTimeout(pressTimerRef.current);
+    pressTimerRef.current = setTimeout(() => {
+      longPressRef.current = true;
+    }, 300);
+  };
+
+  const handlePointerUp = () => {
+    if (pressTimerRef.current !== null) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+    onSetPaused(false);
+    if (longPressRef.current) {
+      longPressReleaseRef.current = true;
+      longPressRef.current = false;
+      onTap("next");
+    }
+  };
+
+  const handlePointerCancel = () => {
+    if (pressTimerRef.current !== null) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+    onSetPaused(false);
+    longPressRef.current = false;
+  };
+
+  const handleTapZone = (direction: "prev" | "next") => {
+    if (longPressReleaseRef.current) {
+      longPressReleaseRef.current = false;
+      return;
+    }
+    if (longPressRef.current) {
+      longPressRef.current = false;
+      return;
+    }
+    onTap(direction);
+  };
+
   if (!currentStory) {
     return (
       <div className="fixed inset-0 z-[9999] bg-black flex items-center justify-center" onClick={onClose}>
@@ -72,13 +129,19 @@ export default function StoryViewer({
         </button>
       </div>
 
-      <div className="flex-1 relative flex items-center justify-center w-full h-full overflow-hidden select-none">
+      <div
+        className="flex-1 relative flex items-center justify-center w-full h-full overflow-hidden select-none"
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onPointerLeave={handlePointerCancel}
+      >
         <div
-          onClick={() => onTap("prev")}
+          onClick={() => handleTapZone("prev")}
           className="absolute left-0 inset-y-0 w-1/4 z-20 cursor-pointer active:bg-white/5 transition-colors"
         />
         <div
-          onClick={() => onTap("next")}
+          onClick={() => handleTapZone("next")}
           className="absolute right-0 inset-y-0 w-1/4 z-20 cursor-pointer active:bg-white/5 transition-colors"
         />
 
@@ -94,8 +157,13 @@ export default function StoryViewer({
           <>
             <video
               src={currentStory.content}
-              autoPlay loop muted playsInline
-              className="absolute inset-0 w-full h-full object-contain"
+              ref={videoRef}
+              autoPlay loop playsInline
+              onLoadedData={() => setVideoReady(true)}
+              onCanPlay={() => setVideoReady(true)}
+              className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-150 ${
+                videoReady ? "opacity-100" : "opacity-0"
+              }`}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/45 pointer-events-none z-10" />
             {currentStory.caption && (

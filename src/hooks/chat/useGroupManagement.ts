@@ -153,7 +153,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
     })();
   }, [showGroupInfo, isGroup, chatId]);
 
-  const handleChangePhoto = useCallback(async (dataUrl: string) => {
+  const handleChangePhoto = useCallback(async (dataUrl: string): Promise<string | null> => {
     try {
       const resp = await fetch(dataUrl);
       const blob = await resp.blob();
@@ -162,9 +162,11 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       await updateChat(chatId, { avatar: url });
       setGroupAvatar(url);
       toast.success("Foto de grupo actualizada");
+      return url;
     } catch (e) {
       console.error("[CHAT] Error changing group photo:", e);
       toast.error("Error al cambiar foto");
+      return null;
     }
   }, [chatId]);
 

@@ -26,6 +26,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
     userStates, myStories, subView,
     uploadedMedia, showPublishDecisionModal, isEditingProState, publishStep, publishComment,
     activeUserStates, activeStoryIdx, storyProgress, storyReplyText,
+    isStoryPaused, setStoryPaused,
     viewersData, showViewersSheet, myCurrentReaction, reactionFeedback,
     newTextContent, selectedGradientIdx, newImageCaption, selectedImageUrl,
     myUserStateRepresentation, GRADIENTS,
@@ -319,6 +320,8 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
           storyReplyText={storyReplyText}
           onClose={handleCloseStoryViewer}
           onTap={handleStoryTap}
+          isPaused={isStoryPaused}
+          onSetPaused={setStoryPaused}
           onSendReply={handleSendReply}
           onToggleReaction={handleToggleReaction}
           onSetStoryReplyText={setStoryReplyText}

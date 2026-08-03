@@ -13,6 +13,7 @@ import DeleteConfirmModal from "./chat/overlays/DeleteConfirmModal";
 import GroupInfoPanel from "./chat/overlays/GroupInfoPanel";
 import ChatSearchBar from "./chat/overlays/ChatSearchBar";
 import AttachmentTray from "./chat/overlays/AttachmentTray";
+import StickerEditor, { StickerExport } from "./editor/StickerEditor";
 import PollFormModal from "./chat/overlays/PollFormModal";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { getMessages, markAsRead, clearForMe } from "../services/messages";
@@ -24,6 +25,8 @@ import { useGroupManagement } from "../hooks/chat/useGroupManagement";
 import { useChatRealtime, MessageEventPayload } from "../hooks/chat/useChatRealtime";
 import { useMessageActions } from "../hooks/chat/useMessageActions";
 import { messageRepo } from "../services/database/repositories/MessageRepository";
+import { uploadChatMedia } from "../services/storage";
+import { addMySticker } from "../services/myStickers";
 
 interface ChatRoomProps {
   chat: Chat;
@@ -35,6 +38,7 @@ interface ChatRoomProps {
   onChatDeleted?: (chatId: string) => void;
   onMessageDeleted?: (chatId: string, messageId: string) => void;
   onChatCleared?: (chatId: string) => void;
+  onChatUpdated?: (chatId: string, updates: Partial<Chat>) => void;
   currentUserId?: string;
   currentUserName?: string;
   refetchTrigger?: number;
@@ -42,7 +46,7 @@ interface ChatRoomProps {
   onOpenProfile?: () => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
   const { user, profile } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -96,7 +100,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       replyToText: m.reply_to_text,
       replyToSender: m.reply_to_sender,
       pollQuestion: m.poll_question,
-      pollOptions: m.poll_options,
+      pollOptions: (() => {
+        let opts = m.poll_options;
+        if (typeof opts === "string") {
+          try { opts = JSON.parse(opts); } catch { opts = []; }
+        }
+        if (!Array.isArray(opts)) return [];
+        return opts.map((o: any) => ({
+          id: o.id || String(Math.random()),
+          text: o.text || "",
+          votes: Number(o.votes) || 0,
+          votedUsers: Array.isArray(o.votedUsers) ? o.votedUsers : [],
+        }));
+      })(),
       latitude: m.latitude,
       longitude: m.longitude,
       locationName: m.location_name,
@@ -277,6 +293,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [showCustomizer, setShowCustomizer] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
+  const [showStickerEditor, setShowStickerEditor] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
 
@@ -328,7 +345,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         if (mapped.rawCreatedAt && mapped.rawCreatedAt > (lastSyncTimestampRef.current || '')) {
           lastSyncTimestampRef.current = mapped.rawCreatedAt;
         }
-        setMessages(prev => [...prev, mapped]);
+        setMessages(prev => {
+          if (prev.some(m => m.id === mapped.id)) return prev;
+          return [...prev, mapped];
+        });
         markAsRead(chat.id, uid, uname).catch(err => console.error("[ChatRoom] markAsRead on new message failed:", err));
       } else {
         setMessages(prev => {
@@ -402,6 +422,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     handleSaveGroupName, handleAddMember, handleRemoveMember, handleChangePhoto,
     handleLeaveGroup: hookHandleLeaveGroup,
   } = useGroupManagement(chat.id, chat.name, uid, chat.isGroup ?? false, showGroupInfo);
+
+  const handleGroupPhotoChange = useCallback(async (dataUrl: string) => {
+    const url = await handleChangePhoto(dataUrl);
+    if (url) onChatUpdated?.(chat.id, { avatar: url });
+  }, [handleChangePhoto, onChatUpdated, chat.id]);
 
   const { partnerTyping, emitTyping } = useChatRealtime(
     chat.id, uid, uname, lastSyncTimestampRef, handleMessageEvent, handleReconnect
@@ -691,7 +716,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         addMemberQuery={addMemberQuery}
         addMemberResults={addMemberResults}
         addingMember={addingMember}
-        onChangePhoto={handleChangePhoto}
+        onChangePhoto={handleGroupPhotoChange}
         onClose={() => setShowGroupInfo(false)}
         onCancelEditName={() => { setEditingGroupName(false); setShowAddMember(false); }}
         onStartEditName={() => { setGroupNameDraft(localGroupName); setEditingGroupName(true); }}
@@ -775,6 +800,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           onOpenGifPicker={() => { setShowGifPicker(true); setShowAttachments(false); }}
           onOpenPollForm={() => { setShowPollForm(true); }}
           onSendLocation={() => { setShowAttachments(false); actions.handleSendLocation(); }}
+          onOpenStickerStudio={() => { setShowStickerEditor(true); setShowAttachments(false); }}
         />
       )}
 
@@ -795,13 +821,33 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         <GifPicker
           onSelect={(url, type) => {
             if (type === "emoji") {
-              setInputText(prev => prev + url);
+              actions.handleSendText(url);
               setShowGifPicker(false);
             } else {
               actions.handleSendSticker(url, type);
             }
           }}
           onClose={() => setShowGifPicker(false)}
+        />
+      )}
+
+      {showStickerEditor && (
+        <StickerEditor
+          isOpen
+          onClose={() => setShowStickerEditor(false)}
+          onExport={async (sticker: StickerExport) => {
+            try {
+              const dataUrl = `data:image/webp;base64,${sticker.webpBase64}`;
+              const res = await fetch(dataUrl);
+              const blob = await res.blob();
+              const url = await uploadChatMedia(blob, "sticker");
+              addMySticker(url);
+              setShowStickerEditor(false);
+              await actions.handleSendSticker(url, "sticker");
+            } catch (err) {
+              console.error("[ChatRoom] Error enviando sticker creado:", err);
+            }
+          }}
         />
       )}
 

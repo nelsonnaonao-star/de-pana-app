@@ -31,6 +31,14 @@ $$;
 GRANT EXECUTE ON FUNCTION public.is_chat_member(uuid, uuid) TO authenticated;
 
 
+-- ─── PROFILES (directorio público: anónimos pueden leer, solo el dueño escribe) ──
+DROP POLICY IF EXISTS "profiles_select_auth" ON profiles;
+CREATE POLICY "profiles_select_anon_auth"
+  ON profiles FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
+
 -- ─── CHATS ───────────────────────────────────────────────────────
 DROP POLICY IF EXISTS "chats_select_group" ON chats;
 CREATE POLICY "chats_select_group"

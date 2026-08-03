@@ -84,8 +84,8 @@ async function scrapeBCV() {
 
 async function fetchFreshRates() {
   const sources = [
-    { fn: fetchBcvToday, name: 'bcv.today' },
     { fn: scrapeBCV, name: 'bcv.org.ve' },
+    { fn: fetchBcvToday, name: 'bcv.today' },
   ];
 
   for (const source of sources) {

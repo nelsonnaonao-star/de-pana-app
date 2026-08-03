@@ -48,14 +48,39 @@ function clearUserCache(userId: string) {
   } catch {}
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+const LAST_USER_KEY = "redon_last_user";
+
+function saveLastUser(userId: string) {
+  try {
+    localStorage.setItem(LAST_USER_KEY, JSON.stringify({ id: userId }));
+  } catch {}
+}
+
+function loadLastUser(): { id: string } | null {
+  try {
+    const raw = localStorage.getItem(LAST_USER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.id === "string" && parsed.id.length >= 8) return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function clearLastUser() {
+  try {
+    localStorage.removeItem(LAST_USER_KEY);
+  } catch {}
+}
+
+function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T> {
   return Promise.race([
     promise,
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)),
   ]);
 }
 
-function debugLog(label: string, data: any) {
+function debugLog(label: string, data?: any) {
   console.log(`[SUPABASE] ${label}:`, data);
 }
 
@@ -99,11 +124,27 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       console.log("[SUPABASE] Session on mount:", session ? "EXISTS" : "NULL", "Error:", error);
-      setUser(session?.user || null);
-      if (session?.user && !loadedUserId.current) {
-        loadUserData(session.user.id);
+      if (session?.user) {
+        saveLastUser(session.user.id);
+        setUser(session.user);
+        if (!loadedUserId.current) {
+          loadUserData(session.user.id);
+        }
       } else {
-        setLoading(false); // Either no session, or already handled by INITIAL_SESSION
+        // No session (offline or expired). If we know a last user, enter in
+        // offline mode with cached data instead of forcing the login screen.
+        const lastUser = loadLastUser();
+        if (lastUser?.id) {
+          console.log("[SUPABASE] No session — restoring offline mode for last user:", lastUser.id.slice(0, 8));
+          setUser({ id: lastUser.id });
+          if (!loadedUserId.current) {
+            loadUserData(lastUser.id);
+          } else {
+            setLoading(false);
+          }
+        } else {
+          setLoading(false); // First-time / real sign-out: show login
+        }
       }
     });
 
@@ -114,12 +155,25 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       switch (event) {
         case "SIGNED_IN":
           if (userId && !loadedUserId.current) {
+            saveLastUser(userId);
             setUser(session.user);
             loadUserData(userId);
           }
           break;
 
-        case "SIGNED_OUT":
+        case "SIGNED_OUT": {
+          // Distinguish a manual logout (which clears LAST_USER_KEY first) from
+          // an automatic sign-out caused by network/refresh failure. In the
+          // latter case, restore offline mode with cached data instead of
+          // sending the user to the login screen.
+          const lastUser = loadLastUser();
+          if (lastUser?.id) {
+            console.log("[SUPABASE] SIGNED_OUT without manual logout — restoring offline mode:", lastUser.id.slice(0, 8));
+            loadedUserId.current = null;
+            setUser({ id: lastUser.id });
+            loadUserData(lastUser.id);
+            break;
+          }
           loadedUserId.current = null;
           setUser(null);
           setProfile(null);
@@ -129,15 +183,18 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           setLoading(false);
           if (userId) clearUserCache(userId);
           break;
+        }
 
         case "TOKEN_REFRESHED":
           if (userId && session) {
+            saveLastUser(userId);
             setUser(session.user);
           }
           break;
 
         case "INITIAL_SESSION":
           if (userId && !loadedUserId.current) {
+            saveLastUser(userId);
             setUser(session.user);
             loadUserData(userId);
           }
@@ -362,7 +419,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           }
 
           const groupName = (chatData as any).name || "Grupo";
-          toast.success(`Te agregaron al grupo "${groupName}"`);
+          const isCreator = (chatData as any).admin_id === userId || (chatData as any).profile_id === userId;
+          if (!isCreator) {
+            toast.success(`Te agregaron al grupo "${groupName}"`);
+          }
         } catch (e) {
           console.error("[SUPABASE] Error processing chat_participants event:", e);
         }
@@ -547,6 +607,8 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    // Manual logout: clear the remembered user so SIGNED_OUT goes to login screen
+    clearLastUser();
     // Clean up heartbeat, discovery poll, channels, presence channel, event listeners
     if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     if (discoveryPollRef.current) { clearInterval(discoveryPollRef.current); discoveryPollRef.current = null; }

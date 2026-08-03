@@ -49,11 +49,11 @@ export async function readDeviceContacts(): Promise<DeviceContact[]> {
     const contacts: DeviceContact[] = [];
 
     for (const c of result.contacts || []) {
-      const name = c.name?.display || c.name?.givenName || c.name?.familyName || "";
+      const name = c.name?.display || c.name?.given || c.name?.family || "";
       if (!name) continue;
 
       for (const phone of c.phones || []) {
-        const raw = phone?.number || phone || "";
+        const raw = phone?.number || "";
         const cleaned = cleanPhone(raw);
         if (cleaned.length < 7) continue;
 

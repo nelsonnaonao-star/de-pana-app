@@ -140,6 +140,8 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
       sticker_url: message.sticker_url,
       gif_url: message.gif_url,
       is_animated: message.is_animated,
+      poll_question: message.poll_question,
+      poll_options: message.poll_options ? JSON.stringify(message.poll_options) : undefined,
     }),
   });
   if (!res.ok) {

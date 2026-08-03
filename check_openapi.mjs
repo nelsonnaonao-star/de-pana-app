@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
-const key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFrZ3N5bHV0YnBnb2x1cmtjYXZoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MDg2MTMxNSwiZXhwIjoyMDk2NDM3MzE1fQ._iezAn0MaaMbVo-V98JwU1aOFpEGeXO3dn-EvxYpN9g';
+const key = process.env.SUPABASE_SERVICE_KEY;
 
-const res = await fetch('https://akgsylutbpgolurkcavh.supabase.co/rest/v1/', {
+const res = await fetch(`${process.env.VITE_SUPABASE_URL}/rest/v1/`, {
   headers: { 'apikey': key, 'Accept': 'application/openapi+json' }
 });
 const spec = await res.json();

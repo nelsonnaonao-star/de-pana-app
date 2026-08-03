@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { Mic, Play, Pause, BarChart2, Forward, MapPin, Loader2, X, Download, Share2 } from "lucide-react";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { Message } from "../../types";
@@ -44,6 +44,60 @@ function useSaveMedia() {
     }
   }, [saving]);
   return { saving, save };
+}
+
+function useMenuDropDirection(open: boolean) {
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [dropDown, setDropDown] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const bubble = bubbleRef.current;
+    const menu = menuRef.current;
+    if (!bubble || !menu) return;
+    const bubbleRect = bubble.getBoundingClientRect();
+    const menuHeight = menu.offsetHeight || 200;
+    const spaceAbove = bubbleRect.top;
+    const spaceBelow = window.innerHeight - bubbleRect.bottom;
+    setDropDown(spaceAbove < menuHeight + 8 && spaceBelow >= spaceAbove);
+  }, [open]);
+
+  return { bubbleRef, menuRef, dropDown };
+}
+
+function parseJsonSafe(value: any): any {
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return value;
+}
+
+function extractPollData(msg: Message) {
+  const raw = msg as any;
+  const content = parseJsonSafe(raw.content);
+  const metadata = parseJsonSafe(raw.metadata);
+  const question =
+    msg.pollQuestion ||
+    raw.poll_question ||
+    content?.question ||
+    metadata?.question ||
+    "";
+  let options = Array.isArray(msg.pollOptions) ? msg.pollOptions : parseJsonSafe(raw.poll_options);
+  if (!Array.isArray(options)) options = content?.options || metadata?.options || [];
+  return {
+    question,
+    options: options.map((o: any) => ({
+      id: o?.id || String(Math.random()),
+      text: String(o?.text ?? ""),
+      votes: Number(o?.votes) || 0,
+      votedUsers: Array.isArray(o?.votedUsers) ? o.votedUsers : [],
+    })),
+  };
 }
 
 function MediaViewerToolbar({ onClose, onSave, onShare, onForward, onReact, saving }: {
@@ -107,9 +161,9 @@ function ImageViewer({ src, alt, msg, onClose, handleForwardMessage, handleAddRe
         ref={transformRef}
         minScale={0.5}
         maxScale={5}
-        wheel={{ smoothStep: 0.02 }}
+        wheel={{ step: 0.02 }}
         pinch={{ disabled: false }}
-        doubleClick={{ mode: "toggleMin" }}
+        doubleClick={{ mode: "toggle" }}
       >
         <TransformComponent
           wrapperClass="!w-full !h-full !flex !items-center !justify-center"
@@ -314,12 +368,13 @@ export default React.memo(function MessageBubble({
   const [showPriceInput, setShowPriceInput] = useState(false);
   const [priceValue, setPriceValue] = useState("");
   const isTextOnlyEmoji = msg.type === "text" && msg.text && isEmoji(msg.text);
+  const { bubbleRef, menuRef, dropDown } = useMenuDropDirection(activeReactionMenu === msg.id);
 
   const isMediaType = msg.type === "sticker" || msg.type === "image" || msg.type === "video";
   if (isMediaType) {
     const isSticker = msg.type === "sticker";
     return (
-      <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
+      <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
         {msg.type === "video" ? (
           <VideoMessageContent
             msg={msg} isMe={isMe}
@@ -345,7 +400,7 @@ export default React.memo(function MessageBubble({
           </div>
         )}
         {activeReactionMenu === msg.id && (
-          <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden -top-8 ${isMe ? "right-2" : "left-2"}`}>
+          <div ref={menuRef} className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden ${dropDown ? "top-full mt-1" : "-top-8"} ${isMe ? "right-2" : "left-2"}`}>
             {showPriceInput ? (
               <div className="py-2.5 px-3 min-w-[200px]">
                 <p className="text-[11px] font-bold text-slate-700 mb-1.5">Precio del producto</p>
@@ -406,6 +461,9 @@ export default React.memo(function MessageBubble({
                   <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
                     ↪️ Reenviar
                   </button>
+                  <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                    📋 Copiar
+                  </button>
                   {msg.mediaUrl && (
                     <button
                       onClick={async () => {
@@ -452,7 +510,7 @@ export default React.memo(function MessageBubble({
 
   if (isTextOnlyEmoji) {
     return (
-      <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
+      <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
         <div className={`flex flex-col ${isMe ? "items-end" : "items-start"} gap-0.5`}>
           <span className="text-7xl leading-none select-none px-1">{msg.text}</span>
           <div className={`flex items-center gap-1 px-2 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
@@ -479,7 +537,7 @@ export default React.memo(function MessageBubble({
           </div>
         )}
         {activeReactionMenu === msg.id && (
-          <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden -top-8 ${isMe ? "right-2" : "left-2"}`}>
+          <div ref={menuRef} className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden ${dropDown ? "top-full mt-1" : "-top-8"} ${isMe ? "right-2" : "left-2"}`}>
             <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
               {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
                 <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 transition-transform p-1">{emo}</button>
@@ -492,7 +550,10 @@ export default React.memo(function MessageBubble({
               <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
                 ↪️ Reenviar
               </button>
-              {isMe && msg.type === "text" && (
+              <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                📋 Copiar
+              </button>
+              {msg.sender === "me" && msg.type === "text" && (
                 <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
                   ✏️ Editar
                 </button>
@@ -514,7 +575,7 @@ export default React.memo(function MessageBubble({
   }
 
   return (
-    <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
+    <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
       <div
         className={`max-w-[85%] rounded-2xl px-4 py-2.5 min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
           isMe ? activeMeBubble.css : activeThemBubble.css
@@ -600,39 +661,46 @@ export default React.memo(function MessageBubble({
           </div>
         )}
 
-        {msg.type === "poll" && (
-          <div className="space-y-3 min-w-[200px] text-slate-800 p-1 bg-white rounded-xl">
-            <div className="flex items-start gap-1.5 border-b border-slate-100 pb-1.5">
-              <BarChart2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
-              <h4 className="text-[11px] font-bold text-slate-900 leading-snug">{msg.pollQuestion}</h4>
+        {msg.type === "poll" && (() => {
+          const { question: pollQuestion, options: pollOptions } = extractPollData(msg);
+          return (
+            <div className="space-y-3 min-w-[200px] text-slate-800 p-1 bg-white rounded-xl">
+              <div className="flex items-start gap-1.5 border-b border-slate-100 pb-1.5">
+                <BarChart2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                <h4 className="text-[11px] font-bold text-slate-900 leading-snug">
+                  {pollQuestion || "Encuesta"}
+                </h4>
+              </div>
+              <div className="space-y-1.5">
+                {pollOptions.map((opt) => {
+                  const votedUsers = Array.isArray(opt.votedUsers) ? opt.votedUsers : [];
+                  const hasVoted = votedUsers.includes("me");
+                  const voteCount = Number(opt.votes) || 0;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleVote(msg.id, opt.id);
+                      }}
+                      className={`w-full text-left p-2 rounded-lg border text-[10px] transition-all relative overflow-hidden flex items-center justify-between ${
+                        hasVoted
+                          ? "border-teal-400 bg-teal-50/50"
+                          : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
+                      }`}
+                    >
+                      <span className="relative z-10 font-semibold">{opt.text}</span>
+                      <span className="relative z-10 font-mono font-bold bg-[#10646a]/10 text-[#10646a] px-1.5 py-0.5 rounded-full">
+                        {voteCount} v
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="text-[9px] text-slate-400 block text-right">Encuesta interactiva</span>
             </div>
-            <div className="space-y-1.5">
-              {msg.pollOptions?.map((opt) => {
-                const hasVoted = opt.votedUsers.includes("me");
-                return (
-                  <button
-                    key={opt.id}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleVote(msg.id, opt.id);
-                    }}
-                    className={`w-full text-left p-2 rounded-lg border text-[10px] transition-all relative overflow-hidden flex items-center justify-between ${
-                      hasVoted
-                        ? "border-teal-400 bg-teal-50/50"
-                        : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
-                    }`}
-                  >
-                    <span className="relative z-10 font-semibold">{opt.text}</span>
-                    <span className="relative z-10 font-mono font-bold bg-[#10646a]/10 text-[#10646a] px-1.5 py-0.5 rounded-full">
-                      {opt.votes} v
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            <span className="text-[9px] text-slate-400 block text-right">Encuesta interactiva</span>
-          </div>
-        )}
+          );
+        })()}
 
         <div className={`flex items-center justify-end gap-1 mt-1 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
           {msg.edited && <span className="italic opacity-60">editado</span>}
@@ -665,7 +733,7 @@ export default React.memo(function MessageBubble({
       )}
 
       {activeReactionMenu === msg.id && (
-        <div className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden -top-8 ${
+        <div ref={menuRef} className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden ${dropDown ? "top-full mt-1" : "-top-8"} ${
           isMe ? "right-2" : "left-2"
         }`}>
           <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
@@ -680,7 +748,10 @@ export default React.memo(function MessageBubble({
             <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
               ↪️ Reenviar
             </button>
-            {isMe && msg.type === "text" && (
+            <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+              📋 Copiar
+            </button>
+            {msg.sender === "me" && msg.type === "text" && (
               <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
                 ✏️ Editar
               </button>
@@ -821,6 +892,7 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
   handleAddReaction: (id: string, emoji: string) => void;
 }) {
   const [showViewer, setShowViewer] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
   const isSending = msg.status === "sending";
 
   return (
@@ -846,14 +918,20 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
           ) : (
             <video
               src={msg.localVideoUrl || msg.mediaUrl}
-              className="w-full h-full object-cover absolute inset-0"
+              className={`w-full h-full object-cover absolute inset-0 transition-opacity duration-150 ${
+                videoReady ? "opacity-100" : "opacity-0"
+              }`}
               muted
               playsInline
               crossOrigin="anonymous"
               preload="auto"
+              onLoadedData={() => setVideoReady(true)}
+              onCanPlay={() => setVideoReady(true)}
             />
           )}
-          <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/20 transition-colors">
+          <div className={`absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/20 transition-all ${
+            videoReady ? "opacity-100" : "opacity-0"
+          }`}>
             <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
               <Play className="w-5 h-5 text-white ml-0.5" />
             </div>

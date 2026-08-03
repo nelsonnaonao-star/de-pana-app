@@ -3,8 +3,10 @@ import {
   Plus, Search, Sparkles, Volume2, VolumeX, MessageSquare, 
   MapPin, Eye, MousePointerClick, Image as ImageIcon, Music, 
   Check, Play, Pause, RefreshCw, BarChart3, Star, Tag, Compass,
-  Layers, ChevronRight, Share2, HelpCircle, AlertCircle, Upload, X
+  Layers, ChevronRight, Share2, HelpCircle, AlertCircle, Upload, X, Trash2
 } from "lucide-react";
+import { Share } from "@capacitor/share";
+import { Capacitor } from "@capacitor/core";
 import { Chat, Message } from "../types";
 import MediaEditor from "./MediaEditor";
 import { uploadChatMedia } from "../services/storage";
@@ -34,6 +36,7 @@ interface BusinessPanelProps {
   onStartBusinessChat: (businessName: string, avatar: string, initialText: string, flyerId: string, contactPhone?: string) => void;
   flyers: BusinessFlyer[];
   onAddFlyer: (flyer: BusinessFlyer) => void;
+  onDeleteFlyer: (flyerId: string) => void;
   onIncrementView: (flyerId: string) => void;
   onIncrementClick: (flyerId: string) => void;
   onEditingChange?: (isEditing: boolean) => void;
@@ -102,6 +105,7 @@ export default function BusinessPanel({
   onStartBusinessChat,
   flyers,
   onAddFlyer,
+  onDeleteFlyer,
   onIncrementView,
   onIncrementClick,
   onEditingChange,
@@ -295,6 +299,47 @@ export default function BusinessPanel({
     onIncrementClick(flyer.id);
     const initialText = `¡Hola! Me interesó tu anuncio en Red On Negocios: "${flyer.isGenerated ? flyer.productName : flyer.businessName}". ¿Está disponible?`;
     onStartBusinessChat(flyer.businessName, flyer.flyerUrl || flyer.ownerAvatar, initialText, flyer.id, flyer.contactPhone || "");
+  };
+
+  // Share flyer image as a real file (not just a link)
+  const handleShareFlyer = async (flyer: BusinessFlyer) => {
+    const text = `${flyer.businessName} - ${flyer.description}${flyer.location ? " en " + flyer.location : ""}`;
+    const imgUrl = flyer.flyerUrl || "";
+    try {
+      if (imgUrl) {
+        const res = await fetch(imgUrl);
+        const blob = await res.blob();
+        const dataUri: string = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        if (Capacitor.isNativePlatform()) {
+          await Share.share({ title: flyer.businessName, text, files: [dataUri] });
+        } else if (navigator.share) {
+          const file = new File([blob], `${flyer.businessName}.jpg`, { type: blob.type || "image/jpeg" });
+          await navigator.share({ title: flyer.businessName, text, files: [file] }).catch(() => {});
+        } else {
+          await navigator.clipboard.writeText(text);
+        }
+      } else if (Capacitor.isNativePlatform()) {
+        await Share.share({ title: flyer.businessName, text });
+      } else if (navigator.share) {
+        await navigator.share({ title: flyer.businessName, text }).catch(() => {});
+      } else {
+        await navigator.clipboard.writeText(text);
+      }
+    } catch (e) {
+      console.log("Share error", e);
+    }
+  };
+
+  // Delete own flyer with confirmation
+  const handleDeleteFlyer = (flyer: BusinessFlyer) => {
+    if (!window.confirm(`¿Eliminar tu publicación "${flyer.businessName}"? Esta acción no se puede deshacer.`)) return;
+    onDeleteFlyer(flyer.id);
+    if (viewingFlyer?.id === flyer.id) setViewingFlyer(null);
   };
 
   // Filtered public flyers based on search
@@ -524,7 +569,22 @@ export default function BusinessPanel({
                       >
                         <MessageSquare className="w-3.5 h-3.5" /> Chatear con el Negocio
                       </button>
-                      
+                      <button
+                        onClick={() => handleShareFlyer(flyer)}
+                        className="px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-bold text-[10px] rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer"
+                        title="Compartir"
+                      >
+                        <Share2 className="w-3.5 h-3.5" />
+                      </button>
+                      {isMyFlyer && (
+                        <button
+                          onClick={() => handleDeleteFlyer(flyer)}
+                          className="px-3 bg-red-50 hover:bg-red-100 text-red-500 font-bold text-[10px] rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer"
+                          title="Eliminar publicación"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       {isMyFlyer && (
                         <span className="px-3 bg-teal-50 text-[#0a4d52] font-extrabold text-[8px] rounded-xl flex items-center border border-teal-100">
                           Tu publicación
@@ -1015,9 +1075,18 @@ export default function BusinessPanel({
                       </span>
                     </div>
 
-                    <span className="text-[8px] font-extrabold bg-teal-400/10 text-[#0a4d52] px-2 py-0.5 rounded-full uppercase">
-                      {flyer.isGenerated ? "Generado" : "Manual"}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => handleDeleteFlyer(flyer)}
+                        className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg flex items-center gap-1 text-[9px] font-bold transition-all cursor-pointer"
+                        title="Eliminar publicación"
+                      >
+                        <Trash2 className="w-3 h-3" /> Eliminar
+                      </button>
+                      <span className="text-[8px] font-extrabold bg-teal-400/10 text-[#0a4d52] px-2 py-0.5 rounded-full uppercase">
+                        {flyer.isGenerated ? "Generado" : "Manual"}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Individual statistics row */}
@@ -1185,11 +1254,7 @@ export default function BusinessPanel({
             {/* Share + Chat buttons */}
             <div className="flex gap-3 pt-2 pb-6">
               <button
-                onClick={() => {
-                  if (navigator.share) {
-                    navigator.share({ title: viewingFlyer.businessName, text: viewingFlyer.description }).catch(() => {});
-                  }
-                }}
+                onClick={() => handleShareFlyer(viewingFlyer)}
                 className="flex-1 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
               >
                 <Share2 className="w-3.5 h-3.5" /> Compartir
@@ -1205,6 +1270,16 @@ export default function BusinessPanel({
                 <MessageSquare className="w-3.5 h-3.5" /> Chatear con el Negocio
               </button>
             </div>
+
+            {/* Owner delete */}
+            {!!viewingFlyer.ownerId && viewingFlyer.ownerId === currentUserId && (
+              <button
+                onClick={() => handleDeleteFlyer(viewingFlyer)}
+                className="w-full border border-red-200 bg-red-50 hover:bg-red-100 text-red-500 font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Eliminar mi publicación
+              </button>
+            )}
           </div>
         </div>
       )}

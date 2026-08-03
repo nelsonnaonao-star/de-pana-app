@@ -49,6 +49,11 @@ import SimulatorTabHeader from "./simulator/SimulatorTabHeader";
 import SimulatorCreateGroup from "./simulator/SimulatorCreateGroup";
 import SimulatorForwardModal from "./simulator/SimulatorForwardModal";
 import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
+
+// Module-level set of chat ids already animated this session — survives remounts
+// so returning to the chats list doesn't replay the fade-in on seen items.
+const animatedChatIds = new Set<string>();
+
 interface PhoneSimulatorProps {
   isCorrected?: boolean;
   onToggle?: (val: boolean) => void;
@@ -454,7 +459,7 @@ export default function PhoneSimulator({
     setFlyers(prev => [newFlyer, ...prev]);
     if (!user) return;
     try {
-      await createFlyer({
+      const created = await createFlyer({
         user_id: user.id,
         business_name: newFlyer.businessName,
         description: newFlyer.description,
@@ -467,6 +472,17 @@ export default function PhoneSimulator({
         music_name: newFlyer.musicName,
         contact_phone: newFlyer.contactPhone,
       });
+      if (created?.id) {
+        setFlyers(prev => prev.map(f => (f.id === newFlyer.id ? { ...f, id: created.id } : f)));
+      }
+    } catch {}
+  };
+
+  const handleDeleteFlyer = async (flyerId: string) => {
+    setFlyers(prev => prev.filter(f => f.id !== flyerId));
+    if (!user) return;
+    try {
+      await deleteFlyer(flyerId);
     } catch {}
   };
 
@@ -690,7 +706,7 @@ export default function PhoneSimulator({
   };
 
   const handleRegister = (name: string, phone: string, avatar: string) => {
-    setRegisteredUser({ name, phone, avatar });
+    setRegisteredUser({ name, phone, avatar, bio: "" });
     setCurrentScreen("chats");
   };
 
@@ -730,7 +746,7 @@ export default function PhoneSimulator({
         isGroup: sc.is_group || false,
         messages: [],
       }));
-      setChats(mapped);
+      setChats(mapped as Chat[]);
       setChatsLoaded(true);
     }
   }, [supabaseChats, user, clearedAtMap]);
@@ -863,7 +879,7 @@ export default function PhoneSimulator({
           if (!fetched) return;
           setChats(prev => {
             if (prev.some(c => c.id === fetched.id)) return prev;
-            return [fetched, ...prev].sort(sortChats);
+            return [fetched as any, ...prev].sort(sortChats);
           });
           refreshChats();
           return;
@@ -1141,9 +1157,8 @@ export default function PhoneSimulator({
             if (!full) return;
             setChats(later => {
               if (later.some(c => c.id === full.id)) return later;
-              return [{ ...full, lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 }, ...later].sort(sortChats);
-            });
-          });
+              return [{ ...full, lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 } as any, ...later].sort(sortChats);
+            });          });
           return prev;
         }
         const updated = [...prev];
@@ -1384,9 +1399,8 @@ export default function PhoneSimulator({
 
   const getChatByPartnerId = useCallback((partnerId: string) => {
     return chats.find(c => {
-      const otherId = "partnerUserId" in c ? (c as any).partnerUserId : null;
-      if (otherId) return otherId === partnerId;
-      return c.profile_id === partnerId || c.admin_id === partnerId;
+      const otherId = (c as any).partnerUserId;
+      return otherId ? otherId === partnerId : false;
     });
   }, [chats]);
 
@@ -1626,6 +1640,13 @@ export default function PhoneSimulator({
     c.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
   );
 
+  // Flag which chats are animating for the first time this session.
+  const chatsWithAnimFlag = filteredChats.map((chat) => {
+    const shouldAnimate = !animatedChatIds.has(chat.id);
+    animatedChatIds.add(chat.id);
+    return { chat, shouldAnimate };
+  });
+
   console.log("[PHONESIM] Rendering:", { 
     currentScreen,
     registeredUser: !!registeredUser, 
@@ -1758,7 +1779,7 @@ export default function PhoneSimulator({
       )}
 
       {/* 1. WELCOME SCREEN / REGISTER WINDOW */}
-      {!registeredUser || currentScreen === "welcome" ? (
+      {!user || currentScreen === "welcome" ? (
         <WelcomeScreen onRegister={handleRegister} />
       ) : (
         // 2. SINGLE SCREEN MOBILE LAYOUT
@@ -1769,99 +1790,130 @@ export default function PhoneSimulator({
           "font-sans"
         }`}>
           
-          {currentScreen === "chat_room" && activeChat ? (
-            <ChatRoom
-              chat={activeChat}
-              onBack={() => {
-                setSelectedChatId(null);
-                setCurrentScreen("chats");
-              }}
-              onSendMessage={handleSendMessageInRoom}
-              onTriggerCall={handleTriggerCallFromChat}
-              callInProgress={isInitiatingCall}
-              onForwardMessage={setForwardingMessage}
-              onChatDeleted={(chatId) => {
-                deletedChatIdsRef.current.add(chatId);
-                setChats(prev => prev.filter(c => c.id !== chatId));
-                setSelectedChatId(null);
-                setCurrentScreen("chats");
-              }}
-              onMessageDeleted={(chatId, messageId) => {
-                setChats(prev => prev.map(c => {
-                  if (c.id !== chatId) return c;
-                  const remaining = c.messages.filter(m => m.id !== messageId);
-                  const last = remaining.length > 0 ? remaining[remaining.length - 1] : null;
-                  const newLastMsg = last ? (last.text || "Archivo multimedia") : "";
-                  const newLastTime = last ? last.timestamp : "";
-                  return { ...c, lastMessage: newLastMsg, lastMessageTime: newLastTime, messages: remaining };
-                }));
-              }}
-              onChatCleared={(chatId) => {
-                const now = new Date().toISOString();
-                setClearAtMap(prev => ({ ...prev, [chatId]: now }));
-              }}
-              currentUserId={user?.id}
-              currentUserName={profile?.name}
-              refetchTrigger={refetchTrigger}
-              onRegisterBackHandler={(handler) => { chatRoomBackHandlerRef.current = handler; }}
-              onOpenProfile={handleOpenProfile}
-            />
-          ) : currentScreen === "qr_scanner" ? (
-            <QrScanner
-              userName={registeredUser?.name || "Nelson Castro"}
-              userPhone={registeredUser?.phone || "+58 412 1234567"}
-              onBack={() => setCurrentScreen("chats")}
-              onContactAdded={handleContactAddedByQr}
-            />
-          ) : currentScreen === "my_qr" ? (
-            <MyQrCode
+          {/* FULL-SCREEN SCREENS (rendered as overlays so the tabs tree stays mounted) */}
+          {currentScreen === "chat_room" && activeChat && (
+            <div className="absolute inset-0 z-50 bg-white">
+              <ChatRoom
+                chat={activeChat}
+                onBack={() => {
+                  setSelectedChatId(null);
+                  setCurrentScreen("chats");
+                }}
+                onSendMessage={handleSendMessageInRoom}
+                onTriggerCall={handleTriggerCallFromChat}
+                callInProgress={isInitiatingCall}
+                onForwardMessage={setForwardingMessage}
+                onChatDeleted={(chatId) => {
+                  deletedChatIdsRef.current.add(chatId);
+                  setChats(prev => prev.filter(c => c.id !== chatId));
+                  setSelectedChatId(null);
+                  setCurrentScreen("chats");
+                }}
+                onMessageDeleted={(chatId, messageId) => {
+                  setChats(prev => prev.map(c => {
+                    if (c.id !== chatId) return c;
+                    const remaining = c.messages.filter(m => m.id !== messageId);
+                    const last = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+                    const newLastMsg = last ? (last.text || "Archivo multimedia") : "";
+                    const newLastTime = last ? last.timestamp : "";
+                    return { ...c, lastMessage: newLastMsg, lastMessageTime: newLastTime, messages: remaining };
+                  }));
+                }}
+                onChatCleared={(chatId) => {
+                  const now = new Date().toISOString();
+                  setClearAtMap(prev => ({ ...prev, [chatId]: now }));
+                }}
+                onChatUpdated={(chatId, updates) => {
+                  setChats(prev => prev.map(c => (c.id === chatId ? { ...c, ...updates } : c)));
+                }}
+                currentUserId={user?.id}
+                currentUserName={profile?.name}
+                refetchTrigger={refetchTrigger}
+                onRegisterBackHandler={(handler) => { chatRoomBackHandlerRef.current = handler; }}
+                onOpenProfile={handleOpenProfile}
+              />
+            </div>
+          )}
+          {currentScreen === "qr_scanner" && (
+            <div className="absolute inset-0 z-50 bg-white">
+              <QrScanner
+                userName={registeredUser?.name || "Nelson Castro"}
+                userPhone={registeredUser?.phone || "+58 412 1234567"}
+                onBack={() => setCurrentScreen("chats")}
+                onContactAdded={handleContactAddedByQr}
+              />
+            </div>
+          )}
+          {currentScreen === "my_qr" && (
+            <div className="absolute inset-0 z-50 bg-white">
+              <MyQrCode
               userId={user?.id || ""}
               name={registeredUser?.name || ""}
               phone={registeredUser?.phone || ""}
               avatar={registeredUser?.avatar || ""}
               onBack={() => setCurrentScreen("chats")}
             />
-          ) : currentScreen === "add_contact" ? (
-            <AddContact
-              currentUserId={user?.id || ""}
-              onBack={() => setCurrentScreen("chats")}
-              onContactAdded={handleContactAddedByQr}
-            />
-          ) : currentScreen === "add_contact_manual" ? (
-            <AddContactManual
-              currentUserId={user?.id || ""}
-              currentUserPhone={profile?.phone_number || registeredUser?.phone || ""}
-              onBack={() => setCurrentScreen("chats")}
-            />
-          ) : currentScreen === "synced_contacts" ? (
-            <SyncedContacts
-              currentUserId={user?.id || ""}
-              onBack={() => setCurrentScreen("chats")}
-              onStartChat={handleStartChatFromSynced}
-            />
-          ) : currentScreen === "create_group" ? (
-            <SimulatorCreateGroup
-              onBack={() => setCurrentScreen("chats")}
-              groupName={groupNameInput}
-              onGroupNameChange={setGroupNameInput}
-              searchQuery={groupSearchQuery}
-              onSearchChange={setGroupSearchQuery}
-              contacts={dedupedContacts}
-              selectedMembers={selectedGroupMembers}
-              onToggleMember={(id) =>
-                setSelectedGroupMembers(prev =>
-                  prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-                )
-              }
-              isMuted={groupMuted}
-              onToggleMute={() => setGroupMuted(!groupMuted)}
-              isAdminOnly={groupAdminOnly}
-              onToggleAdminOnly={() => setGroupAdminOnly(!groupAdminOnly)}
-              onCreateGroup={handleCreateGroup}
-            />
-          ) : (
-            // Tab screen (Chats, Contacts, States, Channels, Rates, Business, Profile)
-            <div className="flex-1 flex flex-col overflow-hidden h-full relative">
+            </div>
+          )}
+          {currentScreen === "add_contact" && (
+            <div className="absolute inset-0 z-50 bg-white">
+              <AddContact
+                currentUserId={user?.id || ""}
+                onBack={() => setCurrentScreen("chats")}
+                onContactAdded={handleContactAddedByQr}
+              />
+            </div>
+          )}
+          {currentScreen === "add_contact_manual" && (
+            <div className="absolute inset-0 z-50 bg-white">
+              <AddContactManual
+                currentUserId={user?.id || ""}
+                currentUserPhone={profile?.phone_number || registeredUser?.phone || ""}
+                onBack={() => setCurrentScreen("chats")}
+              />
+            </div>
+          )}
+          {currentScreen === "synced_contacts" && (
+            <div className="absolute inset-0 z-50 bg-white">
+              <SyncedContacts
+                currentUserId={user?.id || ""}
+                onBack={() => setCurrentScreen("chats")}
+                onStartChat={handleStartChatFromSynced}
+              />
+            </div>
+          )}
+          {currentScreen === "create_group" && (
+            <div className="absolute inset-0 z-50 bg-white">
+              <SimulatorCreateGroup
+                onBack={() => setCurrentScreen("chats")}
+                groupName={groupNameInput}
+                onGroupNameChange={setGroupNameInput}
+                searchQuery={groupSearchQuery}
+                onSearchChange={setGroupSearchQuery}
+                contacts={dedupedContacts}
+                selectedMembers={selectedGroupMembers}
+                onToggleMember={(id) =>
+                  setSelectedGroupMembers(prev =>
+                    prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+                  )
+                }
+                isMuted={groupMuted}
+                onToggleMute={() => setGroupMuted(!groupMuted)}
+                isAdminOnly={groupAdminOnly}
+                onToggleAdminOnly={() => setGroupAdminOnly(!groupAdminOnly)}
+                onCreateGroup={handleCreateGroup}
+              />
+            </div>
+          )}
+
+          {/* Tab screen (Chats, Contacts, States, Channels, Rates, Business, Profile) */}
+          <div className={`flex-1 flex flex-col overflow-hidden h-full relative ${
+            currentScreen === "chat_room" || currentScreen === "qr_scanner" || currentScreen === "my_qr" ||
+            currentScreen === "add_contact" || currentScreen === "add_contact_manual" ||
+            currentScreen === "synced_contacts" || currentScreen === "create_group"
+              ? "hidden"
+              : ""
+          }`}>
               
               <SimulatorTabHeader
                 currentScreen={currentScreen}
@@ -1870,7 +1922,6 @@ export default function PhoneSimulator({
                 registeredUserAvatar={registeredUser?.avatar}
                 onNavigateToQr={() => setCurrentScreen("qr_scanner")}
                 onNavigateToProfile={() => setCurrentScreen("profile")}
-                onSync={() => { refreshChats(); toast.success("Sincronizando..."); }}
               />
 
               {/* STATES TAB — outside main content for stable flex layout */}
@@ -1884,8 +1935,7 @@ export default function PhoneSimulator({
               } ${currentScreen === "states" ? "hidden" : ""}`}>
                 
                 {/* CHATS LIST */}
-                {currentScreen === "chats" && (
-                  <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5">
+                <div className={`flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5 ${currentScreen === "chats" ? "" : "hidden"}`}>
                     {/* Recent Section Header */}
                     <div className="flex justify-between items-center px-1 mb-1">
                       <h2 className="text-sm font-extrabold text-slate-950 tracking-tight">Recent</h2>
@@ -1894,7 +1944,7 @@ export default function PhoneSimulator({
                       </button>
                     </div>
 
-                    {filteredChats.map((chat) => {
+                    {chatsWithAnimFlag.map(({ chat, shouldAnimate }) => {
                       const isSwiped = swipedChatId === chat.id;
                       let touchStartX = 0;
                       let touchStartY = 0;
@@ -1993,14 +2043,16 @@ export default function PhoneSimulator({
                                 document.addEventListener('mouseup', onMouseUp);
                               }
                             }}
-                            className={`relative flex items-start gap-3.5 p-2.5 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer animate-fade-in bg-white z-10 ${
+                            className={`relative flex items-start gap-3.5 p-2.5 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer ${shouldAnimate ? 'animate-fade-in' : ''} bg-white z-10 ${
                               isSwiped ? 'shadow-lg' : ''
                             }`}
                             style={isSwiped ? { transform: 'translateX(80px)' } : undefined}
                           >
                             <div className="relative shrink-0">
                               <div className={`p-[2px] rounded-full border-2 border-dashed ${chat.isGroup ? "border-purple-500/90" : "border-rose-500/90"} transition-transform hover:rotate-12 duration-500`}>
-                                {chat.isGroup ? (
+                                {chat.avatar ? (
+                                  <CachedImage src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" loading="lazy" />
+                                ) : chat.isGroup ? (
                                   <div className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
                                     <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -2009,8 +2061,6 @@ export default function PhoneSimulator({
                                       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                                     </svg>
                                   </div>
-                                ) : chat.avatar ? (
-                                  <CachedImage src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" loading="lazy" />
                                 ) : (
                                   <div className="w-11 h-11 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                                     <span className="text-white font-black text-sm">
@@ -2057,7 +2107,6 @@ export default function PhoneSimulator({
                       </div>
                     )}
                   </div>
-                )}
 
                 {/* Context menu overlay */}
                 {contextMenuChat && contextMenuPos && (
@@ -2103,7 +2152,7 @@ export default function PhoneSimulator({
                 )}
 
                 {/* CONTACTS TAB */}
-                {currentScreen === "contacts" && (
+                <div className={`flex-1 overflow-y-auto h-full ${currentScreen === "contacts" ? "" : "hidden"}`}>
                   <ContactsList
                     contacts={dedupedContacts}
                     onSelectContact={(contact) => {
@@ -2125,7 +2174,7 @@ export default function PhoneSimulator({
                     onAddContact={() => setCurrentScreen("add_contact_manual")}
                     onDeleteContact={handleDeleteContact}
                   />
-                )}
+                </div>
 
                 {/* CALLS TAB */}
                 {currentScreen === "calls" && user && (
@@ -2147,6 +2196,7 @@ export default function PhoneSimulator({
                     onStartBusinessChat={handleStartBusinessChat}
                     flyers={flyers}
                     onAddFlyer={handleAddNewFlyer}
+                    onDeleteFlyer={handleDeleteFlyer}
                     onIncrementView={handleIncrementView}
                     onIncrementClick={handleIncrementClick}
                     onEditingChange={setIsEditingMedia}
@@ -3021,7 +3071,6 @@ export default function PhoneSimulator({
               />
 
             </div>
-          )}
 
           <SimulatorForwardModal
             message={forwardingMessage}

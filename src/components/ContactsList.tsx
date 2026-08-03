@@ -177,15 +177,17 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
   );
 }
 
-function ContactRow({
-  contact, onClick, onContextMenu, onTouchStart, onTouchEnd
-}: {
+interface ContactRowProps {
   contact: Contact;
   onClick: (c: Contact) => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onTouchStart: () => void;
   onTouchEnd: () => void;
-}) {
+}
+
+function ContactRow({
+  contact, onClick, onContextMenu, onTouchStart, onTouchEnd
+}: ContactRowProps): React.JSX.Element {
   const avatarColors = [
     "from-teal-400 to-emerald-600",
     "from-blue-400 to-indigo-600",

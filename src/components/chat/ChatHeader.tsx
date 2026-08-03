@@ -68,7 +68,9 @@ export default function ChatHeader({
             onClick={() => { if (!isGroup && onOpenProfile) onOpenProfile(); }}
           >
             <div className="relative">
-              {isGroup ? (
+              {chat.avatar ? (
+                <CachedImage src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" />
+              ) : isGroup ? (
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center border border-white/20">
                   <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -77,8 +79,6 @@ export default function ChatHeader({
                     <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                   </svg>
                 </div>
-              ) : chat.avatar ? (
-                <CachedImage src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center border border-white/20">
                   <span className="text-white font-bold text-xs">

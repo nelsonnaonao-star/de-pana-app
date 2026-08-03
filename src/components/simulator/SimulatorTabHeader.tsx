@@ -7,7 +7,6 @@ interface SimulatorTabHeaderProps {
   registeredUserAvatar?: string;
   onNavigateToQr: () => void;
   onNavigateToProfile: () => void;
-  onSync?: () => void;
 }
 
 export default function SimulatorTabHeader({
@@ -17,7 +16,6 @@ export default function SimulatorTabHeader({
   registeredUserAvatar,
   onNavigateToQr,
   onNavigateToProfile,
-  onSync,
 }: SimulatorTabHeaderProps) {
   return (
     <>
@@ -56,13 +54,6 @@ export default function SimulatorTabHeader({
             </div>
 
             <div className="flex items-center gap-2.5">
-              <button
-                onClick={onSync}
-                className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center border border-white/10 text-white transition-all cursor-pointer"
-                title="Sincronizar chats"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-              </button>
               <button
                 onClick={onNavigateToQr}
                 className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center border border-white/10 text-white transition-all cursor-pointer"

@@ -1,4 +1,5 @@
 import { Network } from "@capacitor/network";
+import type { PluginListenerHandle } from "@capacitor/core";
 import { messageRepo } from "../database/repositories/MessageRepository";
 import { sendMessage as apiSendMessage } from "../messages";
 import { uploadChatMedia } from "../storage";
@@ -13,7 +14,7 @@ export type SyncedCallback = (
 class SyncService {
   private listeners: SyncedCallback[] = [];
   private processing = false;
-  private networkHandler: (() => void) | null = null;
+  private networkHandler: PluginListenerHandle | null = null;
   private started = false;
 
   onSynced(cb: SyncedCallback): void {
@@ -53,7 +54,7 @@ class SyncService {
   stop(): void {
     if (this.networkHandler) {
       try {
-        this.networkHandler();
+        this.networkHandler.remove();
       } catch {}
       this.networkHandler = null;
     }

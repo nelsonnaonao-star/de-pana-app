@@ -52,7 +52,7 @@ export interface UseMessageActionsParams {
 export interface UseMessageActionsReturn {
   handleReplyMessage: (msg: Message) => void;
   handleSendLocation: () => Promise<void>;
-  handleSendText: () => Promise<void>;
+  handleSendText: (textOverride?: string) => Promise<void>;
   handleSendSticker: (value: string, type: "gif" | "sticker" | "emoji") => Promise<void>;
   triggerFilePick: (accept: string, type: Message["type"]) => Promise<void>;
   handleCreatePoll: (e: FormEvent) => Promise<void>;
@@ -186,8 +186,9 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     );
   };
 
-  const handleSendText = async () => {
-    if (!inputText.trim()) return;
+  const handleSendText = async (textOverride?: string) => {
+    const text = typeof textOverride === "string" ? textOverride : (inputText ?? "");
+    if (!text.trim()) return;
     if (isSendingRef.current) { console.warn('[CHAT] send blocked — already sending'); return; }
     isSendingRef.current = true;
     const tempId = `temp_${Date.now()}_txt`;
@@ -195,7 +196,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     const newMsg: Message = {
       id: tempId,
       sender: "me",
-      text: inputText,
+      text,
       timestamp,
       type: "text",
       status: "sending",
@@ -207,8 +208,10 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
 
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);
-    setInputText("");
-    setReplyTo(null);
+    if (!textOverride) {
+      setInputText("");
+      setReplyTo(null);
+    }
 
     emitTyping(false);
     if (typingTimerRef.current) {
@@ -228,7 +231,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       } else {
         const saved = await apiSendMessage({
           chat_id: chatId,
-          text: inputText,
+          text,
           type: "text",
           sender_id: uid,
           reply_to_id: replyTo?.id,
@@ -574,18 +577,20 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
       const next = prev.map((m) => {
         if (m.id === messageId && m.pollOptions) {
           const options = m.pollOptions.map((o) => {
-            const alreadyVoted = o.votedUsers.includes("me");
+            const votedUsers = Array.isArray(o.votedUsers) ? o.votedUsers : [];
+            const alreadyVoted = votedUsers.includes("me");
+            const currentVotes = Number(o.votes) || 0;
             if (o.id === optionId) {
               return {
                 ...o,
-                votes: alreadyVoted ? o.votes - 1 : o.votes + 1,
-                votedUsers: alreadyVoted ? o.votedUsers.filter((u) => u !== "me") : [...o.votedUsers, "me"]
+                votes: alreadyVoted ? Math.max(0, currentVotes - 1) : currentVotes + 1,
+                votedUsers: alreadyVoted ? votedUsers.filter((u) => u !== "me") : [...votedUsers, "me"]
               };
             } else {
               return {
                 ...o,
-                votes: o.votedUsers.includes("me") ? o.votes - 1 : o.votes,
-                votedUsers: o.votedUsers.filter((u) => u !== "me")
+                votes: alreadyVoted ? Math.max(0, currentVotes - 1) : currentVotes,
+                votedUsers: votedUsers.filter((u) => u !== "me")
               };
             }
           });
@@ -600,7 +605,7 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
     if (updatedPollOptions) {
       Promise.resolve(supabase
         .from("messages")
-        .update({ poll_options: updatedPollOptions })
+        .update({ poll_options: JSON.stringify(updatedPollOptions) })
         .eq("id", messageId)
       ).then(() => {}).catch(err => console.error("[ChatRoom] update poll options failed:", err));
     }

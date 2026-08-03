@@ -161,7 +161,7 @@ export default function ChatInputBar({
 
             {inputText.trim() ? (
               <button 
-                onClick={onSendText}
+                onClick={() => onSendText()}
                 className="w-12 h-12 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-full flex items-center justify-center shadow-[0_4px_12px_rgba(0,0,0,0.2)] active:scale-95 transition-all cursor-pointer shrink-0"
                 title="Enviar mensaje"
               >

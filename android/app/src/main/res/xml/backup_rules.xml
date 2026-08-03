@@ -4,7 +4,6 @@
     <include domain="sharedpref" path="." />
     <include domain="file" path="." />
     <include domain="database" path="." />
-    <include domain="external_db" path="." />
     <exclude domain="file" path="cache/" />
     <exclude domain="file" path="code_cache/" />
     <exclude domain="file" path="no_backup/" />
@@ -13,7 +12,6 @@
     <include domain="sharedpref" path="." />
     <include domain="file" path="." />
     <include domain="database" path="." />
-    <include domain="external_db" path="." />
     <exclude domain="file" path="cache/" />
     <exclude domain="file" path="code_cache/" />
     <exclude domain="file" path="no_backup/" />

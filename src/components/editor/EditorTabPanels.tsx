@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, RefreshCw, Upload, Award, Music } from "lucide-react";
+import { Check, RefreshCw, Upload, Award, Music, ImageIcon } from "lucide-react";
 import {
   STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED,
   STICKER_TEMPLATES_PRO, PRESET_MUSIC, ANIMATION_PRESETS,
@@ -87,18 +87,12 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
           </div>
 
           {!uploadedImage && (
-            <div className="grid grid-cols-4 gap-1.5">
-              {STATIC_PRESET_IMAGES.map((img, idx) => (
-                <button
-                  key={idx} type="button" onClick={() => setActivePresetIdx(idx)}
-                  className={`aspect-video rounded-lg overflow-hidden border transition-all cursor-pointer relative ${
-                    activePresetIdx === idx ? "border-teal-400 scale-102" : "border-white/5 opacity-70 hover:opacity-100"
-                  }`}
-                >
-                  <img src={img.url} alt="Option" className="w-full h-full object-cover" />
-                  <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[5px] text-white text-center truncate py-0.5">{img.label}</span>
-                </button>
-              ))}
+            <div className="bg-black/30 border border-dashed border-teal-400/30 rounded-xl p-4 text-center space-y-1.5">
+              <ImageIcon className="w-6 h-6 text-teal-400 mx-auto" />
+              <p className="text-[9px] font-bold text-slate-200">Sube tu propia imagen para empezar</p>
+              <p className="text-[7.5px] text-slate-500 leading-relaxed">
+                Pulsa "Subir de mi Celular" para usar la foto de tu negocio o producto.
+              </p>
             </div>
           )}
 

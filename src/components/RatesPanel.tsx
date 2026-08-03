@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { apiUrl } from "../lib/api";
 import { 
   TrendingUp, Calculator, DollarSign, Euro, 
   ShieldCheck, Check, RefreshCw
@@ -44,30 +45,30 @@ export default function RatesPanel() {
     setLoading(true);
     try {
       const res = await fetch(
-        "https://tasa-bcv-api-production.up.railway.app/v1/rates/latest",
+        apiUrl("/api/rates/dollar"),
         { signal: AbortSignal.timeout(10000) }
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const items: RateItem[] = [];
-      if (json?.usd) {
+      if (json?.usd?.value) {
         items.push({
           id: "usd_bcv",
           name: "Dólar BCV",
           symbol: "$",
-          value: json.usd,
+          value: json.usd.value,
           source: "Banco Central de Venezuela",
-          date: json.updatedAt || json.date || "",
+          date: json.usd.time || json.updatedAt || json.date || "",
         });
       }
-      if (json?.eur) {
+      if (json?.eur?.value) {
         items.push({
           id: "eur_bcv",
           name: "Euro BCV",
           symbol: "€",
-          value: json.eur,
+          value: json.eur.value,
           source: "Banco Central de Venezuela",
-          date: json.updatedAt || json.date || "",
+          date: json.eur.time || json.updatedAt || json.date || "",
         });
       }
       if (items.length === 0) throw new Error("No rates in response");

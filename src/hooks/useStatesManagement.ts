@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent, ChangeEvent, MouseEvent } from "react";
+import { useState, useEffect, useRef, FormEvent, ChangeEvent, MouseEvent } from "react";
 import { getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
 import { storyRepo } from "../services/database/repositories/StoryRepository";
 
@@ -52,6 +52,8 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
   const [activeStoryIdx, setActiveStoryIdx] = useState(0);
   const [storyProgress, setStoryProgress] = useState(0);
   const [storyReplyText, setStoryReplyText] = useState("");
+  const [isStoryPaused, setIsStoryPaused] = useState(false);
+  const isStoryPausedRef = useRef(false);
 
   const [viewersData, setViewersData] = useState<{ viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null>(null);
   const [showViewersSheet, setShowViewersSheet] = useState(false);
@@ -156,6 +158,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
 
     setStoryProgress(0);
     const interval = setInterval(() => {
+      if (isStoryPausedRef.current) return;
       setStoryProgress(prev => {
         if (prev >= 100) {
           if (activeStoryIdx < activeUserStates.stories.length - 1) {
@@ -199,6 +202,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
 
   const handleOpenStoryViewer = (userState: UserState) => {
     if (!userState.stories || userState.stories.length === 0) return;
+    setStoryPaused(false);
     setActiveUserStates(userState);
     setActiveStoryIdx(0);
     setStoryProgress(0);
@@ -217,6 +221,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
   };
 
   const handleCloseStoryViewer = () => {
+    setStoryPaused(false);
     setActiveUserStates(null);
     setStoryReplyText("");
   };
@@ -390,6 +395,11 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
     }).catch(err => console.error("[StatesPanel] toggleStoryReaction failed:", err));
   };
 
+  const setStoryPaused = (paused: boolean) => {
+    isStoryPausedRef.current = paused;
+    setIsStoryPaused(paused);
+  };
+
   return {
     userStates,
     myStories,
@@ -403,6 +413,8 @@ export function useStatesManagement({ userId, profileName, profileAvatar, onStar
     activeStoryIdx,
     storyProgress,
     storyReplyText,
+    isStoryPaused,
+    setStoryPaused,
     viewersData,
     showViewersSheet,
     myCurrentReaction,

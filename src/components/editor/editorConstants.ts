@@ -1,8 +1,6 @@
+// Local dark placeholder (no external sample images — user must upload their own)
 export const STATIC_PRESET_IMAGES = [
-  { url: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=400&q=80", label: "Zapatos Deportivos 👟" },
-  { url: "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=400&q=80", label: "Auriculares Pro 🎧" },
-  { url: "https://images.unsplash.com/photo-1485968579580-b6d095142e6e?auto=format&fit=crop&w=400&q=80", label: "Hamburguesa Gourmet 🍔" },
-  { url: "https://images.unsplash.com/photo-1511556532299-8f662fc26c06?auto=format&fit=crop&w=400&q=80", label: "Prendas de Moda 👗" }
+  { url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230f2027'/%3E%3Cstop offset='100%25' stop-color='%23203a43'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='400' height='300' fill='url(%23g)'/%3E%3C/svg%3E", label: "Tu imagen" }
 ];
 
 export const PRESET_FILTERS_EXPANDED = [

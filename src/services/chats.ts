@@ -266,39 +266,6 @@ export async function createGroupChat(
     console.warn("[CHATS] Server endpoint unavailable (ignored):", fetchErr?.message);
   }
 
-  // Insert system message so the chat appears in participants' lists and triggers push
-  const systemText = `Grupo creado`;
-  try {
-    await supabase.from("messages").insert({
-      chat_id: data.id,
-      sender_id: creatorId,
-      text: systemText,
-      type: "text",
-      status: "sent",
-      created_at: new Date().toISOString(),
-      edited: false,
-      forwarded: false,
-      is_deleted: false,
-      is_ephemeral: false,
-      has_image: false,
-      has_audio: false,
-      has_video: false,
-      has_document: false,
-      has_location: false,
-      is_animated: false,
-    });
-    await supabase
-      .from("chats")
-      .update({
-        last_message: systemText,
-        last_message_time: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", data.id);
-  } catch (e) {
-    console.error("[CHATS] Failed to insert system message:", e);
-  }
-
   return data as Chat;
 }
 

@@ -2,12 +2,14 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   Sparkles, ImageIcon, Video, Music, Volume2, 
   Check, Play, Pause, Phone, X, Award, Zap,
-  Compass, Sliders, Type, Tag
+  Compass, Sliders, Type, Tag, Upload, Download
 } from "lucide-react";
 import { BusinessFlyer } from "./BusinessPanel";
 import { STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED, PRESET_MUSIC, ANIMATION_PRESETS, STICKER_TEMPLATES_PRO } from "./editor/editorConstants";
 import EditorTabPanels from "./editor/EditorTabPanels";
 import { supabase } from "../lib/supabase";
+import { saveMediaToGalleryDirect } from "../services/mediaUtils";
+import { Capacitor } from "@capacitor/core";
 
 interface MediaEditorProps {
   onPublishFlyer: (flyer: BusinessFlyer) => void;
@@ -324,6 +326,26 @@ export default function MediaEditor({
     onPublishFlyer(finalFlyer);
   };
 
+  // Guardar el flyer como imagen en la galería del dispositivo
+  const [isSavingToDevice, setIsSavingToDevice] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  const handleSaveToDevice = async () => {
+    try {
+      setIsSavingToDevice(true);
+      setSaveMessage(null);
+      const fileName = `redon-flyer-${Date.now()}.png`;
+      await saveMediaToGalleryDirect(currentImageSource, fileName);
+      setSaveMessage("Guardada en tu galería (álbum RED ON) ✅");
+    } catch (err) {
+      console.error("[MediaEditor] Error al guardar en galería:", err);
+      setSaveMessage("No se pudo guardar en la galería. Intenta de nuevo.");
+    } finally {
+      setIsSavingToDevice(false);
+      setTimeout(() => setSaveMessage(null), 4000);
+    }
+  };
+
   const TOOLS = [
     { id: "presets", icon: ImageIcon, label: "Imagen" },
     { id: "sliders", icon: Sliders, label: "Ajustes" },
@@ -399,6 +421,30 @@ export default function MediaEditor({
             />
           )}
         </div>
+
+        {/* Upload prompt overlay when no image is selected */}
+        {!uploadedImage && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center">
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleImageFileChange}
+              className="hidden"
+              id="media-editor-upload"
+            />
+            <button
+              type="button"
+              onClick={() => document.getElementById("media-editor-upload")?.click()}
+              className="w-full h-full flex flex-col items-center justify-center gap-2 text-white cursor-pointer"
+            >
+              <span className="w-12 h-12 rounded-full bg-teal-400/90 shadow-lg flex items-center justify-center animate-pulse">
+                <Upload className="w-5 h-5 text-white" />
+              </span>
+              <span className="text-xs font-black uppercase tracking-widest drop-shadow-lg">Sube tu imagen</span>
+              <span className="text-[8px] text-slate-300 font-medium drop-shadow">Toca para abrir tu galería</span>
+            </button>
+          </div>
+        )}
 
         {/* Gradient shadow at bottom for readability */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none"></div>
@@ -528,12 +574,28 @@ export default function MediaEditor({
             </button>
           </div>
 
-          <button
-            onClick={handleExportAndPublishFlyer}
-            className="bg-teal-500 hover:bg-teal-400 text-white font-extrabold text-[9px] px-3 py-1.5 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1"
-          >
-            <Check className="w-3 h-3" /> {isStateMode ? "Publicar" : "Exportar"}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleSaveToDevice}
+              disabled={isSavingToDevice}
+              className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-extrabold text-[9px] px-3 py-1.5 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1"
+            >
+              <Download className="w-3 h-3" /> {isSavingToDevice ? "Guardando..." : "Guardar"}
+            </button>
+            {isStateMode && (
+              <button
+                onClick={handleExportAndPublishFlyer}
+                className="bg-teal-500 hover:bg-teal-400 text-white font-extrabold text-[9px] px-3 py-1.5 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1"
+              >
+                <Check className="w-3 h-3" /> Publicar
+              </button>
+            )}
+          </div>
+          {saveMessage && (
+            <div className="absolute right-2 top-10 z-30 bg-black/90 text-white text-[8px] font-bold px-2.5 py-1.5 rounded-lg shadow-xl border border-white/10">
+              {saveMessage}
+            </div>
+          )}
         </div>
 
         {/* Video scrubber */}
