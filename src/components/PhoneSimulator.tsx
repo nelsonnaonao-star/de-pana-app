@@ -2213,29 +2213,39 @@ export default function PhoneSimulator({
                 {currentScreen === "profile" && registeredUser && (
                   <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 h-full relative">
                     {/* Top User Profile Header */}
-                    <div className="bg-gradient-to-b from-[#0a4d52] to-[#10646a] text-white p-5 text-center relative shrink-0 shadow-md">
-                      <div className="absolute top-4 right-4 bg-white/10 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] font-bold tracking-widest text-teal-200">
+                    <div className="relative overflow-hidden bg-gradient-to-br from-[#041b1e] via-[#0a4d52] to-[#11806f] text-white p-5 text-center shrink-0 shadow-lg">
+                      <div className="pointer-events-none absolute inset-0">
+                        <div className="absolute -top-20 -right-14 w-72 h-72 rounded-full bg-white/5 blur-2xl"></div>
+                        <div className="absolute -bottom-24 -left-16 w-80 h-80 rounded-full bg-teal-300/10 blur-3xl"></div>
+                        <div className="absolute top-12 left-5 w-28 h-28 rounded-full border border-white/10"></div>
+                        <div className="absolute -top-8 right-8 w-16 h-16 rounded-full border-2 border-white/5"></div>
+                        <div className="absolute bottom-6 right-10 w-20 h-20 rounded-full border border-white/10"></div>
+                        <div className="absolute top-1/3 left-1/2 w-2 h-2 rounded-full bg-teal-200/30"></div>
+                        <div className="absolute bottom-14 left-10 w-1.5 h-1.5 rounded-full bg-teal-200/30"></div>
+                        <div className="absolute top-6 left-1/3 w-1 h-1 rounded-full bg-white/25"></div>
+                      </div>
+                      <div className="absolute top-4 right-4 z-10 bg-white/10 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] font-bold tracking-widest text-teal-200">
                         VERSIÓN PRO
                       </div>
-                      <div className="relative inline-block mt-2 group">
+                      <div className="relative inline-block mt-2 group z-10">
                         {registeredUser.avatar ? (
                           <img 
                             src={registeredUser.avatar} 
                             alt="Profile" 
                             onClick={() => !isUploadingAvatar && setShowMyAvatarLightbox(true)}
-                            className={`w-14 h-14 rounded-full mx-auto object-cover border-4 border-white/20 shadow-lg transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
+                            className={`w-32 h-32 rounded-full mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
                           />
                         ) : (
-                          <div className="w-14 h-14 rounded-full mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/20 shadow-lg flex items-center justify-center">
-                            <User className="w-6 h-6 text-white" />
+                          <div className="w-32 h-32 rounded-full mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/25 shadow-xl ring-4 ring-white/10 flex items-center justify-center">
+                            <User className="w-14 h-14 text-white" />
                           </div>
                         )}
                         {isUploadingAvatar && (
                           <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            <div className="w-8 h-8 border-[3px] border-white border-t-transparent rounded-full animate-spin"></div>
                           </div>
                         )}
-                        <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
+                        <span className="absolute bottom-1 right-1 w-6 h-6 bg-emerald-500 border-[3px] border-white rounded-full shadow-md"></span>
                         <input
                           ref={fileInputRef}
                           type="file"
@@ -2264,7 +2274,7 @@ export default function PhoneSimulator({
                       </div>
                       <button
                         onClick={() => !isUploadingAvatar && fileInputRef.current?.click()}
-                        className={`mt-2 mx-auto flex items-center gap-1 bg-white/15 hover:bg-white/25 text-white text-[10px] font-semibold px-3 py-1 rounded-full transition-colors ${isUploadingAvatar ? "cursor-wait opacity-60" : "cursor-pointer"}`}
+                        className={`mt-3 mx-auto flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white text-[10px] font-semibold px-3.5 py-1.5 rounded-full backdrop-blur-md border border-white/20 shadow-md transition-all active:scale-95 ${isUploadingAvatar ? "cursor-wait opacity-60" : "cursor-pointer"}`}
                       >
                         <Camera className="w-3 h-3" />
                         {isUploadingAvatar ? "Subiendo..." : "Cambiar foto"}

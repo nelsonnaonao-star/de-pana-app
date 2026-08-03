@@ -1,5 +1,5 @@
 import React from "react";
-import { Image, VideoIcon, File, Film, Music, BarChart2, Camera as CameraIcon, MapPin, Award } from "lucide-react";
+import { Image, VideoIcon, File, Film, Music, BarChart2, Camera as CameraIcon, MapPin } from "lucide-react";
 import { Message } from "../../../types";
 
 interface AttachmentTrayProps {
@@ -7,10 +7,9 @@ interface AttachmentTrayProps {
   onOpenGifPicker: () => void;
   onOpenPollForm: () => void;
   onSendLocation: () => void;
-  onOpenStickerStudio: () => void;
 }
 
-export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPollForm, onSendLocation, onOpenStickerStudio }: AttachmentTrayProps) {
+export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPollForm, onSendLocation }: AttachmentTrayProps) {
   return (
     <div className="absolute bottom-20 left-4 right-4 bg-white/95 backdrop-blur-md rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.18)] border border-slate-100 p-4 grid grid-cols-4 gap-3 z-30 animate-fade-in">
       <button
@@ -51,16 +50,6 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
           <Film className="w-5 h-5" />
         </div>
         <span className="text-[9px] font-semibold text-slate-600">GIF / Sticker</span>
-      </button>
-
-      <button
-        onClick={onOpenStickerStudio}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
-      >
-        <div className="w-10 h-10 rounded-full bg-teal-50 flex items-center justify-center text-teal-600 group-hover:scale-110 transition-transform shadow-sm">
-          <Award className="w-5 h-5" />
-        </div>
-        <span className="text-[9px] font-semibold text-slate-600">Sticker Studio</span>
       </button>
 
       <button

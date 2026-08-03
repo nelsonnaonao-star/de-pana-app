@@ -73,6 +73,16 @@ function clearLastUser() {
   } catch {}
 }
 
+function isPasswordRecoveryUrl(): boolean {
+  try {
+    const hash = window.location.hash || "";
+    const query = window.location.search || "";
+    return hash.includes("type=recovery") || query.includes("type=recovery");
+  } catch {
+    return false;
+  }
+}
+
 function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T> {
   return Promise.race([
     promise,
@@ -91,6 +101,8 @@ interface SupabaseContextType {
   chats: Chat[];
   contacts: Contact[];
   calls: Call[];
+  passwordRecovery: boolean;
+  completePasswordReset: (newPassword: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
   refreshChats: () => Promise<void>;
   refreshContacts: () => Promise<void>;
@@ -106,6 +118,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const [chats, setChats] = useState<Chat[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [calls, setCalls] = useState<Call[]>([]);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const loadedUserId = useRef<string | null>(null);
@@ -125,6 +138,15 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
       console.log("[SUPABASE] Session on mount:", session ? "EXISTS" : "NULL", "Error:", error);
       if (session?.user) {
+        // Coming from a password-recovery email link: don't enter the app,
+        // show the "set new password" screen instead.
+        if (isPasswordRecoveryUrl()) {
+          console.log("[SUPABASE] Recovery token detected — showing password reset screen");
+          setPasswordRecovery(true);
+          setUser(session.user);
+          setLoading(false);
+          return;
+        }
         saveLastUser(session.user.id);
         setUser(session.user);
         if (!loadedUserId.current) {
@@ -153,7 +175,23 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       console.log("[AUTH]", event, userId ? userId.slice(0, 8) + "..." : "null");
 
       switch (event) {
+        case "PASSWORD_RECOVERY":
+          console.log("[AUTH] PASSWORD_RECOVERY — showing password reset screen");
+          setPasswordRecovery(true);
+          if (userId) {
+            setUser(session.user);
+            setLoading(false);
+          }
+          break;
+
         case "SIGNED_IN":
+          if (isPasswordRecoveryUrl()) {
+            console.log("[AUTH] SIGNED_IN during recovery — showing password reset screen");
+            setPasswordRecovery(true);
+            setUser(session.user);
+            setLoading(false);
+            break;
+          }
           if (userId && !loadedUserId.current) {
             saveLastUser(userId);
             setUser(session.user);
@@ -606,6 +644,23 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const completePasswordReset = async (newPassword: string) => {
+    const uid = user?.id;
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    setPasswordRecovery(false);
+    setLoading(false);
+    clearLastUser();
+    await authSignOut();
+    loadedUserId.current = null;
+    setUser(null);
+    setProfile(null);
+    setChats([]);
+    setContacts([]);
+    setCalls([]);
+    if (uid) clearUserCache(uid);
+  };
+
   const logout = async () => {
     // Manual logout: clear the remembered user so SIGNED_OUT goes to login screen
     clearLastUser();
@@ -648,6 +703,8 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         chats,
         contacts,
         calls,
+        passwordRecovery,
+        completePasswordReset,
         refreshProfile,
         refreshChats,
         refreshContacts,

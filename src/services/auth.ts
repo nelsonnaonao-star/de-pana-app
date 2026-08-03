@@ -224,8 +224,15 @@ export async function resetPassword(identifier: string) {
 
   if (!userFound) throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
 
+  if (!email.includes("@") || email.endsWith("@redon.app")) {
+    throw new Error(
+      "Esta cuenta no tiene un correo de recuperación registrado. " +
+      "Contacta al soporte de RED ON para recuperar tu acceso."
+    );
+  }
+
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${window.location.origin}/reset-password`,
+    redirectTo: `${apiUrl("/reset-password")}`,
   });
 
   if (error) {

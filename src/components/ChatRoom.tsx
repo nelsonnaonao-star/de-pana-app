@@ -13,7 +13,6 @@ import DeleteConfirmModal from "./chat/overlays/DeleteConfirmModal";
 import GroupInfoPanel from "./chat/overlays/GroupInfoPanel";
 import ChatSearchBar from "./chat/overlays/ChatSearchBar";
 import AttachmentTray from "./chat/overlays/AttachmentTray";
-import StickerEditor, { StickerExport } from "./editor/StickerEditor";
 import PollFormModal from "./chat/overlays/PollFormModal";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { getMessages, markAsRead, clearForMe } from "../services/messages";
@@ -25,8 +24,6 @@ import { useGroupManagement } from "../hooks/chat/useGroupManagement";
 import { useChatRealtime, MessageEventPayload } from "../hooks/chat/useChatRealtime";
 import { useMessageActions } from "../hooks/chat/useMessageActions";
 import { messageRepo } from "../services/database/repositories/MessageRepository";
-import { uploadChatMedia } from "../services/storage";
-import { addMySticker } from "../services/myStickers";
 
 interface ChatRoomProps {
   chat: Chat;
@@ -293,7 +290,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [showCustomizer, setShowCustomizer] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
-  const [showStickerEditor, setShowStickerEditor] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
 
@@ -822,7 +818,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           onOpenGifPicker={() => { setShowGifPicker(true); setShowAttachments(false); }}
           onOpenPollForm={() => { setShowPollForm(true); }}
           onSendLocation={() => { setShowAttachments(false); actions.handleSendLocation(); }}
-          onOpenStickerStudio={() => { setShowStickerEditor(true); setShowAttachments(false); }}
         />
       )}
 
@@ -850,26 +845,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             }
           }}
           onClose={() => setShowGifPicker(false)}
-        />
-      )}
-
-      {showStickerEditor && (
-        <StickerEditor
-          isOpen
-          onClose={() => setShowStickerEditor(false)}
-          onExport={async (sticker: StickerExport) => {
-            try {
-              const dataUrl = `data:image/webp;base64,${sticker.webpBase64}`;
-              const res = await fetch(dataUrl);
-              const blob = await res.blob();
-              const url = await uploadChatMedia(blob, "sticker");
-              addMySticker(url);
-              setShowStickerEditor(false);
-              await actions.handleSendSticker(url, "sticker");
-            } catch (err) {
-              console.error("[ChatRoom] Error enviando sticker creado:", err);
-            }
-          }}
         />
       )}
 

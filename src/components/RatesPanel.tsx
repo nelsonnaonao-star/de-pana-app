@@ -14,9 +14,42 @@ interface RateItem {
   date: string;
 }
 
+const STORAGE_KEY = "redon_rates_cache";
+
+const FALLBACK_RATES: RateItem[] = [
+  { id: "usd_bcv", name: "Dólar BCV", symbol: "$", value: 0, source: "Banco Central de Venezuela", date: "" },
+  { id: "eur_bcv", name: "Euro BCV", symbol: "€", value: 0, source: "Banco Central de Venezuela", date: "" },
+];
+
+function loadCachedRates(): { rates: RateItem[]; updatedAt: string } {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed.rates) && parsed.rates.length > 0) {
+        return { rates: parsed.rates, updatedAt: parsed.updatedAt || "" };
+      }
+    }
+  } catch {}
+  return { rates: FALLBACK_RATES, updatedAt: "" };
+}
+
+function saveCachedRates(rates: RateItem[], updatedAt: string) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ rates, updatedAt }));
+  } catch {}
+}
+
+function fetchWithTimeout(url: string, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+}
+
 export default function RatesPanel() {
-  const [rates, setRates] = useState<RateItem[]>([]);
-  const [lastUpdated, setLastUpdated] = useState<string>("");
+  const cached = loadCachedRates();
+  const [rates, setRates] = useState<RateItem[]>(cached.rates);
+  const [lastUpdated, setLastUpdated] = useState<string>(cached.updatedAt);
   const [loading, setLoading] = useState(false);
   const [timeAgo, setTimeAgo] = useState<string>("");
 
@@ -44,10 +77,7 @@ export default function RatesPanel() {
   async function fetchRates() {
     setLoading(true);
     try {
-      const res = await fetch(
-        apiUrl("/api/rates/dollar"),
-        { signal: AbortSignal.timeout(10000) }
-      );
+      const res = await fetchWithTimeout(apiUrl("/api/rates/dollar"), 45000);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const items: RateItem[] = [];
@@ -73,29 +103,11 @@ export default function RatesPanel() {
       }
       if (items.length === 0) throw new Error("No rates in response");
       setRates(items);
-      setLastUpdated(new Date().toISOString());
+      const now = new Date().toISOString();
+      setLastUpdated(now);
+      saveCachedRates(items, now);
     } catch (e) {
       console.warn("[RatesPanel] fetch failed, usando fallback:", e);
-      if (rates.length === 0) {
-        setRates([
-          {
-            id: "usd_bcv",
-            name: "Dólar BCV",
-            symbol: "$",
-            value: 742.22,
-            source: "Banco Central de Venezuela",
-            date: "",
-          },
-          {
-            id: "eur_bcv",
-            name: "Euro BCV",
-            symbol: "€",
-            value: 845.50,
-            source: "Banco Central de Venezuela",
-            date: "",
-          },
-        ]);
-      }
     } finally {
       setLoading(false);
     }
@@ -178,14 +190,6 @@ export default function RatesPanel() {
 
       {/* BODY */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 text-left">
-
-        {rates.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 h-full text-slate-400">
-            <div className="w-8 h-8 border-2 border-teal-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-[8px] font-mono font-semibold">Cargando tasas...</p>
-          </div>
-        ) : (
-          <>
 
         {/* RATE SELECTOR */}
         <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] p-3 space-y-2 border border-white/60">
@@ -311,9 +315,6 @@ export default function RatesPanel() {
             Tasas oficiales del Banco Central de Venezuela (BCV). Solo tasas oficiales, sin mercado paralelo.
           </p>
         </div>
-
-          </>
-        )}
       </div>
     </div>
   );

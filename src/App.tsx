@@ -3,6 +3,7 @@ import { Toaster } from "react-hot-toast";
 import { App as CapacitorApp } from "@capacitor/app";
 import { useSupabase } from "./contexts/SupabaseContext";
 import AuthScreen from "./components/AuthScreen";
+import PasswordResetScreen from "./components/PasswordResetScreen";
 import PhoneSimulator from "./components/PhoneSimulator";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { initSentryCapacitor } from "./lib/sentry";
@@ -12,7 +13,7 @@ import { syncService } from "./services/sync/SyncService";
 initSentryCapacitor();
 
 function AppContent() {
-  const { user, loading } = useSupabase();
+  const { user, loading, passwordRecovery } = useSupabase();
   const [dbReady, setDbReady] = useState(false);
   const backHandlerRef = useRef<(() => boolean) | null>(null);
   const shouldExitOnBackRef = useRef(false);
@@ -84,6 +85,8 @@ function AppContent() {
       />
       {!user ? (
         <AuthScreen />
+      ) : passwordRecovery ? (
+        <PasswordResetScreen />
       ) : dbReady ? (
         <PhoneSimulator 
           onBackPress={registerBackHandler} 
