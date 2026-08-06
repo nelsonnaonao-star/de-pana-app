@@ -421,7 +421,7 @@ router.post('/delete', async (req, res) => {
 
     const { error } = await supabaseAdmin
       .from('messages')
-      .update({ is_deleted: true, text: null })
+      .update({ is_deleted: true, text: '' })
       .eq('id', message_id);
 
     if (error) throw error;
