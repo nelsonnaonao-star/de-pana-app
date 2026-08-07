@@ -1,5 +1,6 @@
 import { X, Send, Eye, ChevronLeft, Download, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import toast from "react-hot-toast";
 import CachedImage from "../CachedImage";
 import { GRADIENTS, UserState } from "../../hooks/useStatesManagement";
 import { saveMediaToGalleryDirect } from "../../services/mediaUtils";
@@ -49,8 +50,10 @@ export default function StoryViewer({
     const fileName = `red_on_estado_${Date.now()}.${ext}`;
     try {
       await saveMediaToGalleryDirect(mediaUrl, fileName);
+      toast.success("Descargado con éxito ✅");
     } catch (error) {
       console.error("Error al descargar el estado:", error);
+      toast.error("Error al descargar el estado ❌");
     }
   };
 
