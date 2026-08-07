@@ -41,7 +41,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
-import { playSound, getSoundId, setSoundId } from "../services/soundService";
+import { playSound, getSoundId, setSoundId, stopSound } from "../services/soundService";
 import { SOUND_LIBRARY } from "../data/sounds";
 import { uploadAvatar, uploadChatMedia } from "../services/storage";
 import { updateProfile } from "../services/auth";
@@ -374,6 +374,8 @@ export default function PhoneSimulator({
   const [unreadBadges, setUnreadBadges] = useState(true);
   const [msgSoundId, setMsgSoundId] = useState(getSoundId("message"));
   const [callSoundId, setCallSoundId] = useState(getSoundId("call"));
+  const [previewMsgSound, setPreviewMsgSound] = useState<string | null>(null);
+  const [previewCallSound, setPreviewCallSound] = useState<string | null>(null);
   const [mobileDataUsage, setMobileDataUsage] = useState("Ahorro");
   const [autoDownloadPhotos, setAutoDownloadPhotos] = useState(true);
   const [appFont, setAppFont] = useState<"Clásico" | "Mono" | "Elegante" | "Moderno">("Clásico");
@@ -2600,7 +2602,7 @@ export default function PhoneSimulator({
                               {activeSettingsModal === "legal" && "Acuerdos Legales"}
                             </h4>
                             <button
-                              onClick={() => setActiveSettingsModal(null)}
+                              onClick={() => { stopSound(); setActiveSettingsModal(null); }}
                               className="px-2.5 py-1 bg-teal-500 hover:bg-teal-600 text-white font-extrabold text-[8px] rounded-lg cursor-pointer"
                             >
                               Listo
@@ -2835,24 +2837,38 @@ export default function PhoneSimulator({
                                     <div className="text-[9px] text-slate-400">Tono cuando llega una notificación</div>
                                   </div>
                                 </div>
-                                <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
+                                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
                                   {SOUND_LIBRARY.message.map((opt) => (
-                                    <button
-                                      key={opt.id}
-                                      onClick={() => {
-                                        setSoundId("message", opt.id);
-                                        setMsgSoundId(opt.id);
-                                        playSound("message", 0.7);
-                                        showToast(`Sonido de mensaje: ${opt.name}`);
-                                      }}
-                                      className={`py-1 text-[9px] font-black rounded-lg transition-all cursor-pointer ${
-                                        msgSoundId === opt.id 
-                                          ? "bg-white text-[#0a4d52] shadow-sm" 
-                                          : "text-slate-500 hover:text-slate-800"
-                                      }`}
-                                    >
-                                      {opt.name}
-                                    </button>
+                                    <div key={opt.id} className="flex-1 flex flex-col gap-1">
+                                      <button
+                                        onClick={() => {
+                                          setPreviewMsgSound(opt.id);
+                                          playSound("message", 0.7);
+                                        }}
+                                        className={`py-1 text-[9px] font-black rounded-lg transition-all cursor-pointer ${
+                                          previewMsgSound === opt.id
+                                            ? "bg-white text-[#0a4d52] shadow-sm"
+                                            : "bg-transparent text-slate-500 hover:text-slate-800"
+                                        }`}
+                                        title="Escuchar"
+                                      >
+                                        {opt.name} 👂
+                                      </button>
+                                      {previewMsgSound === opt.id && (
+                                        <button
+                                          onClick={() => {
+                                            setSoundId("message", opt.id);
+                                            setMsgSoundId(opt.id);
+                                            setPreviewMsgSound(null);
+                                            stopSound();
+                                            showToast(`Sonido de mensaje: ${opt.name} ✅`);
+                                          }}
+                                          className="py-1 text-[8px] font-bold text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors cursor-pointer"
+                                        >
+                                          Guardar
+                                        </button>
+                                      )}
+                                    </div>
                                   ))}
                                 </div>
                               </div>
@@ -2864,24 +2880,38 @@ export default function PhoneSimulator({
                                     <div className="text-[9px] text-slate-400">Tono cuando llega una llamada</div>
                                   </div>
                                 </div>
-                                <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
+                                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
                                   {SOUND_LIBRARY.call.map((opt) => (
-                                    <button
-                                      key={opt.id}
-                                      onClick={() => {
-                                        setSoundId("call", opt.id);
-                                        setCallSoundId(opt.id);
-                                        playSound("call", 0.8);
-                                        showToast(`Sonido de llamada: ${opt.name}`);
-                                      }}
-                                      className={`py-1 text-[11px] font-black rounded-lg transition-all cursor-pointer ${
-                                        callSoundId === opt.id 
-                                          ? "bg-white text-[#0a4d52] shadow-sm" 
-                                          : "text-slate-500 hover:text-slate-800"
-                                      }`}
-                                    >
-                                      {opt.name}
-                                    </button>
+                                    <div key={opt.id} className="flex-1 flex flex-col gap-1">
+                                      <button
+                                        onClick={() => {
+                                          setPreviewCallSound(opt.id);
+                                          playSound("call", 0.8);
+                                        }}
+                                        className={`py-1 text-[10px] font-black rounded-lg transition-all cursor-pointer ${
+                                          previewCallSound === opt.id
+                                            ? "bg-white text-[#0a4d52] shadow-sm"
+                                            : "bg-transparent text-slate-500 hover:text-slate-800"
+                                        }`}
+                                        title="Escuchar"
+                                      >
+                                        {opt.name} 👂
+                                      </button>
+                                      {previewCallSound === opt.id && (
+                                        <button
+                                          onClick={() => {
+                                            setSoundId("call", opt.id);
+                                            setCallSoundId(opt.id);
+                                            setPreviewCallSound(null);
+                                            stopSound();
+                                            showToast(`Sonido de llamada: ${opt.name} ✅`);
+                                          }}
+                                          className="py-1 text-[8px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
+                                        >
+                                          Guardar
+                                        </button>
+                                      )}
+                                    </div>
                                   ))}
                                 </div>
                               </div>
@@ -3116,7 +3146,7 @@ export default function PhoneSimulator({
                           )}
 
                           <button
-                            onClick={() => setActiveSettingsModal(null)}
+                            onClick={() => { stopSound(); setActiveSettingsModal(null); }}
                             className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[9px] rounded-xl cursor-pointer text-center"
                           >
                             Cerrar Ajuste
