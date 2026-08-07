@@ -397,6 +397,23 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           if (updated.reactions && JSON.stringify(updated.reactions) !== JSON.stringify(m.reactions)) {
             copy.reactions = updated.reactions; changed = true;
           }
+          if (updated.poll_options !== undefined && updated.poll_options !== null) {
+            let opts = updated.poll_options;
+            if (typeof opts === "string") {
+              try { opts = JSON.parse(opts); } catch { opts = []; }
+            }
+            if (Array.isArray(opts)) {
+              const newPollOptions = opts.map((o: any) => ({
+                id: o.id || String(Math.random()),
+                text: o.text || "",
+                votes: Number(o.votes) || 0,
+                votedUsers: Array.isArray(o.votedUsers) ? o.votedUsers : [],
+              }));
+              if (JSON.stringify(newPollOptions) !== JSON.stringify(copy.pollOptions)) {
+                copy.pollOptions = newPollOptions; changed = true;
+              }
+            }
+          }
           return copy;
         }).filter(Boolean) as Message[];
         if (changed) {
@@ -450,6 +467,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     setEditingGroupName, setGroupNameDraft, setShowAddMember, setAddMemberQuery, setAddMemberResults,
     handleSaveGroupName, handleAddMember, handleRemoveMember, handleChangePhoto,
     handleLeaveGroup: hookHandleLeaveGroup,
+    isGroupMuted, muteUntil, muting, handleMuteGroup, handleUnmuteGroup,
   } = useGroupManagement(chat.id, chat.name, uid, chat.isGroup ?? false, showGroupInfo);
 
   const handleGroupPhotoChange = useCallback(async (dataUrl: string) => {
@@ -614,6 +632,26 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       await setEphemeralTimer(chat.id, timer);
       setEphemeralTimerState(timer === 0 ? null : timer);
       onChatUpdated?.(chat.id, { ephemeral_timer: timer === 0 ? null : timer } as any);
+      if (timer > 0) {
+        const label = timer === 86400 ? "24 horas" : timer === 604800 ? "7 días" : timer === 7776000 ? "90 días" : `${Math.round(timer / 60)} min`;
+        const now = new Date().toISOString();
+        const sysMsg: Message = {
+          id: `sys_ephemeral_${Date.now()}`,
+          sender: "me",
+          type: "text",
+          text: `Los mensajes de este chat desaparecerán después de ${label}.`,
+          timestamp: now,
+          rawCreatedAt: now,
+        };
+        setMessages(prev => {
+          const next = [...prev, sysMsg].sort((a, b) => {
+            const ta = a.rawCreatedAt || a.timestamp || "";
+            const tb = b.rawCreatedAt || b.timestamp || "";
+            return ta < tb ? -1 : ta > tb ? 1 : 0;
+          });
+          return next;
+        });
+      }
       toast.success(timer === 0 ? "Mensajes temporales desactivados" : "Mensajes temporales activados");
     } catch (e: any) {
       console.error("[CHAT] setEphemeralTimer error:", e);
@@ -796,6 +834,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         onRemoveMember={handleRemoveMember}
         onLeaveGroup={handleLeaveGroup}
         onOpenDeleteConfirm={() => { setShowGroupInfo(false); setShowDeleteConfirm(true); }}
+        isMuted={isGroupMuted}
+        muteUntil={muteUntil}
+        muting={muting}
+        onMute={handleMuteGroup}
+        onUnmute={handleUnmuteGroup}
       />
 
       <ChatSearchBar
@@ -836,6 +879,13 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             const isHighlighted = showSearch && searchQuery.trim() && index === searchIndex;
             return (
               <div className={`px-4 pb-3.5 ${isHighlighted ? "ring-2 ring-teal-400 rounded-xl transition-all duration-300" : ""}`}>
+              {msg.type === "text" && msg.id.startsWith("sys_ephemeral_") ? (
+                <div className="flex justify-center">
+                  <div className="bg-black/40 backdrop-blur-md border border-white/10 rounded-full px-4 py-2 text-[11px] text-white/90 font-semibold text-center">
+                    ⏳ {msg.text}
+                  </div>
+                </div>
+              ) : (
                 <MessageBubbleWithCache
                   msg={msg}
                   isMe={isMe}
@@ -855,6 +905,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                   onEdit={(m) => setEditingMessage({ id: m.id, text: m.text || "" })}
                   onUpdatePrice={actions.handleUpdatePrice}
                 />
+              )}
               </div>
             );
           }}

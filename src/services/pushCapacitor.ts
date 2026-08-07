@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { authFetch } from '../lib/api';
+import { playSound } from './soundService';
 
 const isNative = Capacitor.isNativePlatform();
 
@@ -104,7 +105,7 @@ export async function setupCapacitorPush(userId: string) {
         }));
       } else if (data?.type === 'call' && data?.chatId) {
         console.log('[PUSH] Dispatching incoming-call CustomEvent from FCM');
-        try { new Audio('/sounds/ringtone.mp3').play().catch(() => {}); } catch {}
+        try { playSound("call", 0.8); } catch {}
         window.dispatchEvent(new CustomEvent('incoming-call', {
           detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio', callId: data.callId },
         }));
@@ -114,6 +115,12 @@ export async function setupCapacitorPush(userId: string) {
         // No need to duplicate here - just dispatch the event for in-app UI
         window.dispatchEvent(new CustomEvent('new-message-received', {
           detail: { chatId: data.chatId, contactId: data.contactId, title: data.title, body: data.body },
+        }));
+      } else if (data?.type === 'group_added' && data?.chatId) {
+        // Notificación al ser agregado a un grupo, con sonido para avisar
+        try { playSound("message", 0.7); } catch {}
+        window.dispatchEvent(new CustomEvent('group-added', {
+          detail: { chatId: data.chatId, title: data.title, body: data.body },
         }));
       }
     });

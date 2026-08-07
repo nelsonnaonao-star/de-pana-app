@@ -208,6 +208,10 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
   useEffect(() => {
     if (!activeUserStates || activeUserStates.stories.length === 0) return;
     const currentStory = activeUserStates.stories[activeStoryIdx];
+    if (!currentStory) {
+      handleCloseStoryViewer();
+      return;
+    }
     if (activeUserStates.isMe) {
       getStoryViewers(currentStory.id).then(setViewersData).catch(err => console.error("[StatesPanel] getStoryViewers failed:", err));
     } else {
@@ -364,7 +368,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
       id: "my_upload_" + Date.now(),
       type: uploadedMedia.type,
       content: uploadedMedia.url,
-      caption: publishComment.trim() || `Publicado original: ${uploadedMedia.name}`,
+      caption: publishComment.trim(),
       time: "Ahora mismo"
     };
 

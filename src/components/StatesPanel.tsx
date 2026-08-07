@@ -2,7 +2,7 @@ import React from "react";
 import {
   Plus, Play, Camera, ChevronLeft, Send, X, Flame, Sparkles,
   Smile, Layout, Check, Heart, MessageCircle, Clock, Eye, Trash2,
-  Video, Upload, Award, Info
+  Video, Upload, Award, Info, User
 } from "lucide-react";
 import { Chat, Message } from "../types";
 import MediaEditor from "./MediaEditor";
@@ -48,6 +48,19 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
     onHasUnseen,
   });
 
+  const [showCreateMenu, setShowCreateMenu] = React.useState(false);
+
+  const openStateMediaUpload = () => {
+    const el = document.getElementById("state-media-upload-input");
+    if (el) el.click();
+    setShowCreateMenu(false);
+  };
+
+  const openTextCreator = () => {
+    setShowCreateMenu(false);
+    setSubView("create_text");
+  };
+
   return (
     <div className="flex-1 bg-slate-50 flex flex-col h-full overflow-hidden select-none">
 
@@ -76,40 +89,9 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
         {subView === "list" && (
           <div className="space-y-4 animate-fade-in">
 
-            <div className="grid grid-cols-3 gap-1.5 bg-white p-2 rounded-2xl border border-slate-100 shadow-sm">
-              <button
-                onClick={() => setSubView("create_text")}
-                className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-[#0a4d52] font-extrabold text-[9px] rounded-xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer"
-              >
-                <Layout className="w-4 h-4 text-teal-600" />
-                Texto
-              </button>
-              <button
-                onClick={() => {
-                  const el = document.getElementById("state-media-upload-input");
-                  if (el) el.click();
-                }}
-                className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-[#0a4d52] font-extrabold text-[9px] rounded-xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer"
-              >
-                <Upload className="w-4 h-4 text-indigo-600" />
-                Cargar Foto
-              </button>
-              <button
-                onClick={() => {
-                  const el = document.getElementById("state-media-upload-input");
-                  if (el) el.click();
-                }}
-                className="py-2 px-1 bg-teal-500 hover:bg-teal-600 border border-teal-600 text-white font-extrabold text-[9px] rounded-xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer shadow-sm relative overflow-hidden animate-pulse"
-              >
-                <Upload className="w-4 h-4 text-white" />
-                Subir Foto/Video
-                <span className="absolute top-0 right-0 bg-amber-500 text-[6px] font-black px-1 rounded-bl leading-none py-0.5">PRO</span>
-              </button>
-            </div>
-
             <div className="flex overflow-x-auto items-start gap-4 py-3 px-1 scrollbar-none">
               <div
-                onClick={() => handleOpenStoryViewer(myUserStateRepresentation)}
+                onClick={() => myStories.length > 0 && handleOpenStoryViewer(myUserStateRepresentation)}
                 className="flex flex-col items-center gap-1 min-w-[70px] cursor-pointer"
               >
                 <div className="relative">
@@ -121,15 +103,8 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
                         className="w-full h-full object-cover"
                       />
                     ) : (
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const el = document.getElementById("state-media-upload-input");
-                          if (el) el.click();
-                        }}
-                        className="w-full h-full bg-slate-200 flex items-center justify-center cursor-pointer"
-                      >
-                        <Plus className="w-5 h-5 text-slate-500" />
+                      <div className="w-full h-full bg-slate-200 flex items-center justify-center">
+                        <User className="w-6 h-6 text-slate-400" />
                       </div>
                     )}
                   </div>
@@ -163,7 +138,17 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
               ))}
             </div>
 
-            <div className="bg-teal-50/50 rounded-xl p-3 border border-teal-100 flex gap-2 items-start">
+            <div className="flex flex-col items-center justify-center mt-10">
+            <button
+              onClick={() => setShowCreateMenu(true)}
+              className="w-16 h-16 bg-emerald-600 text-white rounded-2xl shadow-lg flex flex-col items-center justify-center hover:bg-emerald-500 transition-transform active:scale-95 transition-all cursor-pointer"
+            >
+              <Plus className="w-8 h-8" />
+            </button>
+            <span className="text-sm font-medium text-slate-500 mt-3">Crear Estado</span>
+          </div>
+
+          <div className="bg-teal-50/50 rounded-xl p-3 border border-teal-100 flex gap-2 items-start">
               <Info className="w-4 h-4 text-[#10646a] shrink-0 mt-0.5" />
               <p className="text-[8.5px] text-slate-500 leading-relaxed">
                 Los estados de Red On desaparecen automáticamente cada 24 horas. ¡El diseño es dinámico y soporta respuestas directas al chat privado del publicador!
@@ -333,6 +318,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
           onToggleReaction={handleToggleReaction}
           onSetStoryReplyText={setStoryReplyText}
           onShowViewersSheet={setShowViewersSheet}
+          onDeleteStory={handleDeleteMyStory}
         />
       )}
 
@@ -369,6 +355,40 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
               setShowPublishDecisionModal(true);
             }}
           />
+        </div>
+      )}
+
+      {/* Create state bottom sheet */}
+      {showCreateMenu && (
+        <div
+          className="absolute inset-0 bg-black/50 z-[120] flex items-end"
+          onClick={() => setShowCreateMenu(false)}
+        >
+          <div className="w-full bg-white rounded-t-3xl p-5 pb-8 space-y-2 animate-slide-up" onClick={(e) => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-slate-200 rounded-full mx-auto mb-4" />
+            <h4 className="text-xs font-black text-slate-800 mb-2">Nuevo estado</h4>
+            <button
+              onClick={openTextCreator}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-slate-50 hover:bg-slate-100 rounded-xl text-left transition-all cursor-pointer"
+            >
+              <Layout className="w-5 h-5 text-teal-600" />
+              <span className="text-[11px] font-bold text-slate-700">Escribir Texto</span>
+            </button>
+            <button
+              onClick={openStateMediaUpload}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-slate-50 hover:bg-slate-100 rounded-xl text-left transition-all cursor-pointer"
+            >
+              <Upload className="w-5 h-5 text-indigo-600" />
+              <span className="text-[11px] font-bold text-slate-700">Subir Foto</span>
+            </button>
+            <button
+              onClick={openStateMediaUpload}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-slate-50 hover:bg-slate-100 rounded-xl text-left transition-all cursor-pointer"
+            >
+              <Video className="w-5 h-5 text-amber-500" />
+              <span className="text-[11px] font-bold text-slate-700">Subir Video (PRO)</span>
+            </button>
+          </div>
         </div>
       )}
 

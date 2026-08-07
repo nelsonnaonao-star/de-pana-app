@@ -2,6 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { supabaseAdmin } from '../db.js';
 import { getMessaging } from 'firebase-admin/messaging';
+import { isGroupMuted } from './groups.js';
 
 const router = Router();
 
@@ -61,6 +62,9 @@ async function sendPushToChat(chatId, senderId, senderName, text) {
       .eq('id', chatId)
       .maybeSingle();
     if (!chat) return;
+
+    // Silencio de grupo: si el grupo está silenciado, no se envía push a nadie.
+    if (chat.is_group && (await isGroupMuted(chatId))) return;
 
     let receiverIds = [];
     if (chat.is_group) {

@@ -1,7 +1,8 @@
-import { X, Send, Eye, ChevronLeft } from "lucide-react";
+import { X, Send, Eye, ChevronLeft, Download, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import CachedImage from "../CachedImage";
 import { GRADIENTS, UserState } from "../../hooks/useStatesManagement";
+import { saveMediaToGalleryDirect } from "../../services/mediaUtils";
 
 interface StoryViewerProps {
   activeUserStates: UserState;
@@ -20,6 +21,7 @@ interface StoryViewerProps {
   onToggleReaction: (storyId: string, emoji: string) => void;
   onSetStoryReplyText: (v: string) => void;
   onShowViewersSheet: (v: boolean) => void;
+  onDeleteStory: (storyId: string, e: React.MouseEvent) => void;
 }
 
 export default function StoryViewer({
@@ -28,6 +30,7 @@ export default function StoryViewer({
   isPaused, onSetPaused,
   onClose, onTap, onSendReply, onToggleReaction,
   onSetStoryReplyText, onShowViewersSheet,
+  onDeleteStory,
 }: StoryViewerProps) {
   const currentStory = activeUserStates.stories[activeStoryIdx];
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -35,6 +38,21 @@ export default function StoryViewer({
   const longPressReleaseRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoReady, setVideoReady] = useState(false);
+  const [videoMuted, setVideoMuted] = useState(true);
+
+  // Descargar el estado actual (imagen o video) a la galería del dispositivo
+  const downloadCurrentStory = async () => {
+    const mediaUrl = currentStory?.content;
+    if (!mediaUrl) return;
+    const isVideo = currentStory.type === "video";
+    const ext = isVideo ? "mp4" : "jpg";
+    const fileName = `red_on_estado_${Date.now()}.${ext}`;
+    try {
+      await saveMediaToGalleryDirect(mediaUrl, fileName);
+    } catch (error) {
+      console.error("Error al descargar el estado:", error);
+    }
+  };
 
   useEffect(() => {
     setVideoReady(false);
@@ -121,16 +139,36 @@ export default function StoryViewer({
             </span>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          className="p-1.5 rounded-full bg-white/10 hover:bg-white/25 text-white transition-all cursor-pointer"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {activeUserStates.isMe && (
+            <button
+              onClick={(e) => { onDeleteStory(currentStory.id, e); onClose(); }}
+              className="p-1.5 rounded-full bg-white/10 hover:bg-red-500/40 text-white transition-all cursor-pointer"
+              title="Eliminar estado"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+          {currentStory?.type !== "text" && (
+            <button
+              onClick={downloadCurrentStory}
+              className="p-1.5 rounded-full bg-white/10 hover:bg-white/25 text-white transition-all cursor-pointer"
+              title="Descargar estado"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-full bg-white/10 hover:bg-white/25 text-white transition-all cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       <div
-        className="flex-1 relative flex items-center justify-center w-full h-full overflow-hidden select-none"
+        className="flex-1 relative flex items-center justify-center w-full min-h-0 overflow-hidden select-none"
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
@@ -158,6 +196,7 @@ export default function StoryViewer({
             <video
               src={currentStory.content}
               ref={videoRef}
+              muted={videoMuted}
               autoPlay loop playsInline
               onLoadedData={() => setVideoReady(true)}
               onCanPlay={() => setVideoReady(true)}
@@ -165,6 +204,14 @@ export default function StoryViewer({
                 videoReady ? "opacity-100" : "opacity-0"
               }`}
             />
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setVideoMuted(!videoMuted); }}
+              className="absolute bottom-4 right-4 z-30 w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white cursor-pointer"
+              title={videoMuted ? "Activar sonido" : "Silenciar"}
+            >
+              {videoMuted ? "🔇" : "🔊"}
+            </button>
             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/45 pointer-events-none z-10" />
             {currentStory.caption && (
               <div className="absolute bottom-16 inset-x-4 bg-black/50 backdrop-blur-md rounded-2xl p-3 border border-white/10 text-center text-[10px] font-semibold leading-relaxed z-30">
@@ -199,13 +246,13 @@ export default function StoryViewer({
       )}
 
       {!activeUserStates.isMe ? (
-        <div className="p-3 bg-black/85 border-t border-white/10 z-20 flex flex-col gap-2">
-          <div className="flex items-center justify-center gap-2">
+        <div className="p-3 bg-black/85 border-t border-white/10 z-20 flex flex-col gap-2 shrink-0">
+          <div className="flex items-center justify-center gap-2.5">
             {["❤️", "😂", "😮", "🔥", "👍"].map(emoji => (
               <button
                 key={emoji}
                 onClick={() => onToggleReaction(currentStory.id, emoji)}
-                className={`text-lg w-8 h-8 flex items-center justify-center rounded-full transition-all cursor-pointer ${
+                className={`text-2xl w-11 h-11 flex items-center justify-center rounded-full transition-all cursor-pointer ${
                   myCurrentReaction === emoji ? "bg-teal-500/30 scale-110 ring-1 ring-teal-400" : "hover:bg-white/10"
                 }`}
               >

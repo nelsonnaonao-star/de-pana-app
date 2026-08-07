@@ -7,7 +7,7 @@ import {
   Check, AlertTriangle, Info, Search, Plus, 
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
-  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy, User
+  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy, User, Wifi
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Chat, Message, ActiveCall } from "../types";
@@ -41,6 +41,8 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
+import { playSound, getSoundId, setSoundId } from "../services/soundService";
+import { SOUND_LIBRARY } from "../data/sounds";
 import { uploadAvatar, uploadChatMedia } from "../services/storage";
 import { updateProfile } from "../services/auth";
 import { db } from "../services/database/DatabaseService";
@@ -249,12 +251,9 @@ export default function PhoneSimulator({
   const playIncomingRingtone = useCallback(() => {
     try {
       stopIncomingRingtone();
-      const audio = new Audio('/sounds/ringtone.mp3');
-      audio.loop = true;
-      audio.volume = 0.8;
+      const audio = playSound("call", 0.8);
       ringtoneAudioRef.current = audio;
-      audio.play().catch(() => {});
-      console.log('[APP] 🔊 Incoming ringtone started');
+      if (audio) console.log('[APP] 🔊 Incoming ringtone started');
     } catch (e) {
       console.warn('[APP] Failed to play incoming ringtone:', e);
     }
@@ -273,11 +272,9 @@ export default function PhoneSimulator({
       if (notificationAudioRef.current) {
         try { notificationAudioRef.current.pause(); notificationAudioRef.current.currentTime = 0; } catch {}
       }
-      const audio = new Audio('/sounds/notificacion.mp3');
-      audio.volume = 0.7;
+      const audio = playSound("message", 0.7);
       notificationAudioRef.current = audio;
-      audio.play().catch(() => {});
-      console.log('[APP] 🔊 Notification sound played');
+      if (audio) console.log('[APP] 🔊 Notification sound played');
     } catch (e) {
       console.warn('[APP] Failed to play notification sound:', e);
     }
@@ -375,6 +372,8 @@ export default function PhoneSimulator({
   const [twoStepPin, setTwoStepPin] = useState("");
   const [muteChats, setMuteChats] = useState(false);
   const [unreadBadges, setUnreadBadges] = useState(true);
+  const [msgSoundId, setMsgSoundId] = useState(getSoundId("message"));
+  const [callSoundId, setCallSoundId] = useState(getSoundId("call"));
   const [mobileDataUsage, setMobileDataUsage] = useState("Ahorro");
   const [autoDownloadPhotos, setAutoDownloadPhotos] = useState(true);
   const [appFont, setAppFont] = useState<"Clásico" | "Mono" | "Elegante" | "Moderno">("Clásico");
@@ -2053,9 +2052,9 @@ export default function PhoneSimulator({
                             <div className="relative shrink-0">
                               <div className={`p-[2px] rounded-full border-2 border-dashed ${chat.isGroup ? "border-purple-500/90" : "border-rose-500/90"} transition-transform hover:rotate-12 duration-500`}>
                                 {chat.avatar ? (
-                                  <CachedImage src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-full object-cover" loading="lazy" />
+                                  <CachedImage src={chat.avatar} alt={chat.name} className="w-14 h-14 rounded-full object-cover" loading="lazy" />
                                 ) : chat.isGroup ? (
-                                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
+                                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
                                     <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                                       <circle cx="9" cy="7" r="4" />
@@ -2064,7 +2063,7 @@ export default function PhoneSimulator({
                                     </svg>
                                   </div>
                                 ) : (
-                                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                                     <span className="text-white font-black text-sm">
                                       {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
                                     </span>
@@ -2324,7 +2323,7 @@ export default function PhoneSimulator({
                         </div>
                         ) : (
                         <>
-                          <h4 className="text-sm font-black mt-2 tracking-tight">{registeredUser.name}</h4>
+                          <h4 className="text-base font-black mt-2 tracking-tight">{registeredUser.name}</h4>
                           <button
                             onClick={() => {
                               if (registeredUser?.phone) {
@@ -2333,14 +2332,14 @@ export default function PhoneSimulator({
                                 }).catch(() => {});
                               }
                             }}
-                            className="text-[10px] text-teal-200 font-mono mt-0.5 hover:text-white transition-colors cursor-pointer flex items-center gap-1 mx-auto"
+                            className="text-[11px] text-teal-200 font-mono mt-0.5 hover:text-white transition-colors cursor-pointer flex items-center gap-1 mx-auto"
                             title="Copiar número"
                           >
                             {registeredUser.phone}
-                            <Copy className="w-3 h-3 inline opacity-60" />
+                            <Copy className="w-3.5 h-3.5 inline opacity-60" />
                           </button>
                           {registeredUser.bio && (
-                            <p className="text-[9px] text-teal-300/80 mt-0.5 italic max-w-[200px] mx-auto truncate">{registeredUser.bio}</p>
+                            <p className="text-[10px] text-teal-300/80 mt-0.5 italic max-w-[200px] mx-auto truncate">{registeredUser.bio}</p>
                           )}
                           <div className="flex items-center justify-center gap-2 mt-1">
                             <button
@@ -2349,14 +2348,14 @@ export default function PhoneSimulator({
                                 setEditBio(registeredUser.bio || "");
                                 setIsEditingProfile(true);
                               }}
-                              className="px-2.5 py-0.5 bg-white/10 hover:bg-white/20 text-[9px] font-bold rounded-lg transition-colors cursor-pointer"
+                              className="px-2.5 py-0.5 bg-white/10 hover:bg-white/20 text-[10px] font-bold rounded-lg transition-colors cursor-pointer"
                             >
                               Editar perfil
                             </button>
                           </div>
                         </>
                       )}
-                      <div className="bg-black/15 py-0.5 px-3 rounded-full inline-block mt-2 text-[9px] font-bold text-teal-100">
+                      <div className="bg-black/15 py-0.5 px-3 rounded-full inline-block mt-2 text-[10px] font-bold text-teal-100">
                         {userId}
                       </div>
                     </div>
@@ -2364,7 +2363,7 @@ export default function PhoneSimulator({
                     {/* Scrollable Settings Panel */}
                     <div className="flex-1 overflow-y-auto p-4 space-y-3.5 pb-20 scrollbar-thin">
                       
-                      <div className="text-[10px] font-black text-slate-400 tracking-wider uppercase px-1">
+                      <div className="text-[11px] font-black text-slate-400 tracking-wider uppercase px-1">
                         Ajustes de RED ON
                       </div>
 
@@ -2379,13 +2378,13 @@ export default function PhoneSimulator({
                                 <CircleUser className="w-4 h-4" />
                               </div>
                               <div>
-                                <div className="text-[11px] font-black text-slate-800">Cuenta</div>
-                                <div className="text-[9px] text-slate-400">Privacidad de número, cambio de ID</div>
+                                <div className="text-[12px] font-black text-slate-800">Cuenta</div>
+                                <div className="text-[10px] text-slate-400">Privacidad de número, cambio de ID</div>
                               </div>
                             </div>
                             <button
                               onClick={() => setActiveSettingsModal("cuenta")}
-                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-[#0a4d52] font-extrabold text-[9px] rounded-lg transition-colors cursor-pointer"
+                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-[#0a4d52] font-extrabold text-[10px] rounded-lg transition-colors cursor-pointer"
                             >
                               Cambiar
                             </button>
@@ -2402,8 +2401,8 @@ export default function PhoneSimulator({
                               <Shield className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[11px] font-black text-slate-800">Privacidad y Seguridad</div>
-                              <div className="text-[9px] text-slate-400">Doble check, bloqueos, verificación en 2 pasos</div>
+                              <div className="text-[12px] font-black text-slate-800">Privacidad y Seguridad</div>
+                              <div className="text-[10px] text-slate-400">Doble check, bloqueos, verificación en 2 pasos</div>
                             </div>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
@@ -2419,8 +2418,8 @@ export default function PhoneSimulator({
                               <Bell className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[11px] font-black text-slate-800">Notificaciones</div>
-                              <div className="text-[9px] text-slate-400">Silenciar chats, globos en icono de app</div>
+                              <div className="text-[12px] font-black text-slate-800">Notificaciones</div>
+                              <div className="text-[10px] text-slate-400">Silenciar chats, globos en icono de app</div>
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
@@ -2439,12 +2438,12 @@ export default function PhoneSimulator({
                               <Database className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[11px] font-black text-slate-800">Datos y Almacenamiento</div>
-                              <div className="text-[9px] text-slate-400">Uso de red móvil, autodescarga de fotos</div>
+                              <div className="text-[12px] font-black text-slate-800">Datos y Almacenamiento</div>
+                              <div className="text-[10px] text-slate-400">Uso de red móvil, autodescarga de fotos</div>
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5">
-                            <span className="text-[8px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{mobileDataUsage}</span>
+                            <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{mobileDataUsage}</span>
                             <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
                           </div>
                         </button>
@@ -2457,18 +2456,18 @@ export default function PhoneSimulator({
                                 <Type className="w-4 h-4" />
                               </div>
                               <div>
-                                <div className="text-[11px] font-black text-slate-800">Fuentes</div>
-                                <div className="text-[9px] text-slate-400">Personaliza el estilo de letra de la app</div>
+                                <div className="text-[12px] font-black text-slate-800">Fuentes</div>
+                                <div className="text-[10px] text-slate-400">Personaliza el estilo de letra de la app</div>
                               </div>
                             </div>
-                            <span className="text-[8px] font-black text-slate-400 uppercase bg-slate-100 px-1.5 py-0.5 rounded">Desactivado</span>
+                            <span className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 px-1.5 py-0.5 rounded">Desactivado</span>
                           </div>
                           
                           <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-100/50">
-                            <span className="text-[10px] font-bold text-slate-600">A</span>
+                            <span className="text-[11px] font-bold text-slate-600">A</span>
                             <button
                               onClick={() => setActiveSettingsModal("fuentes")}
-                              className="px-2.5 py-1 bg-violet-50 hover:bg-violet-100 text-violet-600 font-black text-[9px] rounded-lg transition-colors cursor-pointer"
+                              className="px-2.5 py-1 bg-violet-50 hover:bg-violet-100 text-violet-600 font-black text-[10px] rounded-lg transition-colors cursor-pointer"
                             >
                               {appFont} (Cambiar)
                             </button>
@@ -2482,8 +2481,8 @@ export default function PhoneSimulator({
                               <Cloud className="w-4 h-4" />
                             </div>
                             <div>
-                              <h5 className="text-[11px] font-black text-slate-800">Copia de seguridad</h5>
-                              <p className="text-[8px] text-slate-400 font-mono">Última copia: {backupDate} • {backupChatsCount} chats</p>
+                              <h5 className="text-[12px] font-black text-slate-800">Copia de seguridad</h5>
+                              <p className="text-[9px] text-slate-400 font-mono">Última copia: {backupDate} • {backupChatsCount} chats</p>
                             </div>
                           </div>
 
@@ -2492,7 +2491,7 @@ export default function PhoneSimulator({
                             <button
                               disabled={isBackingUp || isRestoring}
                               onClick={handleCloudBackup}
-                              className="w-full py-2.5 px-3 bg-[#0a4d52] hover:bg-[#10646a] text-white font-extrabold text-[9px] rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                              className="w-full py-2.5 px-3 bg-[#0a4d52] hover:bg-[#10646a] text-white font-extrabold text-[10px] rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                             >
                               {isBackingUp ? (
                                 <>
@@ -2507,7 +2506,7 @@ export default function PhoneSimulator({
                             <button
                               disabled={isBackingUp || isRestoring}
                               onClick={handleCloudRestore}
-                              className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[9px] rounded-xl border border-slate-200/50 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer disabled:opacity-50"
+                              className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[10px] rounded-xl border border-slate-200/50 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer disabled:opacity-50"
                             >
                               {isRestoring ? (
                                 <span className="flex items-center gap-1">
@@ -2516,7 +2515,7 @@ export default function PhoneSimulator({
                               ) : (
                                 <>
                                   <span className="text-slate-800 font-bold">Restaurar desde copia</span>
-                                  <span className="text-[7.5px] text-slate-400 font-normal">Exporta todos tus datos como JSON</span>
+                                  <span className="text-[8.5px] text-slate-400 font-normal">Exporta todos tus datos como JSON</span>
                                 </>
                               )}
                             </button>
@@ -2533,8 +2532,8 @@ export default function PhoneSimulator({
                               <HelpCircle className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[11px] font-black text-slate-800">Ayuda y Preguntas</div>
-                              <div className="text-[9px] text-slate-400">RED ON FAQ, soporte en directo</div>
+                              <div className="text-[12px] font-black text-slate-800">Ayuda y Preguntas</div>
+                              <div className="text-[10px] text-slate-400">RED ON FAQ, soporte en directo</div>
                             </div>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
@@ -2547,25 +2546,25 @@ export default function PhoneSimulator({
                               <FileText className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[11px] font-black text-slate-800">Legal</div>
-                              <div className="text-[9px] text-slate-400 font-medium">Condiciones legales oficiales</div>
+                              <div className="text-[12px] font-black text-slate-800">Legal</div>
+                              <div className="text-[10px] text-slate-400 font-medium">Condiciones legales oficiales</div>
                             </div>
                           </div>
 
                           <div className="grid grid-cols-2 gap-2 pt-1">
                             <button
                               onClick={() => setActiveSettingsModal("legal")}
-                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[8.5px] rounded-lg text-center transition-all cursor-pointer"
+                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[9.5px] rounded-lg text-center transition-all cursor-pointer"
                             >
                               <div className="font-extrabold">Política de Privacidad</div>
-                              <div className="text-[7px] text-slate-400 font-normal mt-0.5">Cómo manejamos tus datos</div>
+                              <div className="text-[9px] text-slate-400 font-normal mt-0.5">Cómo manejamos tus datos</div>
                             </button>
                             <button
                               onClick={() => setActiveSettingsModal("legal")}
-                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[8.5px] rounded-lg text-center transition-all cursor-pointer"
+                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[9.5px] rounded-lg text-center transition-all cursor-pointer"
                             >
                               <div className="font-extrabold">Términos de Servicio</div>
-                              <div className="text-[7px] text-slate-400 font-normal mt-0.5">Condiciones de uso de RED ON</div>
+                              <div className="text-[9px] text-slate-400 font-normal mt-0.5">Condiciones de uso de RED ON</div>
                             </button>
                           </div>
                         </div>
@@ -2577,7 +2576,7 @@ export default function PhoneSimulator({
                             setCurrentScreen("welcome");
                             logout();
                           }}
-                          className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-rose-100 cursor-pointer mt-4"
+                          className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[13px] font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-rose-100 cursor-pointer mt-4"
                         >
                           <LogOut className="w-4 h-4 stroke-[2.5]" /> Cerrar Sesión
                         </button>
@@ -2591,7 +2590,7 @@ export default function PhoneSimulator({
                         <div className="bg-white rounded-t-3xl p-5 space-y-4 max-h-[85%] overflow-y-auto border-t border-slate-100 shadow-lg text-left animate-slide-up">
                           {/* Header of Modal */}
                           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <h4 className="text-[10px] font-black text-[#0a4d52] uppercase tracking-wider">
+                            <h4 className="text-[11px] font-black text-[#0a4d52] uppercase tracking-wider">
                               {activeSettingsModal === "cuenta" && "Configuración de Cuenta"}
                               {activeSettingsModal === "seguridad" && "Privacidad y Seguridad"}
                               {activeSettingsModal === "notificaciones" && "Notificaciones"}
@@ -2613,8 +2612,8 @@ export default function PhoneSimulator({
                             <div className="space-y-4 animate-fade-in">
                               <div className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-100">
                                 <div>
-                                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Tu número</div>
-                                  <div className="text-xs font-mono font-bold text-slate-800 mt-0.5">{registeredUser?.phone || profile?.phone_number || "No disponible"}</div>
+                                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Tu número</div>
+                                  <div className="text-[13px] font-mono font-bold text-slate-800 mt-0.5">{registeredUser?.phone || profile?.phone_number || "No disponible"}</div>
                                 </div>
                                 <button
                                   onClick={() => {
@@ -2656,13 +2655,13 @@ export default function PhoneSimulator({
                                     Guardar
                                   </button>
                                 </div>
-                                <p className="text-[8px] text-slate-400 leading-normal">Este ID te identifica de forma única dentro de la red móvil de RED ON sin necesidad de exponer tu número de teléfono real.</p>
+                                <p className="text-[9px] text-slate-400 leading-normal">Este ID te identifica de forma única dentro de la red móvil de RED ON sin necesidad de exponer tu número de teléfono real.</p>
                               </div>
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
                                 <div>
-                                  <div className="text-[10.5px] font-black text-slate-800">Privacidad de número</div>
-                                  <div className="text-[8px] text-slate-400">Ocultar número a desconocidos en chats de campaña</div>
+                                  <div className="text-[11.5px] font-black text-slate-800">Privacidad de número</div>
+                                  <div className="text-[9px] text-slate-400">Ocultar número a desconocidos en chats de campaña</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -2685,8 +2684,8 @@ export default function PhoneSimulator({
                             <div className="space-y-4 animate-fade-in">
                               <div className="flex items-center justify-between">
                                 <div>
-                                  <div className="text-[10.5px] font-black text-slate-800">Doble check de lectura</div>
-                                  <div className="text-[8px] text-slate-400">Ver confirmación azul de lectura de mensajes</div>
+                                  <div className="text-[11.5px] font-black text-slate-800">Doble check de lectura</div>
+                                  <div className="text-[9px] text-slate-400">Ver confirmación azul de lectura de mensajes</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -2704,8 +2703,8 @@ export default function PhoneSimulator({
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
                                 <div>
-                                  <div className="text-[10.5px] font-black text-slate-800">Bloqueos</div>
-                                  <div className="text-[8px] text-slate-400">Restringir llamadas y mensajes directos</div>
+                                  <div className="text-[11.5px] font-black text-slate-800">Bloqueos</div>
+                                  <div className="text-[9px] text-slate-400">Restringir llamadas y mensajes directos</div>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <button 
@@ -2735,8 +2734,8 @@ export default function PhoneSimulator({
                               <div className="border-t border-slate-100 pt-3 space-y-3">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <div className="text-[10.5px] font-black text-slate-800">Verificación en dos pasos</div>
-                                    <div className="text-[8px] text-slate-400">PIN extra para iniciar sesión en otros teléfonos</div>
+                                    <div className="text-[11.5px] font-black text-slate-800">Verificación en dos pasos</div>
+                                    <div className="text-[9px] text-slate-400">PIN extra para iniciar sesión en otros teléfonos</div>
                                   </div>
                                   <label className="relative inline-flex items-center cursor-pointer">
                                     <input 
@@ -2777,7 +2776,7 @@ export default function PhoneSimulator({
                                             setActiveSettingsModal(null);
                                           }
                                         }}
-                                        className="px-3 bg-indigo-600 text-white font-extrabold text-[8px] rounded-lg hover:bg-indigo-700 cursor-pointer"
+                                        className="px-3 bg-indigo-600 text-white font-extrabold text-[9px] rounded-lg hover:bg-indigo-700 cursor-pointer"
                                       >
                                         Activar PIN
                                       </button>
@@ -2793,8 +2792,8 @@ export default function PhoneSimulator({
                             <div className="space-y-4 animate-fade-in">
                               <div className="flex items-center justify-between">
                                 <div>
-                                  <div className="text-[10.5px] font-black text-slate-800">Silenciar chats</div>
-                                  <div className="text-[8px] text-slate-400">Desactiva sonidos globales de mensajes</div>
+                                  <div className="text-[11.5px] font-black text-slate-800">Silenciar chats</div>
+                                  <div className="text-[9px] text-slate-400">Desactiva sonidos globales de mensajes</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -2812,8 +2811,8 @@ export default function PhoneSimulator({
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
                                 <div>
-                                  <div className="text-[10.5px] font-black text-slate-800">Globos en icono de app</div>
-                                  <div className="text-[8px] text-slate-400">Mostrar contador rojo de no leídos</div>
+<div className="text-[11.5px] font-black text-slate-800">Globos en icono de app</div>
+                                  <div className="text-[9px] text-slate-400">Mostrar contador rojo de no leídos</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -2827,6 +2826,64 @@ export default function PhoneSimulator({
                                   />
                                   <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
                                 </label>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div>
+                                    <div className="text-[11.5px] font-black text-slate-800">Sonido de mensaje</div>
+                                    <div className="text-[9px] text-slate-400">Tono cuando llega una notificación</div>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
+                                  {SOUND_LIBRARY.message.map((opt) => (
+                                    <button
+                                      key={opt.id}
+                                      onClick={() => {
+                                        setSoundId("message", opt.id);
+                                        setMsgSoundId(opt.id);
+                                        playSound("message", 0.7);
+                                        showToast(`Sonido de mensaje: ${opt.name}`);
+                                      }}
+                                      className={`py-1 text-[9px] font-black rounded-lg transition-all cursor-pointer ${
+                                        msgSoundId === opt.id 
+                                          ? "bg-white text-[#0a4d52] shadow-sm" 
+                                          : "text-slate-500 hover:text-slate-800"
+                                      }`}
+                                    >
+                                      {opt.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="border-t border-slate-100 pt-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div>
+                                    <div className="text-[11.5px] font-black text-slate-800">Sonido de llamada</div>
+                                    <div className="text-[9px] text-slate-400">Tono cuando llega una llamada</div>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
+                                  {SOUND_LIBRARY.call.map((opt) => (
+                                    <button
+                                      key={opt.id}
+                                      onClick={() => {
+                                        setSoundId("call", opt.id);
+                                        setCallSoundId(opt.id);
+                                        playSound("call", 0.8);
+                                        showToast(`Sonido de llamada: ${opt.name}`);
+                                      }}
+                                      className={`py-1 text-[11px] font-black rounded-lg transition-all cursor-pointer ${
+                                        callSoundId === opt.id 
+                                          ? "bg-white text-[#0a4d52] shadow-sm" 
+                                          : "text-slate-500 hover:text-slate-800"
+                                      }`}
+                                    >
+                                      {opt.name}
+                                    </button>
+                                  ))}
+                                </div>
                               </div>
                             </div>
                           )}
@@ -2844,7 +2901,7 @@ export default function PhoneSimulator({
                                         setMobileDataUsage(opt);
                                         showToast(`Consumo móvil configurado en ${opt}`);
                                       }}
-                                      className={`py-1 text-[8px] font-black rounded-lg transition-all cursor-pointer ${
+                                      className={`py-1 text-[9px] font-black rounded-lg transition-all cursor-pointer ${
                                         mobileDataUsage === opt 
                                           ? "bg-white text-[#0a4d52] shadow-sm" 
                                           : "text-slate-500 hover:text-slate-800"
@@ -2858,8 +2915,8 @@ export default function PhoneSimulator({
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
                                 <div>
-                                  <div className="text-[10.5px] font-black text-slate-800">Autodescarga de fotos</div>
-                                  <div className="text-[8px] text-slate-400">Guardar multimedia con datos de celular</div>
+                                  <div className="text-[11.5px] font-black text-slate-800">Autodescarga de fotos</div>
+                                  <div className="text-[9px] text-slate-400">Guardar multimedia con datos de celular</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -2929,7 +2986,7 @@ export default function PhoneSimulator({
                               <div className="bg-gradient-to-r from-teal-500 to-indigo-600 text-white p-3 rounded-2xl flex items-center justify-between shadow-md">
                                 <div className="text-left">
                                   <div className="text-[10px] font-black">Soporte en directo 24/7</div>
-                                  <div className="text-[8px] text-teal-100">Resuelve dudas sobre tus catálogos</div>
+                                  <div className="text-[9px] text-teal-100">Resuelve dudas sobre tus catálogos</div>
                                 </div>
                                 <button
                                   onClick={handleOpenSupportChat}
@@ -2968,7 +3025,7 @@ export default function PhoneSimulator({
                             <div className="space-y-4 text-[8.5px] text-slate-600 leading-relaxed max-h-[300px] overflow-y-auto pr-1 animate-fade-in text-left scrollbar-thin">
                               {/* PRIVACY POLICY */}
                               <div>
-                                <h5 className="font-black text-slate-800 text-[10px] tracking-tight">Política de Privacidad</h5>
+                                <h5 className="font-black text-slate-800 text-[11px] tracking-tight">Política de Privacidad</h5>
                                 <p className="text-slate-500 mt-1.5 leading-relaxed">
                                   En <strong className="text-slate-700">RED ON</strong>, el control de tus datos personales es nuestra prioridad fundamental. Esta política describe cómo recopilamos, usamos, almacenamos y protegemos tu información cuando utilizas nuestra plataforma de mensajería, difusión de catálogos y servicios de emprendimiento.
                                 </p>
@@ -3007,7 +3064,7 @@ export default function PhoneSimulator({
 
                               {/* TERMS OF SERVICE */}
                               <div className="border-t border-slate-100 pt-3.5">
-                                <h5 className="font-black text-slate-800 text-[10px] tracking-tight">Términos de Servicio</h5>
+                                <h5 className="font-black text-slate-800 text-[11px] tracking-tight">Términos de Servicio</h5>
                                 <p className="text-slate-500 mt-1.5 leading-relaxed">
                                   Al acceder o utilizar <strong className="text-slate-700">RED ON</strong> (la "Plataforma"), aceptas cumplir con estos Términos de Servicio. Si no estás de acuerdo con alguna parte de los términos, no podrás usar la Plataforma.
                                 </p>

@@ -2,8 +2,9 @@ import React from "react";
 import { Check, RefreshCw, Upload, Award, Music, ImageIcon } from "lucide-react";
 import {
   STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED,
-  STICKER_TEMPLATES_PRO, PRESET_MUSIC, ANIMATION_PRESETS,
+  STICKER_TEMPLATES_PRO, ANIMATION_PRESETS,
 } from "./editorConstants";
+import { MusicTrack } from "../../services/stickerService";
 
 interface EditorTabPanelsProps {
   editorTab: "presets" | "sliders" | "text" | "stickers" | "premium";
@@ -44,6 +45,8 @@ interface EditorTabPanelsProps {
   transitionStyle: "fade" | "zoom" | "slide";
   setTransitionStyle: (v: "fade" | "zoom" | "slide") => void;
   setIsVideoPlaying: (v: boolean) => void;
+  isStateMode?: boolean;
+  musicLibrary?: MusicTrack[];
 }
 
 export default function EditorTabPanels(props: EditorTabPanelsProps) {
@@ -67,6 +70,8 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
     selectedMusicId, setSelectedMusicId,
     transitionStyle, setTransitionStyle,
     setIsVideoPlaying,
+    isStateMode,
+    musicLibrary = [],
   } = props;
 
   return (
@@ -195,7 +200,45 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
         </div>
       )}
 
-      {editorTab === "text" && (
+      {editorTab === "text" && isStateMode && (
+        <div className="space-y-3 animate-fade-in text-left">
+          <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">Texto Libre</span>
+          <div className="space-y-2 bg-black/20 p-2.5 rounded-xl border border-white/5">
+            <div className="space-y-1">
+              <span className="text-[7px] text-slate-400 font-bold uppercase">Escribe lo que quieras</span>
+              <textarea value={bannerTitle} onChange={(e) => setBannerTitle(e.target.value)} maxLength={120} rows={3}
+                placeholder="Escribe tu mensaje libre aquí..."
+                className="w-full bg-slate-950 border border-white/10 text-[10px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-bold resize-none" />
+            </div>
+            <div className="space-y-1 pt-1">
+              <div className="flex justify-between items-center text-[7px] text-slate-400 font-bold uppercase">
+                <span>Escala Texto</span>
+                <span className="font-mono text-teal-400">{textSizePercent}%</span>
+              </div>
+              <input type="range" min="80" max="300" step="5" value={textSizePercent}
+                onChange={(e) => setTextSizePercent(Number(e.target.value))} className="w-full accent-teal-500 cursor-pointer mt-1" />
+            </div>
+            <span className="text-[6.5px] text-slate-500">Arrastra el texto en la vista previa para ponerlo donde quieras</span>
+          </div>
+
+          <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider block pt-1">Animación del Texto</span>
+          <div className="grid grid-cols-2 gap-1.5">
+            {ANIMATION_PRESETS.map((anim) => {
+              const isSelected = textAnimation === anim.id;
+              return (
+                <button key={anim.id} type="button" onClick={() => setTextAnimation(anim.id)}
+                  className={`py-2 px-2.5 rounded-xl text-left border text-[8.5px] font-bold transition-all cursor-pointer ${
+                    isSelected ? "bg-teal-950/60 border-teal-400 text-white" : "bg-black/20 border-white/5 text-slate-400 hover:bg-black/35"
+                  }`}>
+                  {anim.name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {editorTab === "text" && !isStateMode && (
         <div className="space-y-3 animate-fade-in text-left">
           <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">Contenido de Textos</span>
           <div className="space-y-2 bg-black/20 p-2.5 rounded-xl border border-white/5">
@@ -220,7 +263,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
                   <span>Escala Texto</span>
                   <span className="font-mono text-teal-400">{textSizePercent}%</span>
                 </div>
-                <input type="range" min="80" max="120" step="5" value={textSizePercent}
+                <input type="range" min="80" max="300" step="5" value={textSizePercent}
                   onChange={(e) => setTextSizePercent(Number(e.target.value))} className="w-full accent-teal-500 cursor-pointer mt-1" />
               </div>
             </div>
@@ -329,13 +372,17 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
           </span>
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
-              <span className="text-[7px] text-slate-400 font-bold uppercase">Música Integrada</span>
+              <span className="text-[7px] text-slate-400 font-bold uppercase">Música desde Supabase</span>
               <select value={selectedMusicId} onChange={(e) => { setSelectedMusicId(e.target.value); setIsVideoPlaying(false); }}
                 className="w-full bg-slate-950 text-white border border-white/10 text-[8px] p-1.5 rounded-lg outline-none cursor-pointer">
-                {PRESET_MUSIC.map(mus => (
-                  <option key={mus.id} value={mus.id}>{mus.name}</option>
+                <option value="none">Sin Música</option>
+                {musicLibrary.map(t => (
+                  <option key={t.id} value={t.id}>{t.title}</option>
                 ))}
               </select>
+              {musicLibrary.length === 0 && (
+                <p className="text-[7px] text-slate-500">Sube tus canciones a la tabla music_library en Supabase para usarlas aquí.</p>
+              )}
             </div>
             <div className="space-y-1">
               <span className="text-[7px] text-slate-400 font-bold uppercase">Tipo Transición</span>

@@ -40,7 +40,7 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
               <div className={`p-1.5 rounded-xl transition-all relative ${
                 isActive ? "bg-[#10646a]/10 scale-105" : "bg-transparent"
               }`}>
-                <Icon className="w-5 h-5" strokeWidth={isActive ? 2.5 : 2} />
+                <Icon className="w-7 h-7" strokeWidth={isActive ? 2.5 : 2} />
                 {showBadge && (
                   <span className="absolute -top-1 -right-2 bg-[#25D366] text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded-full border border-white z-30 shadow-sm">
                     {totalUnread > 99 ? "99+" : totalUnread}

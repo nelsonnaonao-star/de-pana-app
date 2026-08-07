@@ -5,11 +5,12 @@ import {
   Compass, Sliders, Type, Tag, Upload, Download
 } from "lucide-react";
 import { BusinessFlyer } from "./BusinessPanel";
-import { STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED, PRESET_MUSIC, ANIMATION_PRESETS, STICKER_TEMPLATES_PRO } from "./editor/editorConstants";
+import { STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED, ANIMATION_PRESETS, STICKER_TEMPLATES_PRO } from "./editor/editorConstants";
 import EditorTabPanels from "./editor/EditorTabPanels";
 import { supabase } from "../lib/supabase";
 import { saveMediaToGalleryDirect } from "../services/mediaUtils";
 import { Capacitor } from "@capacitor/core";
+import { getMusicLibrary, MusicTrack } from "../services/stickerService";
 
 interface MediaEditorProps {
   onPublishFlyer: (flyer: BusinessFlyer) => void;
@@ -58,8 +59,8 @@ export default function MediaEditor({
   const [showWhatsApp, setShowWhatsApp] = useState(false);
   const [textAnimation, setTextAnimation] = useState("none");
   const [textSizePercent, setTextSizePercent] = useState<number>(100);
-  const [textOffsetY, setTextOffsetY] = useState(0); // draggable vertical offset (px)
-  const dragRef = useRef({ startY: 0, startOffset: 0, dragging: false });
+  const [textPos, setTextPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 }); // free draggable position (px)
+  const dragRef = useRef({ startX: 0, startY: 0, startPos: { x: 0, y: 0 }, dragging: false });
 
   // Pro Stickers state
   const [selectedStickerIdx, setSelectedStickerIdx] = useState<number>(-1);
@@ -81,6 +82,7 @@ export default function MediaEditor({
   const [selectedMusicId, setSelectedMusicId] = useState("none");
   const [transitionStyle, setTransitionStyle] = useState<"fade" | "zoom" | "slide">("fade");
   const [currentTime, setCurrentTime] = useState(0);
+  const [musicLibrary, setMusicLibrary] = useState<MusicTrack[]>([]);
 
   // Ref holders
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -88,14 +90,18 @@ export default function MediaEditor({
   const timerIntervalRef = useRef<number | null>(null);
 
   // Sound and simulation loop for videos
-  const activeMusic = PRESET_MUSIC.find(m => m.id === selectedMusicId);
+  const activeMusic = musicLibrary.find(m => m.id === selectedMusicId);
+
+  useEffect(() => {
+    getMusicLibrary().then(setMusicLibrary).catch(() => setMusicLibrary([]));
+  }, []);
 
   useEffect(() => {
     if (isVideoPlaying) {
       // Audio trigger
-      if (activeMusic?.url) {
+      if (activeMusic?.file_url) {
         if (!audioRef.current) {
-          audioRef.current = new Audio(activeMusic.url);
+          audioRef.current = new Audio(activeMusic.file_url);
           audioRef.current.loop = true;
         }
         audioRef.current.play().catch(e => console.log("Audio play error", e));
@@ -299,7 +305,7 @@ export default function MediaEditor({
       onPublishState(
         currentImageSource, 
         editorMode, 
-        bannerProduct && bannerProduct !== "Calzado Premium Red On" ? bannerProduct : bannerTitle
+        bannerTitle
       );
       return;
     }
@@ -314,8 +320,8 @@ export default function MediaEditor({
       templateId: "sunset",
       productName: bannerProduct,
       price: bannerPrice,
-      musicUrl: activeMusic?.url || undefined,
-      musicName: activeMusic?.name !== "Sin Música" ? activeMusic?.name : undefined,
+      musicUrl: activeMusic?.file_url || undefined,
+      musicName: activeMusic?.title || undefined,
       views: 1,
       clicks: 0,
       ownerName: "Nelson Castro (Socio Premium)",
@@ -408,7 +414,6 @@ export default function MediaEditor({
               src={currentImageSource} 
               autoPlay 
               loop 
-              muted 
               playsInline
               className="w-full h-full object-cover select-none"
             />
@@ -460,36 +465,50 @@ export default function MediaEditor({
 
         {/* Text overlays */}
         <div
-          className="absolute inset-x-3 z-10 space-y-1 text-left cursor-grab active:cursor-grabbing select-none"
+          className="absolute left-1/2 top-1/2 z-10 space-y-1 text-left cursor-grab active:cursor-grabbing select-none"
           style={{
-            transform: `scale(${textSizePercent / 100})`,
-            transformOrigin: "bottom left",
-            bottom: `${80 + textOffsetY}px`,
+            transform: `translate(-50%, -50%) translate(${textPos.x}px, ${textPos.y}px) scale(${textSizePercent / 100})`,
+            transformOrigin: "center",
+            maxWidth: "92%",
           }}
           onMouseDown={(e) => {
-            dragRef.current = { startY: e.clientY, startOffset: textOffsetY, dragging: true };
+            e.stopPropagation();
+            dragRef.current = { startX: e.clientX, startY: e.clientY, startPos: textPos, dragging: true };
             const onMove = (ev: MouseEvent) => {
               if (!dragRef.current.dragging) return;
-              const delta = ev.clientY - dragRef.current.startY;
-              setTextOffsetY(Math.max(-120, Math.min(40, dragRef.current.startOffset + delta)));
+              setTextPos({
+                x: Math.max(-200, Math.min(200, dragRef.current.startPos.x + (ev.clientX - dragRef.current.startX))),
+                y: Math.max(-300, Math.min(300, dragRef.current.startPos.y + (ev.clientY - dragRef.current.startY))),
+              });
             };
             const onUp = () => { dragRef.current.dragging = false; window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
             window.addEventListener("mousemove", onMove);
             window.addEventListener("mouseup", onUp);
           }}
           onTouchStart={(e) => {
+            e.stopPropagation();
             const touch = e.touches[0];
-            dragRef.current = { startY: touch.clientY, startOffset: textOffsetY, dragging: true };
+            dragRef.current = { startX: touch.clientX, startY: touch.clientY, startPos: textPos, dragging: true };
             const onMove = (ev: TouchEvent) => {
               if (!dragRef.current.dragging) return;
-              const delta = ev.touches[0].clientY - dragRef.current.startY;
-              setTextOffsetY(Math.max(-120, Math.min(40, dragRef.current.startOffset + delta)));
+              setTextPos({
+                x: Math.max(-200, Math.min(200, dragRef.current.startPos.x + (ev.touches[0].clientX - dragRef.current.startX))),
+                y: Math.max(-300, Math.min(300, dragRef.current.startPos.y + (ev.touches[0].clientY - dragRef.current.startY))),
+              });
             };
             const onUp = () => { dragRef.current.dragging = false; window.removeEventListener("touchmove", onMove); window.removeEventListener("touchend", onUp); };
             window.addEventListener("touchmove", onMove, { passive: true });
             window.addEventListener("touchend", onUp);
           }}
         >
+          {isStateMode ? (
+            bannerTitle && (
+              <span className={`inline-block text-[14px] font-black text-white tracking-tight leading-tight uppercase drop-shadow-lg text-left ${getSelectedAnimClass()}`}>
+                {bannerTitle}
+              </span>
+            )
+          ) : (
+            <>
           {bannerTitle && (
             <span className={`inline-block text-[7px] font-black bg-rose-600 text-white px-2 py-0.5 rounded uppercase tracking-wider shadow-md ${getSelectedAnimClass()}`}>
               {bannerTitle}
@@ -513,6 +532,8 @@ export default function MediaEditor({
                 </span>
               )}
             </div>
+          )}
+            </>
           )}
         </div>
 
@@ -540,7 +561,7 @@ export default function MediaEditor({
         {editorMode === "video" && selectedMusicId !== "none" && (
           <div className="absolute top-2.5 right-2.5 z-10 bg-teal-400 px-2 py-0.5 rounded-full text-[6px] font-bold flex items-center gap-1 text-white shadow animate-pulse">
             <Music className="w-2.5 h-2.5 text-white animate-spin" />
-            <span>{activeMusic?.name.split(" ")[0]}...</span>
+            <span>{activeMusic?.title.split(" ")[0]}...</span>
           </div>
         )}
       </div>
@@ -550,27 +571,27 @@ export default function MediaEditor({
         <div className="flex items-center justify-between pointer-events-auto">
           <button
             onClick={onGoToFeed}
-            className="bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-[9px] font-bold px-2.5 py-1.5 rounded-lg transition-all cursor-pointer flex items-center gap-1"
+            className="bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-[11px] font-bold px-3.5 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-1"
           >
             ✕ Volver
           </button>
 
-          <div className="flex bg-black/60 p-0.5 rounded-lg border border-white/10 text-[8px] font-bold">
+          <div className="flex bg-black/60 p-0.5 rounded-lg border border-white/10 text-[10px] font-bold">
             <button
               onClick={() => { setEditorMode("image"); setIsVideoPlaying(false); }}
-              className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+              className={`px-3 py-1 rounded transition-all cursor-pointer ${
                 editorMode === "image" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
               }`}
             >
-              <ImageIcon className="w-3 h-3 inline mr-1" /> Foto
+              <ImageIcon className="w-4 h-4 inline mr-1" /> Foto
             </button>
             <button
               onClick={() => setEditorMode("video")}
-              className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+              className={`px-3 py-1 rounded transition-all cursor-pointer ${
                 editorMode === "video" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
               }`}
             >
-              <Video className="w-3 h-3 inline mr-1" /> Video
+              <Video className="w-4 h-4 inline mr-1" /> Video
             </button>
           </div>
 
@@ -578,16 +599,16 @@ export default function MediaEditor({
             <button
               onClick={handleSaveToDevice}
               disabled={isSavingToDevice}
-              className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-extrabold text-[9px] px-3 py-1.5 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1"
+              className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-extrabold text-[11px] px-4 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5"
             >
-              <Download className="w-3 h-3" /> {isSavingToDevice ? "Guardando..." : "Guardar"}
+              <Download className="w-4 h-4" /> {isSavingToDevice ? "Guardando..." : "Guardar"}
             </button>
             {isStateMode && (
               <button
                 onClick={handleExportAndPublishFlyer}
-                className="bg-teal-500 hover:bg-teal-400 text-white font-extrabold text-[9px] px-3 py-1.5 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1"
+                className="bg-teal-500 hover:bg-teal-400 text-white font-extrabold text-[11px] px-4 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5"
               >
-                <Check className="w-3 h-3" /> Publicar
+                <Check className="w-4 h-4" /> Publicar
               </button>
             )}
           </div>
@@ -698,6 +719,8 @@ export default function MediaEditor({
               transitionStyle={transitionStyle}
               setTransitionStyle={setTransitionStyle}
               setIsVideoPlaying={setIsVideoPlaying}
+              isStateMode={isStateMode}
+              musicLibrary={musicLibrary}
             />
           </div>
         </div>

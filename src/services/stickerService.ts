@@ -1,4 +1,15 @@
 import { apiUrl } from "../lib/api";
+import { supabase } from "../lib/supabase";
+
+export interface MusicTrack {
+  id: string;
+  title: string;
+  artist?: string;
+  duration?: number;
+  file_url: string;
+  cover_url?: string;
+  category?: string;
+}
 
 export interface GiphyResult {
   id: string;
@@ -57,3 +68,44 @@ export const GIF_CATEGORIES = [
   { emoji: "🌙", name: "Good Night" },
   { emoji: "🎮", name: "Gaming" },
 ];
+
+// ─── Music Library (Supabase Storage bucket "music") ────────────────
+
+const MUSIC_BUCKET = "music";
+const AUDIO_EXTS = [".mp3", ".ogg", ".wav", ".m4a", ".aac", ".opus", ".flac"];
+
+export async function getMusicLibrary(): Promise<MusicTrack[]> {
+  try {
+    const { data, error } = await supabase.storage.from(MUSIC_BUCKET).list();
+    if (error) {
+      console.error("[MUSIC] list error:", error.message);
+      return [];
+    }
+    if (!data) return [];
+    const tracks: MusicTrack[] = [];
+    for (const file of data) {
+      if (!file.name) continue;
+      const lower = file.name.toLowerCase();
+      if (!AUDIO_EXTS.some(ext => lower.endsWith(ext))) continue;
+      const { data: urlData } = supabase.storage.from(MUSIC_BUCKET).getPublicUrl(file.name);
+      const title = file.name.replace(/\.[^.]+$/, "").replace(/[_\-]+/g, " ");
+      tracks.push({
+        id: file.name,
+        title,
+        artist: "",
+        duration: 0,
+        file_url: urlData?.publicUrl || "",
+        cover_url: "",
+        category: "General",
+      });
+    }
+    return tracks;
+  } catch (err) {
+    console.error("[MUSIC] getMusicLibrary error:", err);
+    return [];
+  }
+}
+
+export async function getMusicCategories(): Promise<string[]> {
+  return ["General"];
+}

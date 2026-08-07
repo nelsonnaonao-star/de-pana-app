@@ -28,13 +28,6 @@ export const STICKER_TEMPLATES_PRO = [
   { id: "promo", text: "🎁 COMPRA & GANA", bg: "bg-pink-600 text-white border-2 border-white font-black" }
 ];
 
-export const PRESET_MUSIC = [
-  { id: "none", name: "Sin Música", url: "" },
-  { id: "lofi", name: "Lofi Calm Beats ☕", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" },
-  { id: "pop", name: "Chill Pop Emprendedor 🚀", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" },
-  { id: "synth", name: "Synthwave Sunset 🌆", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3" }
-];
-
 export const ANIMATION_PRESETS = [
   { id: "none", name: "Estático", class: "" },
   { id: "bounce", name: "Rebote Divertido 🦘", class: "animate-bounce" },

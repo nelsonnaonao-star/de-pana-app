@@ -1,4 +1,4 @@
-import { QrCode, Search } from "lucide-react";
+import { Search } from "lucide-react";
 
 interface SimulatorTabHeaderProps {
   currentScreen: string;
@@ -51,27 +51,6 @@ export default function SimulatorTabHeader({
           <div className="relative z-10 flex justify-between items-center mb-3.5 pointer-events-auto">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-extrabold tracking-tight text-white drop-shadow-md">Messages</h1>
-            </div>
-
-            <div className="flex items-center gap-2.5">
-              <button
-                onClick={onNavigateToQr}
-                className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center border border-white/10 text-white transition-all cursor-pointer"
-                title="Escanear QR"
-              >
-                <QrCode className="w-4 h-4" />
-              </button>
-              <button
-                onClick={onNavigateToProfile}
-                className="w-8 h-8 rounded-full border border-white/20 overflow-hidden transition-all cursor-pointer hover:scale-110 shadow-sm"
-                title="Tu Perfil"
-              >
-                <img
-                  src={registeredUserAvatar || ""}
-                  alt="Profile"
-                  className="w-full h-full object-cover"
-                />
-              </button>
             </div>
           </div>
 

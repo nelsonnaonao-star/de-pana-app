@@ -542,7 +542,8 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
       type: "poll",
       pollQuestion: pollQuestion,
       pollOptions: pollOpts,
-      status: "sent",
+      status: "sending",
+      synced: false,
     };
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);

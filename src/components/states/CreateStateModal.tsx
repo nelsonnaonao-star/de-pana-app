@@ -1,4 +1,5 @@
-import { X, Sparkles, Award, Check, Video, Send } from "lucide-react";
+import { X, Award, Check, Video, Send } from "lucide-react";
+import { useState } from "react";
 
 interface CreateStateModalProps {
   uploadedMedia: { url: string; type: "image" | "video"; name: string };
@@ -11,6 +12,44 @@ interface CreateStateModalProps {
   onGoToProEditor: () => void;
   onBackToChoice: () => void;
   onSetPublishComment: (v: string) => void;
+}
+
+// Video player with a manual sound toggle. Starts unmuted so the video's
+// audio is heard automatically; the button lets the user mute/unmute.
+function SoundVideo({
+  src,
+  autoPlay,
+  loop,
+  playsInline,
+  className,
+}: {
+  src: string;
+  autoPlay?: boolean;
+  loop?: boolean;
+  playsInline?: boolean;
+  className?: string;
+}) {
+  const [muted, setMuted] = useState(false);
+  return (
+    <>
+      <video
+        src={src}
+        muted={muted}
+        autoPlay={autoPlay}
+        loop={loop}
+        playsInline={playsInline}
+        className={className}
+      />
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setMuted(!muted); }}
+        className="absolute top-3 right-3 z-20 w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white cursor-pointer"
+        title={muted ? "Activar sonido" : "Silenciar"}
+      >
+        {muted ? <Video className="w-3.5 h-3.5" /> : <span className="text-sm">🔊</span>}
+      </button>
+    </>
+  );
 }
 
 export default function CreateStateModal({
@@ -27,7 +66,7 @@ export default function CreateStateModal({
           {/* Full screen preview */}
           <div className="absolute inset-0">
             {uploadedMedia.type === "video" ? (
-              <video src={uploadedMedia.url} muted playsInline loop autoPlay className="w-full h-full object-cover" />
+              <SoundVideo src={uploadedMedia.url} autoPlay loop playsInline className="w-full h-full object-cover" />
             ) : (
               <img src={uploadedMedia.url} alt="Preview" className="w-full h-full object-cover" />
             )}
@@ -36,19 +75,6 @@ export default function CreateStateModal({
 
           {/* Content overlay */}
           <div className="relative z-10 flex flex-col h-full p-5 justify-end pb-8">
-            <div className="mb-6 text-left">
-              <div className="flex items-center gap-2 mb-1.5">
-                <Sparkles className="w-4 h-4 text-teal-400" />
-                <span className="text-[9px] font-black text-teal-400 uppercase tracking-wider">Archivo cargado</span>
-              </div>
-              <h3 className="text-white text-sm font-black tracking-tight leading-snug mb-0.5">
-                {uploadedMedia.name}
-              </h3>
-              <p className="text-[10px] text-slate-400 font-mono">
-                {uploadedMedia.type === "video" ? "Video" : "Imagen"} listo para publicar
-              </p>
-            </div>
-
             <div className="space-y-2.5">
               <button
                 onClick={onGoToProEditor}
@@ -81,7 +107,7 @@ export default function CreateStateModal({
 
           <div className="flex-1 flex items-center justify-center min-h-0">
             {uploadedMedia.type === "video" ? (
-              <video src={uploadedMedia.url} muted playsInline loop autoPlay className="w-full h-full object-contain" />
+              <SoundVideo src={uploadedMedia.url} autoPlay loop playsInline className="w-full h-full object-contain" />
             ) : (
               <img src={uploadedMedia.url} alt="Preview" className="w-full h-full object-contain" />
             )}

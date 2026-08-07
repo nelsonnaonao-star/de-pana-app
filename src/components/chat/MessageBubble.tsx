@@ -7,6 +7,32 @@ import AudioMessagePlayer from "./AudioMessagePlayer";
 import { saveMediaToGalleryDirect, shareMedia } from "../../services/mediaUtils";
 import toast from "react-hot-toast";
 
+const URL_PATTERN = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
+
+function renderMessageText(text: string, isGlass: boolean) {
+  const parts = text.split(URL_PATTERN);
+  return parts.map((part, i) => {
+    if (!part) return null;
+    if (URL_PATTERN.test(part)) {
+      URL_PATTERN.lastIndex = 0;
+      const href = part.startsWith("www.") ? `https://${part}` : part;
+      return (
+        <a
+          key={i}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className={`underline font-medium ${isGlass ? "text-blue-800" : "text-teal-300 hover:text-teal-200"}`}
+        >
+          {part}
+        </a>
+      );
+    }
+    return <React.Fragment key={i}>{part}</React.Fragment>;
+  });
+}
+
 interface MessageBubbleProps {
   msg: Message;
   isMe: boolean;
@@ -606,7 +632,11 @@ export default React.memo(function MessageBubble({
             <p className={`text-[10px] opacity-60 truncate ${isGlass ? "text-gray-600" : ""}`}>{msg.replyToText}</p>
           </div>
         )}
-        {msg.type === "text" && <p className={`leading-relaxed whitespace-pre-wrap ${isGlass ? "text-gray-900" : ""}`}>{msg.text}</p>}
+        {msg.type === "text" && (
+          <p className={`leading-relaxed whitespace-pre-wrap break-words ${isGlass ? "text-gray-900" : ""}`}>
+            {renderMessageText(msg.text || "", isGlass)}
+          </p>
+        )}
 
         {msg.type === "audio" && (
           <div className={`flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? "bg-black/5" : "bg-black/5 dark:bg-white/5"}`}>

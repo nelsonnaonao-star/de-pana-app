@@ -47,7 +47,7 @@ function MessageBubbleWithCache(props: MessageBubbleWithCacheProps) {
       mediaUrl: prev.mediaUrl?.startsWith("blob:") ? prev.mediaUrl : msg.mediaUrl,
       posterUrl: prev.posterUrl?.startsWith("blob:") ? prev.posterUrl : msg.posterUrl,
     }));
-  }, [msg.id, msg.status, msg.text, msg.reactions, msg.edited, msg.forwarded, msg.pollQuestion, msg.price, msg.isEphemeral, msg.ephemeralExpiresAt]);
+  }, [msg.id, msg.status, msg.text, msg.reactions, msg.edited, msg.forwarded, msg.pollQuestion, msg.pollOptions, msg.price, msg.isEphemeral, msg.ephemeralExpiresAt]);
 
   useEffect(() => {
     let cancelled = false;

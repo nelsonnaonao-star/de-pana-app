@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
-import { X, Check, Loader2, Camera, Trash2 } from "lucide-react";
+import { X, Check, Loader2, Camera, Trash2, BellOff, Bell } from "lucide-react";
+import { MuteDuration } from "../../../services/chats";
 
 export interface GroupMember {
   profile_id: string;
@@ -37,6 +38,11 @@ interface GroupInfoPanelProps {
   onRemoveMember: (profileId: string) => void;
   onLeaveGroup: () => void;
   onOpenDeleteConfirm: () => void;
+  isMuted: boolean;
+  muteUntil: string | null;
+  muting: boolean;
+  onMute: (duration: MuteDuration) => void;
+  onUnmute: () => void;
 }
 
 function getInitials(name: string): string {
@@ -51,11 +57,20 @@ export default function GroupInfoPanel({
   onClose, onStartEditName, onNameDraftChange, onSaveName, onCancelEditName,
   onToggleAddMember, onAddMemberQueryChange, onAddMember, onRemoveMember,
   onLeaveGroup, onOpenDeleteConfirm,
+  isMuted, muteUntil, muting, onMute, onUnmute,
 }: GroupInfoPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [memberToRemove, setMemberToRemove] = useState<GroupMember | null>(null);
+  const [showMuteOptions, setShowMuteOptions] = useState(false);
   if (!isOpen) return null;
   const localGroupName = chatName;
+
+  const MUTE_OPTIONS: Array<{ value: MuteDuration; label: string }> = [
+    { value: "8h", label: "8 horas" },
+    { value: "12h", label: "12 horas" },
+    { value: "24h", label: "24 horas" },
+    { value: "always", label: "Siempre" },
+  ];
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -129,6 +144,54 @@ export default function GroupInfoPanel({
           <p className="text-[10px] text-slate-400 mt-0.5">{groupMembers.length} miembros</p>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
+          <div className="mb-3 border rounded-xl divide-y divide-slate-100">
+            {!isMuted ? (
+              <button
+                onClick={() => setShowMuteOptions(v => !v)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
+              >
+                <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500">
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-[11px] font-semibold text-slate-800">Silenciar grupo</p>
+                  <p className="text-[9px] text-slate-400">Silencia las notificaciones para todos los miembros</p>
+                </div>
+              </button>
+            ) : (
+              <div className="flex items-center gap-3 px-3 py-2.5">
+                <div className="w-8 h-8 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500">
+                  <BellOff className="w-4 h-4" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-[11px] font-semibold text-slate-800">Grupo silenciado</p>
+                  <p className="text-[9px] text-slate-400">{muteUntil ? `Hasta ${new Date(muteUntil).toLocaleString()}` : "Siempre"}</p>
+                </div>
+                <button
+                  onClick={onUnmute}
+                  disabled={muting}
+                  className="px-2.5 py-1 text-[10px] font-bold text-teal-600 bg-teal-50 hover:bg-teal-100 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {muting ? <Loader2 className="w-3 h-3 animate-spin" /> : "Activar"}
+                </button>
+              </div>
+            )}
+            {showMuteOptions && !isMuted && (
+              <div className="p-2 grid grid-cols-2 gap-1.5 animate-fade-in">
+                {MUTE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => { onMute(opt.value); setShowMuteOptions(false); }}
+                    disabled={muting}
+                    className="py-2 text-[11px] font-bold text-slate-700 bg-slate-50 hover:bg-teal-50 hover:text-teal-700 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-between mb-2">
             <p className="text-[10px] font-bold text-slate-400 uppercase">{groupMembers.length} miembros</p>
             <button

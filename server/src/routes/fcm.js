@@ -2,6 +2,7 @@ import express from 'express';
 import webpush from 'web-push';
 import { supabaseAdmin } from '../db.js';
 import { initializeApp, getApps, cert } from 'firebase-admin';
+import { isGroupMuted } from './groups.js';
 import { getMessaging } from 'firebase-admin/messaging';
 
 const router = express.Router();
@@ -327,6 +328,11 @@ router.post('/webhook', async (req, res) => {
         .single();
       const isGroup = chat?.is_group;
       const chatName = chat?.name || 'RED ON';
+
+      // Si el grupo está silenciado, no se envía push a ningún participante.
+      if (isGroup && (await isGroupMuted(chat_id))) {
+        return res.json({ ok: true, skipped: 'group muted' });
+      }
 
       let receiverIds = [];
       if (isGroup) {

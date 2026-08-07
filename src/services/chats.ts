@@ -1,5 +1,5 @@
 import { supabase } from "../lib/supabase";
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 
 export type Chat = {
   id: string;
@@ -381,4 +381,41 @@ export function subscribeToChats(userId: string, callback: (event: "INSERT" | "U
     .subscribe();
 
   return { unsubscribe: () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); supabase.removeChannel(ch3); } };
+}
+
+export type MuteDuration = "8h" | "12h" | "24h" | "always";
+
+export async function muteGroup(chatId: string, duration: MuteDuration): Promise<void> {
+  const resp = await authFetch(apiUrl("/api/groups/mute"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, duration }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || "Error al silenciar el grupo");
+  }
+}
+
+export async function unmuteGroup(chatId: string): Promise<void> {
+  const resp = await authFetch(apiUrl("/api/groups/unmute"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error(err.error || "Error al activar el sonido");
+  }
+}
+
+export async function getGroupMute(chatId: string): Promise<{ isMuted: boolean; muted_until: string | null }> {
+  try {
+    const resp = await authFetch(apiUrl(`/api/groups/mute/${chatId}`));
+    if (!resp.ok) return { isMuted: false, muted_until: null };
+    const data = await resp.json();
+    return { isMuted: !!data.isMuted, muted_until: data.muted_until || null };
+  } catch {
+    return { isMuted: false, muted_until: null };
+  }
 }

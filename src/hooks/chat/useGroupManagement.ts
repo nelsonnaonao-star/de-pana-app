@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../lib/supabase";
-import { addGroupMember, removeGroupMember, leaveGroup as apiLeaveGroup, updateChat } from "../../services/chats";
+import { addGroupMember, removeGroupMember, leaveGroup as apiLeaveGroup, updateChat, muteGroup, unmuteGroup, getGroupMute, MuteDuration } from "../../services/chats";
 import { searchUsers } from "../../services/contacts";
 
 import toast from "react-hot-toast";
@@ -14,6 +14,22 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
   const [addMemberQuery, setAddMemberQuery] = useState("");
   const [addMemberResults, setAddMemberResults] = useState<Array<{id: string; name: string; avatar?: string}>>([]);
   const [addingMember, setAddingMember] = useState(false);
+  const [isGroupMuted, setIsGroupMuted] = useState(false);
+  const [muteUntil, setMuteUntil] = useState<string | null>(null);
+  const [muting, setMuting] = useState(false);
+
+  useEffect(() => {
+    if (!isGroup || !chatId) return;
+    let cancelled = false;
+    (async () => {
+      const { isMuted, muted_until } = await getGroupMute(chatId);
+      if (!cancelled) {
+        setIsGroupMuted(isMuted);
+        setMuteUntil(muted_until);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isGroup, chatId]);
 
   useEffect(() => { setLocalGroupName(chatName); }, [chatName]);
 
@@ -182,6 +198,36 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
     }
   }, [chatId, uid]);
 
+  const handleMuteGroup = useCallback(async (duration: MuteDuration) => {
+    setMuting(true);
+    try {
+      await muteGroup(chatId, duration);
+      setIsGroupMuted(true);
+      setMuteUntil(duration === "always" ? null : null);
+      toast.success(duration === "always" ? "Grupo silenciado (Siempre)" : `Grupo silenciado`);
+    } catch (e) {
+      console.error("[CHAT] Error muting group:", e);
+      toast.error("Error al silenciar el grupo");
+    } finally {
+      setMuting(false);
+    }
+  }, [chatId]);
+
+  const handleUnmuteGroup = useCallback(async () => {
+    setMuting(true);
+    try {
+      await unmuteGroup(chatId);
+      setIsGroupMuted(false);
+      setMuteUntil(null);
+      toast.success("Sonido del grupo activado");
+    } catch (e) {
+      console.error("[CHAT] Error unmuting group:", e);
+      toast.error("Error al activar el sonido");
+    } finally {
+      setMuting(false);
+    }
+  }, [chatId]);
+
   return {
     groupMembers,
     editingGroupName,
@@ -202,5 +248,10 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
     handleRemoveMember,
     handleChangePhoto,
     handleLeaveGroup,
+    isGroupMuted,
+    muteUntil,
+    muting,
+    handleMuteGroup,
+    handleUnmuteGroup,
   };
 }
