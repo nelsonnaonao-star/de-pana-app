@@ -32,6 +32,7 @@ export type Message = {
   document_name?: string;
   document_size?: string;
   document_type?: string;
+  file_url?: string;
   has_location: boolean;
   latitude?: number;
   longitude?: number;
@@ -81,6 +82,7 @@ function toMessage(row: any): Message {
     document_name: row.document_name || undefined,
     document_size: row.document_size || undefined,
     document_type: row.document_type || undefined,
+    file_url: row.file_url || undefined,
     has_location: row.has_location || false,
     latitude: row.latitude || undefined,
     longitude: row.longitude || undefined,
@@ -131,6 +133,7 @@ export async function sendMessage(message: Partial<Message>): Promise<Message> {
       document_name: message.document_name,
       document_size: message.document_size,
       document_type: message.document_type,
+      file_url: message.file_url,
       latitude: message.latitude,
       longitude: message.longitude,
       location_name: message.location_name,

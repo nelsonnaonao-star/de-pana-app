@@ -522,6 +522,7 @@ export default function PhoneSimulator({
         audio_url: msg.type === "audio" || msg.type === "voice_note" ? resolvedUrl : undefined,
         sticker_url: msg.type === "sticker" ? resolvedUrl : undefined,
         document_name: msg.type === "file" ? msg.fileName : undefined,
+        file_url: msg.type === "file" ? resolvedUrl : undefined,
         forwarded: true,
       });
       setForwardingMessage(null);

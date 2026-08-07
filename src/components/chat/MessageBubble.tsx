@@ -659,6 +659,32 @@ export default React.memo(function MessageBubble({
           </div>
         )}
 
+        {msg.type === "file" && (
+          <div className="flex items-center gap-2.5 p-1 rounded-xl min-w-[200px] ${isGlass ? 'bg-black/5' : 'bg-black/5 dark:bg-white/5'}">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-amber-500/20 text-amber-500">
+              <span className="text-[13px] font-black leading-none">📄</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`text-[10px] font-semibold truncate ${isGlass ? "text-gray-800" : "text-slate-100"}`}>{msg.fileName || msg.text || "Documento"}</p>
+              <span className={`text-[9px] opacity-70 block font-mono truncate ${isGlass ? "text-gray-500" : ""}`}>{msg.fileSize ? `${msg.fileSize} • ` : ""}{msg.fileName ? msg.fileName.split(".").pop()?.toUpperCase() : "Documento"}</span>
+            </div>
+            {msg.mediaUrl && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  shareMedia(msg.mediaUrl!, msg.fileName || "Documento")
+                    .then(() => toast.success("Enviado"))
+                    .catch(() => toast.error("No se pudo abrir el archivo"));
+                }}
+                className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${isGlass ? "bg-gray-800/10 text-gray-800 hover:bg-gray-800/20" : "bg-white/20 text-white hover:bg-white/30"} transition-colors`}
+                title="Abrir archivo"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+
         {msg.type === "voice_note" && msg.mediaUrl && (
           <AudioMessagePlayer
             audioUrl={msg.mediaUrl}

@@ -497,7 +497,13 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
           if (type === "image") { payload.image_url = url; payload.text = "Imagen"; }
           else if (type === "video") { payload.video_url = url; payload.text = "Video"; }
           else if (type === "audio") { payload.audio_url = url; payload.text = "Audio"; }
-          else { payload.file_url = url; }
+          else {
+            payload.file_url = url;
+            payload.document_name = file.name;
+            payload.document_size = file.size ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : null;
+            payload.document_type = file.type || null;
+            payload.mime_type = file.type || null;
+          }
           const saved = await apiSendMessage(payload);
           messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
           messageRepo.deleteMessage(chatId, tempId);
