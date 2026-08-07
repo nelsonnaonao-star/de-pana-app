@@ -1,13 +1,15 @@
 package com.redon.app;
 
 import android.app.ActivityManager;
+import android.content.Context;
+import android.content.SharedPreferences;
 import androidx.core.app.RemoteInput;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.media.AudioAttributes;
 import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
@@ -23,6 +25,87 @@ public class CallFcmService extends FirebaseMessagingService {
     private static final String CHANNEL_CALLS = "redon-calls";
     private static final String CHANNEL_MESSAGES = "redon-messages";
     private static final String REPLY_ACTION = "com.redon.app.REPLY_MESSAGE";
+
+    // Almacenamiento compartido creado por el plugin @capacitor/preferences
+    private static final String SOUND_PREFS = "CapacitorStorage";
+    private static final String PREF_MSG_SOUND = "redon_sound_message";
+    private static final String PREF_CALL_SOUND = "redon_sound_call";
+
+    private String getSoundPref(String key, String def) {
+        try {
+            SharedPreferences prefs = getSharedPreferences(SOUND_PREFS, Context.MODE_PRIVATE);
+            String value = prefs.getString(key, null);
+            return (value != null && !value.isEmpty()) ? value : def;
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    // Devuelve el nombre del recurso raw que corresponde al id de sonido seleccionado.
+    private String rawNameFor(String event, String soundId) {
+        if ("message".equals(event)) {
+            if ("noti1".equals(soundId)) return "noti1";
+            if ("noti2".equals(soundId)) return "noti2";
+            return "notificacion";
+        }
+        // llamada: ring1 -> ringtone, ring2 -> ring1, ring3 -> ring2
+        if ("ring2".equals(soundId)) return "ring1";
+        if ("ring3".equals(soundId)) return "ring2";
+        return "ringtone";
+    }
+
+    private String callChannelId(String soundId) {
+        if ("ring2".equals(soundId)) return CHANNEL_CALLS + "-ring2";
+        if ("ring3".equals(soundId)) return CHANNEL_CALLS + "-ring3";
+        return CHANNEL_CALLS;
+    }
+
+    private String messageChannelId(String soundId) {
+        if ("noti1".equals(soundId)) return CHANNEL_MESSAGES + "-noti1";
+        if ("noti2".equals(soundId)) return CHANNEL_MESSAGES + "-noti2";
+        return CHANNEL_MESSAGES;
+    }
+
+    private void ensureChannel(String channelId, String name, String rawName, long[] vibration, String desc) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        try {
+            NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nmgr == null) return;
+            AudioAttributes audioAttrs = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION).build();
+            NotificationChannel chan = new NotificationChannel(
+                channelId, name, NotificationManager.IMPORTANCE_HIGH
+            );
+            chan.setDescription(desc);
+            chan.setSound(
+                Uri.parse("android.resource://" + getPackageName() + "/raw/" + rawName), audioAttrs
+            );
+            chan.enableVibration(true);
+            chan.setVibrationPattern(vibration);
+            chan.enableLights(true);
+            chan.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+            chan.setShowBadge(true);
+            nmgr.createNotificationChannel(chan);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to create channel " + channelId, e);
+        }
+    }
+
+    private String resolveMessageChannel() {
+        String soundId = getSoundPref(PREF_MSG_SOUND, "clasica");
+        String channelId = messageChannelId(soundId);
+        ensureChannel(channelId, "Mensajes", rawNameFor("message", soundId),
+            new long[]{0, 300, 200, 300}, "Notificaciones de mensajes");
+        return channelId;
+    }
+
+    private String resolveCallChannel() {
+        String soundId = getSoundPref(PREF_CALL_SOUND, "ring1");
+        String channelId = callChannelId(soundId);
+        ensureChannel(channelId, "Llamadas", rawNameFor("call", soundId),
+            new long[]{0, 500, 300, 500, 300, 500}, "Notificaciones de llamadas entrantes");
+        return channelId;
+    }
 
     @Override
     public void onNewToken(String token) {
@@ -117,18 +200,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         int notificationId = ("call-" + (chatId != null ? chatId : "")).hashCode();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel chan = new NotificationChannel(
-                CHANNEL_CALLS, "Llamadas", NotificationManager.IMPORTANCE_HIGH
-            );
-            chan.setDescription("Notificaciones de llamadas entrantes");
-            chan.enableVibration(true);
-            chan.setVibrationPattern(new long[]{0, 500, 300, 500, 300, 500});
-            chan.enableLights(true);
-            chan.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
-            NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nmgr != null) nmgr.createNotificationChannel(chan);
-        }
+        String callChannel = resolveCallChannel();
 
         Intent answerIntent = new Intent(this, MainActivity.class);
         answerIntent.setAction("ANSWER_CALL");
@@ -155,7 +227,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/ringtone");
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_CALLS)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, callChannel)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
             .setContentText(body)
@@ -166,7 +238,6 @@ public class CallFcmService extends FirebaseMessagingService {
             .setOngoing(true)
             .setContentIntent(answerPending)
             .setFullScreenIntent(answerPending, true)
-            .setSound(soundUri)
             .setVibrate(new long[]{0, 500, 300, 500, 300, 500})
             .setDefaults(NotificationCompat.DEFAULT_LIGHTS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -193,19 +264,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         int notificationId = (chatId != null ? chatId.hashCode() : (int) System.currentTimeMillis());
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel chan = new NotificationChannel(
-                CHANNEL_MESSAGES, "Mensajes", NotificationManager.IMPORTANCE_HIGH
-            );
-            chan.setDescription("Notificaciones de mensajes");
-            chan.enableVibration(true);
-            chan.setVibrationPattern(new long[]{0, 300, 200, 300});
-            chan.enableLights(true);
-            chan.setShowBadge(true);
-            chan.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
-            NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nmgr != null) nmgr.createNotificationChannel(chan);
-        }
+        String messageChannel = resolveMessageChannel();
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction("OPEN_CHAT");
@@ -239,7 +298,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/notificacion");
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_MESSAGES)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, messageChannel)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
             .setContentText(body)
@@ -249,7 +308,6 @@ public class CallFcmService extends FirebaseMessagingService {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .addAction(replyAction)
-            .setSound(soundUri)
             .setVibrate(new long[]{0, 300, 200, 300})
             .setDefaults(NotificationCompat.DEFAULT_VIBRATE | NotificationCompat.DEFAULT_LIGHTS)
             .setNumber(notifCount)
@@ -274,16 +332,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         int notificationId = (chatId != null ? chatId.hashCode() : (int) System.currentTimeMillis());
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel chan = new NotificationChannel(
-                CHANNEL_MESSAGES, "Mensajes", NotificationManager.IMPORTANCE_HIGH
-            );
-            chan.setDescription("Notificaciones de mensajes");
-            chan.enableVibration(true);
-            chan.enableLights(true);
-            NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nmgr != null) nmgr.createNotificationChannel(chan);
-        }
+        String messageChannel = resolveMessageChannel();
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction("OPEN_CHAT");
@@ -297,7 +346,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/notificacion");
 
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_MESSAGES)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, messageChannel)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
             .setContentText(body)
@@ -305,7 +354,6 @@ public class CallFcmService extends FirebaseMessagingService {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .setSound(soundUri)
             .setVibrate(new long[]{0, 300, 200, 300})
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setColor(Color.parseColor("#1E88E5"));

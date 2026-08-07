@@ -110,18 +110,44 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    private String getSoundPref(String key, String def) {
+        try {
+            SharedPreferences prefs = getSharedPreferences("CapacitorStorage", MODE_PRIVATE);
+            String value = prefs.getString(key, null);
+            return (value != null && !value.isEmpty()) ? value : def;
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    private String rawNameFor(String event, String soundId) {
+        if ("message".equals(event)) {
+            if ("noti1".equals(soundId)) return "noti1";
+            if ("noti2".equals(soundId)) return "noti2";
+            return "notificacion";
+        }
+        if ("ring2".equals(soundId)) return "ring1";
+        if ("ring3".equals(soundId)) return "ring2";
+        return "ringtone";
+    }
+
     private void createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager nm = getSystemService(NotificationManager.class);
             AudioAttributes audioAttrs = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION).build();
 
+            String msgSound = getSoundPref("redon_sound_message", "clasica");
+            String callSound = getSoundPref("redon_sound_call", "ring1");
+            String msgRaw = rawNameFor("message", msgSound);
+            String callRaw = rawNameFor("call", callSound);
+
             NotificationChannel messagesChannel = new NotificationChannel(
                 "redon-messages", "Mensajes", NotificationManager.IMPORTANCE_HIGH
             );
             messagesChannel.setDescription("Notificaciones de mensajes");
             messagesChannel.setSound(
-                Uri.parse("android.resource://" + getPackageName() + "/raw/notificacion"), audioAttrs
+                Uri.parse("android.resource://" + getPackageName() + "/raw/" + msgRaw), audioAttrs
             );
             messagesChannel.enableVibration(true);
             messagesChannel.setVibrationPattern(new long[]{0, 300, 200, 300});
@@ -134,14 +160,39 @@ public class MainActivity extends BridgeActivity {
             );
             callsChannel.setDescription("Notificaciones de llamadas entrantes");
             callsChannel.setSound(
-                Uri.parse("android.resource://" + getPackageName() + "/raw/ringtone"), audioAttrs
+                Uri.parse("android.resource://" + getPackageName() + "/raw/" + callRaw), audioAttrs
             );
             callsChannel.enableVibration(true);
             callsChannel.setVibrationPattern(new long[]{0, 500, 300, 500, 300, 500});
             callsChannel.enableLights(true);
             callsChannel.setShowBadge(true);
             nm.createNotificationChannel(callsChannel);
+
+            // Canales extra por tono alternativo, que CallFcmService usará según la selección.
+            if (!"noti1".equals(msgSound)) {
+                createToneChannel(nm, "redon-messages-noti1", "Mensajes 1", "noti1", new long[]{0, 300, 200, 300}, audioAttrs);
+            }
+            if (!"noti2".equals(msgSound)) {
+                createToneChannel(nm, "redon-messages-noti2", "Mensajes 2", "noti2", new long[]{0, 300, 200, 300}, audioAttrs);
+            }
+            if (!"ring2".equals(callSound)) {
+                createToneChannel(nm, "redon-calls-ring2", "Llamadas 2", "ring1", new long[]{0, 500, 300, 500, 300, 500}, audioAttrs);
+            }
+            if (!"ring3".equals(callSound)) {
+                createToneChannel(nm, "redon-calls-ring3", "Llamadas 3", "ring2", new long[]{0, 500, 300, 500, 300, 500}, audioAttrs);
+            }
         }
+    }
+
+    private void createToneChannel(NotificationManager nm, String id, String name, String raw, long[] vibration, AudioAttributes attrs) {
+        NotificationChannel chan = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
+        chan.setDescription("Notificaciones de " + name);
+        chan.setSound(Uri.parse("android.resource://" + getPackageName() + "/raw/" + raw), attrs);
+        chan.enableVibration(true);
+        chan.setVibrationPattern(vibration);
+        chan.enableLights(true);
+        chan.setShowBadge(true);
+        nm.createNotificationChannel(chan);
     }
 
     private void requestNotificationPermission() {

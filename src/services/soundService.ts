@@ -1,4 +1,6 @@
 import { SoundEvent, DEFAULT_SOUND, getSoundOption } from "../data/sounds";
+import { Preferences } from "@capacitor/preferences";
+import { Capacitor } from "@capacitor/core";
 
 const STORAGE_KEYS: Record<SoundEvent, string> = {
   message: "redon_sound_message",
@@ -20,6 +22,11 @@ export const setSoundId = (event: SoundEvent, id: string): void => {
     localStorage.setItem(STORAGE_KEYS[event], id);
   } catch {
     // almacenamiento no disponible; se ignora
+  }
+  if (Capacitor.isNativePlatform()) {
+    try {
+      Preferences.set({ key: STORAGE_KEYS[event], value: id }).catch(() => {});
+    } catch {}
   }
 };
 
@@ -70,4 +77,18 @@ export const stopSound = (): void => {
     } catch {}
     lastAudioRef.current = null;
   }
+};
+
+// Sincroniza la selección guardada en el almacenamiento nativo (Android SharedPreferences)
+// hacia localStorage, para que la app la use incluso si el WebView fue limpiado.
+export const syncSoundPrefsFromNative = async (): Promise<void> => {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    for (const event of (["message", "call"] as SoundEvent[])) {
+      const stored = await Preferences.get({ key: STORAGE_KEYS[event] });
+      if (stored?.value) {
+        try { localStorage.setItem(STORAGE_KEYS[event], stored.value); } catch {}
+      }
+    }
+  } catch {}
 };

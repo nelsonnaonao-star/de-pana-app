@@ -9,6 +9,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { initSentryCapacitor } from "./lib/sentry";
 import { db } from "./services/database/DatabaseService";
 import { syncService } from "./services/sync/SyncService";
+import { syncSoundPrefsFromNative } from "./services/soundService";
 
 initSentryCapacitor();
 
@@ -37,6 +38,7 @@ function AppContent() {
     db.initialize().then(() => {
       clearTimeout(t);
       db.cleanupOldData();
+      syncSoundPrefsFromNative().catch(() => {});
       syncService.start();
       console.log("[SyncService] started");
     }).finally(() => {
