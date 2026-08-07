@@ -41,7 +41,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
-import { playSound, getSoundId, setSoundId, stopSound } from "../services/soundService";
+import { playSound, playSoundOption, getSoundId, setSoundId, stopSound } from "../services/soundService";
 import { SOUND_LIBRARY } from "../data/sounds";
 import { uploadAvatar, uploadChatMedia } from "../services/storage";
 import { updateProfile } from "../services/auth";
@@ -2843,7 +2843,7 @@ export default function PhoneSimulator({
                                       <button
                                         onClick={() => {
                                           setPreviewMsgSound(opt.id);
-                                          playSound("message", 0.7);
+                                          playSoundOption("message", opt.id, 0.7);
                                         }}
                                         className={`py-1 text-[9px] font-black rounded-lg transition-all cursor-pointer ${
                                           previewMsgSound === opt.id
@@ -2886,7 +2886,7 @@ export default function PhoneSimulator({
                                       <button
                                         onClick={() => {
                                           setPreviewCallSound(opt.id);
-                                          playSound("call", 0.8);
+                                          playSoundOption("call", opt.id, 0.8);
                                         }}
                                         className={`py-1 text-[10px] font-black rounded-lg transition-all cursor-pointer ${
                                           previewCallSound === opt.id
