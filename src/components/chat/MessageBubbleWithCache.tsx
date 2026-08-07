@@ -8,8 +8,6 @@ interface MessageBubbleWithCacheProps {
   isMe: boolean;
   activeReactionMenu: string | null;
   setActiveReactionMenu: (id: string | null) => void;
-  isPlayingAudio: string | null;
-  setIsPlayingAudio: (id: string | null) => void;
   handleVote: (msgId: string, optionId: string) => void;
   handleAddReaction: (msgId: string, emoji: string) => void;
   handleDeleteMessage: (msgId: string) => void;

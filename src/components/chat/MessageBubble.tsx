@@ -38,8 +38,6 @@ interface MessageBubbleProps {
   isMe: boolean;
   activeReactionMenu: string | null;
   setActiveReactionMenu: (id: string | null) => void;
-  isPlayingAudio: string | null;
-  setIsPlayingAudio: (id: string | null) => void;
   handleVote: (messageId: string, optionId: string) => void;
   handleAddReaction: (messageId: string, emoji: string) => void;
   handleDeleteMessage: (messageId: string) => void;
@@ -394,7 +392,6 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
 
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
-  isPlayingAudio, setIsPlayingAudio,
   handleVote, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
@@ -638,22 +635,26 @@ export default React.memo(function MessageBubble({
           </p>
         )}
 
-        {msg.type === "audio" && (
-          <div className={`flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? "bg-black/5" : "bg-black/5 dark:bg-white/5"}`}>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsPlayingAudio(isPlayingAudio === msg.id ? null : msg.id);
-              }}
-              className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                isGlass ? "bg-gray-800/10 text-gray-800 hover:bg-gray-800/20" : "bg-white/20 text-white hover:bg-white/30"
-              }`}
-            >
-              {isPlayingAudio === msg.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-            </button>
+        {msg.type === "audio" && msg.mediaUrl && (
+          <div className="w-full min-w-[220px]">
+            <AudioMessagePlayer
+              audioUrl={msg.mediaUrl}
+              msgId={msg.id}
+              isMe={isMe}
+              isGlass={isGlass}
+              duration={msg.duration}
+            />
+          </div>
+        )}
+
+        {msg.type === "audio" && !msg.mediaUrl && (
+          <div className="flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? 'bg-black/5' : 'bg-black/5 dark:bg-white/5'}">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-white/20">
+              <Play className="w-4 h-4 ml-0.5" />
+            </div>
             <div className="flex-1 min-w-0">
-              <p className={`text-[10px] font-semibold truncate ${isGlass ? "text-gray-800" : "text-slate-100"}`}>{msg.fileName}</p>
-              <span className={`text-[9px] opacity-70 block font-mono ${isGlass ? "text-gray-500" : ""}`}>{msg.fileSize} • {msg.duration}</span>
+              <p className={`text-[10px] font-semibold truncate ${isGlass ? "text-gray-800" : "text-slate-100"}`}>{msg.fileName || "Audio"}</p>
+              <span className={`text-[9px] opacity-70 block font-mono ${isGlass ? "text-gray-500" : ""}`}>Audio no disponible</span>
             </div>
           </div>
         )}

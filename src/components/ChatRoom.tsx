@@ -65,7 +65,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [recordingType, setRecordingType] = useState<"voice" | "video" | null>(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [isCameraReady, setIsCameraReady] = useState(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState<string | null>(null); // messageId
   const [messages, setMessages] = useState<Message[]>(chat.messages || []);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasMoreOlder, setHasMoreOlder] = useState(true);
@@ -891,8 +890,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                   isMe={isMe}
                   activeReactionMenu={activeReactionMenu}
                   setActiveReactionMenu={setActiveReactionMenu}
-                  isPlayingAudio={isPlayingAudio}
-                  setIsPlayingAudio={setIsPlayingAudio}
                   handleVote={actions.handleVote}
                   handleAddReaction={actions.handleAddReaction}
                   handleDeleteMessage={actions.handleDeleteMessage}
