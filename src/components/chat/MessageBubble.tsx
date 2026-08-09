@@ -4,7 +4,7 @@ import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
 import AudioMessagePlayer from "./AudioMessagePlayer";
-import { saveMediaToGalleryDirect, shareMedia } from "../../services/mediaUtils";
+import { saveMediaToGalleryDirect, shareMedia, openDocument } from "../../services/mediaUtils";
 import toast from "react-hot-toast";
 
 const URL_PATTERN = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
@@ -402,6 +402,19 @@ export default React.memo(function MessageBubble({
   const [priceValue, setPriceValue] = useState("");
   const isTextOnlyEmoji = msg.type === "text" && msg.text && isEmoji(msg.text);
   const { bubbleRef, menuRef, dropDown } = useMenuDropDirection(activeReactionMenu === msg.id);
+  const isFile = msg.type === "file";
+  const longPressRef = useRef(false);
+
+  const openFileMessage = useCallback(async () => {
+    if (!msg.mediaUrl) return;
+    try {
+      await openDocument(msg.mediaUrl, msg.fileName || "Documento", msg.mimeType);
+      toast.success("Archivo abierto");
+    } catch (err) {
+      console.error("openDocument failed:", err);
+      toast.error(err instanceof Error ? `No se pudo abrir: ${err.message}` : "No se pudo abrir el archivo");
+    }
+  }, [msg.mediaUrl, msg.fileName, msg.mimeType]);
 
   const isMediaType = msg.type === "sticker" || msg.type === "image" || msg.type === "video";
   if (isMediaType) {
@@ -615,7 +628,32 @@ export default React.memo(function MessageBubble({
         className={`max-w-[85%] rounded-2xl px-4 py-2.5 min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
           isMe ? activeMeBubble.css : activeThemBubble.css
         }`}
-        onClick={() => setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id)}
+        onClick={() => {
+          if (isFile) {
+            if (longPressRef.current) {
+              longPressRef.current = false;
+              return;
+            }
+            openFileMessage();
+            return;
+          }
+          setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id);
+        }}
+        onTouchStart={(e) => {
+          if (!isFile) return;
+          (e.currentTarget as HTMLElement).dataset.lpTimer = window.setTimeout(() => {
+            longPressRef.current = true;
+            setActiveReactionMenu(activeReactionMenu === msg.id ? null : msg.id);
+          }, 500).toString();
+        }}
+        onTouchMove={(e) => {
+          const timer = (e.currentTarget as HTMLElement).dataset.lpTimer;
+          if (timer) { clearTimeout(Number(timer)); delete (e.currentTarget as HTMLElement).dataset.lpTimer; }
+        }}
+        onTouchEnd={(e) => {
+          const timer = (e.currentTarget as HTMLElement).dataset.lpTimer;
+          if (timer) { clearTimeout(Number(timer)); delete (e.currentTarget as HTMLElement).dataset.lpTimer; }
+        }}
       >
         {msg.forwarded && (
           <div className="flex items-center gap-1 mb-1">
@@ -672,9 +710,7 @@ export default React.memo(function MessageBubble({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  shareMedia(msg.mediaUrl!, msg.fileName || "Documento")
-                    .then(() => toast.success("Enviado"))
-                    .catch(() => toast.error("No se pudo abrir el archivo"));
+                  openFileMessage();
                 }}
                 className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${isGlass ? "bg-gray-800/10 text-gray-800 hover:bg-gray-800/20" : "bg-white/20 text-white hover:bg-white/30"} transition-colors`}
                 title="Abrir archivo"

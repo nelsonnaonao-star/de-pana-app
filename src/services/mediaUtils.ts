@@ -1,7 +1,10 @@
 import { Media } from "@capacitor-community/media";
 import { Share } from "@capacitor/share";
+import { Filesystem, Directory } from "@capacitor/filesystem";
 import { Capacitor } from "@capacitor/core";
 import { supabase } from "../lib/supabase";
+import { FileOpener } from "@capawesome-team/capacitor-file-opener";
+import { mimeTypeFor } from "./mime";
 
 const ALBUM_NAME = "RED ON";
 
@@ -101,4 +104,71 @@ export async function shareMedia(url: string, title: string): Promise<void> {
     return;
   }
   await Share.share({ title, url });
+}
+
+export async function openDocument(url: string, fileName: string, mimeType?: string): Promise<void> {
+  const inferred = mimeTypeFor(fileName, mimeType);
+
+  if (!Capacitor.isNativePlatform()) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    link.target = "_blank";
+    link.rel = "noreferrer noopener";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return;
+  }
+
+  // Native: download to cache and open via the native viewer intent (FileOpener).
+  const headers: Record<string, string> = {};
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) {
+      headers["Authorization"] = `Bearer ${session.access_token}`;
+    }
+  } catch { /* proceed without auth */ }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  let blob: Blob;
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    blob = await response.blob();
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!blob || blob.size === 0) {
+    throw new Error("Empty file body");
+  }
+
+  const arrayBuffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  const CHUNK = 0x8000;
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
+  }
+  const base64 = btoa(chunks.join(""));
+
+  const path = `downloads/${fileName}`;
+  await Filesystem.writeFile({
+    path,
+    data: base64,
+    directory: Directory.Cache,
+    recursive: true,
+  });
+
+  const { uri } = await Filesystem.getUri({
+    path,
+    directory: Directory.Cache,
+  });
+
+  await FileOpener.openFile({
+    path: uri,
+    mimeType: inferred || "*/*",
+  });
 }

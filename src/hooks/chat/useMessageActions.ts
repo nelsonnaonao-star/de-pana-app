@@ -9,6 +9,12 @@ import { revokeCachedMedia } from "../../services/mediaCache";
 import { supabase } from "../../lib/supabase";
 import toast from "react-hot-toast";
 
+function formatFileSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return "0 KB";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export interface UseMessageActionsParams {
   chatId: string;
   uid: string;
@@ -458,7 +464,7 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
         id: tempId, sender: "me", timestamp, type,
         mediaUrl: blobUrl,
         fileName: file.name,
-        fileSize: shouldCompress ? "Comprimiendo…" : `${(file.size / 1024 / 1024).toFixed(1)} MB`,
+        fileSize: shouldCompress ? "Comprimiendo…" : formatFileSize(file.size),
         status: "sending",
         synced: false,
         posterUrl,
@@ -473,13 +479,13 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
         if (shouldCompress) {
           const compressed = await compressVideo(file);
           fileToUpload = compressed instanceof Blob ? new File([compressed], file.name, { type: compressed.type }) : file;
-          const newSize = `${(fileToUpload.size / 1024 / 1024).toFixed(1)} MB`;
+          const newSize = formatFileSize(fileToUpload.size);
           setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: newSize } : m));
         }
       } catch (e: any) {
         console.warn("[CHAT] Compression failed, using original:", e?.message);
         fileToUpload = file;
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: `${(file.size / 1024 / 1024).toFixed(1)} MB` } : m));
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: formatFileSize(file.size) } : m));
       }
 
       try {
@@ -500,7 +506,7 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
           else {
             payload.file_url = url;
             payload.document_name = file.name;
-            payload.document_size = file.size ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : null;
+            payload.document_size = file.size ? formatFileSize(file.size) : null;
             payload.document_type = file.type || null;
             payload.mime_type = file.type || null;
           }

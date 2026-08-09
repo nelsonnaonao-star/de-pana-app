@@ -22,6 +22,7 @@ dependencies {
     implementation project(':capacitor-push-notifications')
     implementation project(':capacitor-share')
     implementation project(':capacitor-splash-screen')
+    implementation project(':capawesome-team-capacitor-file-opener')
     implementation project(':sentry-capacitor')
 
 }

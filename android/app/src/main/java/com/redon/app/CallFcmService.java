@@ -71,6 +71,9 @@ public class CallFcmService extends FirebaseMessagingService {
         try {
             NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nmgr == null) return;
+            // Forzar recreación para aplicar siempre el sonido actual del canal solicitado
+            // (Android 8+ ignora setSound() sobre un canal ya creado).
+            nmgr.deleteNotificationChannel(channelId);
             AudioAttributes audioAttrs = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION).build();
             NotificationChannel chan = new NotificationChannel(
@@ -124,6 +127,24 @@ public class CallFcmService extends FirebaseMessagingService {
         Log.d(TAG, "onMessageReceived: " + message.getData());
 
         String type = message.getData().get("type");
+
+        // El push "call_dismissed" avisa que una llamada terminó (ringing -> ended/missed).
+        // NO es un mensaje: no debe renderizarse como notificación de "Nuevo mensaje".
+        if ("call_dismissed".equals(type)) {
+            Log.d(TAG, "call_dismissed — cancelling call notification, no message shown");
+            String chatId = message.getData().get("chatId");
+            if (chatId != null) {
+                int notificationId = ("call-" + chatId).hashCode();
+                NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nmgr != null) nmgr.cancel(notificationId);
+            }
+            try {
+                PushNotificationsPlugin.sendRemoteMessage(message);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to bridge call_dismissed to Capacitor JS", e);
+            }
+            return;
+        }
 
         if (isAppInForeground()) {
             // App is visible: bridge to JS only — native notification would duplicate the in-app CallOverlay

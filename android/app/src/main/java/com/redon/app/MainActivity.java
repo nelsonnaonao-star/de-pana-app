@@ -22,6 +22,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
 
     private static final String TAG = "MainActivity";
+    private static final String PENDING_CALL_KEY = "redon_pending_call";
     private static MainActivity instance;
 
     public static Object getCapacitorBridge() {
@@ -63,12 +64,25 @@ public class MainActivity extends BridgeActivity {
             String callerName = intent.getStringExtra("callerName");
             String callType = intent.getStringExtra("callType");
             if (callType == null) callType = intent.getStringExtra("call_type");
+            String json;
             try {
-                String json = "{\"callerId\":\"" + (callerId != null ? callerId : "") +
+                org.json.JSONObject payload = new org.json.JSONObject();
+                payload.put("chatId", chatId != null ? chatId : "");
+                payload.put("callerId", callerId != null ? callerId : "");
+                payload.put("callerName", callerName != null ? callerName : "");
+                payload.put("callType", callType != null ? callType : "audio");
+                json = payload.toString();
+            } catch (Exception e) {
+                json = "{\"chatId\":\"" + (chatId != null ? chatId : "") +
+                    "\",\"callerId\":\"" + (callerId != null ? callerId : "") +
                     "\",\"callerName\":\"" + (callerName != null ? callerName : "") +
-                    "\",\"callType\":\"" + (callType != null ? callType : "audio") +
-                    "\",\"chatId\":\"" + (chatId != null ? chatId : "") + "\"}";
-                bridge.triggerWindowJSEvent("incoming-call", json);
+                    "\",\"callType\":\"" + (callType != null ? callType : "audio") + "\"}";
+            }
+            // Sticky "answer": se persiste para que JS pueda reconectar la llamada incluso si
+            // el evento answer-call se pierde en un arranque en frío (listener aún no montado).
+            persistPendingCall(json);
+            try {
+                bridge.triggerWindowJSEvent("answer-call", json);
             } catch (Exception e) {
                 Log.e(TAG, "Failed to trigger JS event", e);
             }
@@ -110,6 +124,18 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    private void persistPendingCall(String json) {
+        try {
+            getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE)
+                .edit()
+                .putString(PENDING_CALL_KEY, json)
+                .apply();
+            Log.d(TAG, "Persisted pending answer: " + json);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to persist pending answer", e);
+        }
+    }
+
     private String getSoundPref(String key, String def) {
         try {
             SharedPreferences prefs = getSharedPreferences("CapacitorStorage", MODE_PRIVATE);
@@ -142,6 +168,10 @@ public class MainActivity extends BridgeActivity {
             String msgRaw = rawNameFor("message", msgSound);
             String callRaw = rawNameFor("call", callSound);
 
+            // Forzar la recreación del channel base para aplicar el sonido guardado
+            // (Android 8+ no permite cambiar el sonido de un channel existente).
+            nm.deleteNotificationChannel("redon-messages");
+
             NotificationChannel messagesChannel = new NotificationChannel(
                 "redon-messages", "Mensajes", NotificationManager.IMPORTANCE_HIGH
             );
@@ -154,6 +184,9 @@ public class MainActivity extends BridgeActivity {
             messagesChannel.enableLights(true);
             messagesChannel.setShowBadge(true);
             nm.createNotificationChannel(messagesChannel);
+
+            // Forzar recreación del channel de llamadas para aplicar el sonido guardado.
+            nm.deleteNotificationChannel("redon-calls");
 
             NotificationChannel callsChannel = new NotificationChannel(
                 "redon-calls", "Llamadas", NotificationManager.IMPORTANCE_HIGH

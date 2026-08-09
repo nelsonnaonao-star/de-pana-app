@@ -14,17 +14,7 @@ import { Chat, Message, ActiveCall } from "../types";
 import WelcomeScreen from "./WelcomeScreen";
 import ChatRoom from "./ChatRoom";
 import CallOverlay from "./CallOverlay";
-import QrScanner from "./QrScanner";
-import MyQrCode from "./MyQrCode";
-import AddContact from "./AddContact";
-import AddContactManual from "./AddContactManual";
-import SyncedContacts from "./SyncedContacts";
-import ContactsList from "./ContactsList";
-import BusinessPanel, { BusinessFlyer } from "./BusinessPanel";
-import RatesPanel from "./RatesPanel";
-import StatesPanel from "./StatesPanel";
-import ChannelsPanel from "./ChannelsPanel";
-import CallLog from "./CallLog";
+import type { BusinessFlyer } from "./BusinessPanel";
 import BottomTabBar from "./phone/BottomTabBar";
 import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
@@ -39,6 +29,7 @@ import { WebRTCService } from "../services/webrtc";
 import { startCall as apiStartCall, updateCallRating, updateCallStatus } from "../services/calls";
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { Preferences } from '@capacitor/preferences';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 import { playSound, playSoundOption, getSoundId, setSoundId, stopSound } from "../services/soundService";
@@ -48,7 +39,6 @@ import { updateProfile } from "../services/auth";
 import { db } from "../services/database/DatabaseService";
 import CallRatingModal from "./CallRatingModal";
 import SimulatorTabHeader from "./simulator/SimulatorTabHeader";
-import SimulatorCreateGroup from "./simulator/SimulatorCreateGroup";
 import SimulatorForwardModal from "./simulator/SimulatorForwardModal";
 import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
 import ImageLightbox from "./chat/overlays/ImageLightbox";
@@ -56,6 +46,30 @@ import ImageLightbox from "./chat/overlays/ImageLightbox";
 // Module-level set of chat ids already animated this session — survives remounts
 // so returning to the chats list doesn't replay the fade-in on seen items.
 const animatedChatIds = new Set<string>();
+
+const QrScanner = React.lazy(() => import("./QrScanner"));
+const MyQrCode = React.lazy(() => import("./MyQrCode"));
+const StatesPanel = React.lazy(() => import("./StatesPanel"));
+const ChannelsPanel = React.lazy(() => import("./ChannelsPanel"));
+const ContactsList = React.lazy(() => import("./ContactsList"));
+const CallLog = React.lazy(() => import("./CallLog"));
+const RatesPanel = React.lazy(() => import("./RatesPanel"));
+const BusinessPanel = React.lazy(() => import("./BusinessPanel"));
+const AddContact = React.lazy(() => import("./AddContact"));
+const AddContactManual = React.lazy(() => import("./AddContactManual"));
+const SyncedContacts = React.lazy(() => import("./SyncedContacts"));
+const SimulatorCreateGroup = React.lazy(() => import("./simulator/SimulatorCreateGroup"));
+const ShallowSpinner = ({ label }: { label: string }) => (
+  <div className="flex items-center justify-center h-full w-full bg-white">
+    <div className="flex flex-col items-center gap-3">
+      <div className="w-8 h-8 rounded-full border-2 border-red-500 border-t-transparent animate-spin" />
+      <span className="text-xs text-gray-400">{label}</span>
+    </div>
+  </div>
+);
+const LazyPanel = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <React.Suspense fallback={<ShallowSpinner label={label} />}>{children}</React.Suspense>
+);
 
 interface PhoneSimulatorProps {
   isCorrected?: boolean;
@@ -247,6 +261,10 @@ export default function PhoneSimulator({
   // Ringtone for incoming calls (looped playback of ringtone.mp3)
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const notificationAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Evita conectar dos veces la misma llamada (evento vivo + sticky pendiente).
+  const answeredCallRef = useRef(false);
+  // Referencia mutable al flujo de auto-respuesta (el effect que lo usa se declara antes).
+  const runAnswerFlowRef = useRef<((detail: any) => Promise<void>) | null>(null);
 
   const playIncomingRingtone = useCallback(() => {
     try {
@@ -260,6 +278,7 @@ export default function PhoneSimulator({
   }, []);
 
   const stopIncomingRingtone = useCallback(() => {
+    stopSound();
     if (ringtoneAudioRef.current) {
       try { ringtoneAudioRef.current.pause(); ringtoneAudioRef.current.currentTime = 0; } catch {}
       ringtoneAudioRef.current = null;
@@ -1111,6 +1130,7 @@ export default function PhoneSimulator({
           } catch {}
         }
         console.log('[WEBRTC SIGNALING] ✅ Setting activeCall from FCM — caller:', d.callerName, 'status: incoming, callId:', incomingCallId);
+        answeredCallRef.current = false;
         playIncomingRingtone();
         setActiveCall({
           id: incomingCallId || ('call_' + Date.now()),
@@ -1174,15 +1194,38 @@ export default function PhoneSimulator({
         setRefetchTrigger(n => n + 1);
       }
     };
+    const handleAnswerCall = (e: Event) => {
+      console.log('[WEBRTC SIGNALING] 📱 answer-call event received');
+      runAnswerFlowRef.current?.((e as CustomEvent).detail);
+    };
     window.addEventListener('incoming-call', handleIncomingCall);
     window.addEventListener('call_dismissed', handleIncomingCall);
     window.addEventListener('open-chat', handleOpenChat);
     window.addEventListener('new-message-received', handleNewMessage);
+    window.addEventListener('answer-call', handleAnswerCall);
+
+    // Sticky answer: si el usuario respondió desde la notificación mientras la app
+    // estaba en segundo plano/arrancando en frío, MainActivity persiste el intent
+    // en CapacitorStorage y lo restauramos acá (el evento answer-call se pierde).
+    (async () => {
+      if (!Capacitor.isNativePlatform()) return;
+      try {
+        const pending = await Preferences.get({ key: 'redon_pending_call' });
+        if (pending?.value) {
+          console.log('[WEBRTC SIGNALING] 📦 Pending call answer restored from storage');
+          await runAnswerFlowRef.current?.(pending.value);
+        }
+      } catch (e) {
+        console.warn('[WEBRTC SIGNALING] Pending answer read failed:', e);
+      }
+    })();
+
     return () => {
       window.removeEventListener('incoming-call', handleIncomingCall);
       window.removeEventListener('call_dismissed', handleIncomingCall);
       window.removeEventListener('open-chat', handleOpenChat);
       window.removeEventListener('new-message-received', handleNewMessage);
+      window.removeEventListener('answer-call', handleAnswerCall);
     };
   }, [user?.id, selectedChatId, currentScreen]);
 
@@ -1246,16 +1289,116 @@ export default function PhoneSimulator({
     const contactName = callContactNameRef.current || activeCallRef.current?.contactName || '';
     stopRingbackTone();
     stopIncomingRingtone();
+    stopSound();
     webrtcRef.current?.cleanup();
     webrtcRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
     setActiveCall(null);
     callWasConnectedRef.current = false;
+    answeredCallRef.current = false;
     if (wasConnected && callId) {
       setCallRating({ callId, contactName });
     }
   }, [stopRingbackTone, stopIncomingRingtone]);
+
+  // Conecta como callee la llamada ya aceptada (se usa al responder desde la
+  // notificación con la app en segundo plano/minimizada).
+  const connectToCallee = useCallback(async (callId: string, callerId: string, callerName: string, callType: string, avatar?: string) => {
+    if (!user) return;
+    stopIncomingRingtone();
+    setActiveCall({
+      id: callId,
+      contactName: callerName || 'Llamada entrante',
+      contactAvatar: avatar || '',
+      type: callType as 'audio' | 'video',
+      status: 'connecting',
+      durationSeconds: 0,
+      isMuted: false,
+      isVideoOff: false,
+      isGroup: false,
+      targetUserId: callerId,
+    });
+    try {
+      const webrtc = new WebRTCService(callId, user.id);
+      webrtcRef.current = webrtc;
+      webrtc.onRemoteStream = (stream) => {
+        console.log('[WEBRTC SIGNALING] 📹 Remote stream received (answer-call) — CONNECTED');
+        setRemoteStream(stream);
+        setActiveCall((prev) => prev ? { ...prev, status: 'connected' } : null);
+        callWasConnectedRef.current = true;
+        callContactNameRef.current = activeCallRef.current?.contactName || callerName || '';
+      };
+      webrtc.onConnectionStateChange = (state) => {
+        console.log('[WEBRTC SIGNALING] 🔗 Callee ICE state:', state);
+      };
+      webrtc.onCallEnded = () => {
+        console.log('[WEBRTC SIGNALING] 📞 Call ended (auto-answered callee)');
+        cleanupCall();
+      };
+      console.log('[WEBRTC SIGNALING] 📞 Callee (answer-call): getting local stream...');
+      const local = await webrtc.startLocalStream(true, callType === 'video');
+      setLocalStream(local);
+      console.log('[WEBRTC SIGNALING] ✅ Callee (answer-call): getUserMedia done');
+      await webrtc.createPeerConnection();
+      await webrtc.subscribeToSignals();
+      webrtc.signalCalleeReady()
+        .then(() => console.log('[WEBRTC SIGNALING] ✅ Callee-ready signal sent'))
+        .catch((e) => console.warn('[WEBRTC SIGNALING] ⚠️ Callee-ready signal failed:', e?.message));
+    } catch (err) {
+      console.error('[WEBRTC SIGNALING] ❌ Failed to answer call:', err);
+      toast.error('No se pudo conectar la llamada');
+      cleanupCall();
+    }
+  }, [user, stopIncomingRingtone, cleanupCall, callWasConnectedRef, callContactNameRef, activeCallRef, setLocalStream, setRemoteStream, setActiveCall]);
+
+  // Flujo de "respuesta" desde la notificación (evento answer-call) o desde el
+  // sticky persistido por MainActivity en arranques en frío.
+  const runAnswerFlow = useCallback(async (detail: any) => {
+    if (!user) return;
+    if (answeredCallRef.current) {
+      Preferences.remove({ key: 'redon_pending_call' }).catch(() => {});
+      return;
+    }
+    const d = typeof detail === 'string'
+      ? (() => { try { return JSON.parse(detail); } catch { return {}; } })()
+      : detail;
+    const chatId = d?.chatId || d?.roomId || '';
+    const callerId = d?.callerId || '';
+    const callType = d?.callType || 'audio';
+    const callerName = d?.callerName || 'Llamada entrante';
+    const callerAvatar = d?.callerAvatar || '';
+    if (!chatId || !callerId) {
+      console.warn('[WEBRTC SIGNALING] ❌ answer-call sin chatId/callerId:', { chatId, callerId });
+      return;
+    }
+    answeredCallRef.current = true;
+    console.log('[WEBRTC SIGNALING] ✅ answer-call — auto aceptando, caller:', callerName);
+    try {
+      const { data: rows, error } = await supabase
+        .from('calls')
+        .select('id, call_type, chat_id, caller_id')
+        .eq('chat_id', chatId)
+        .eq('callee_id', user.id)
+        .order('started_at', { ascending: false })
+        .limit(1);
+      if (error) throw error;
+      const call = rows?.[0];
+      if (!call) {
+        console.warn('[WEBRTC SIGNALING] ❌ No hay llamada para responder:', { chatId });
+        throw new Error('Llamada no encontrada');
+      }
+      updateCallStatus(call.id, 'accepted').catch((e) => console.warn('[CALL] Failed to set accepted:', e));
+      await connectToCallee(call.id, callerId, callerName, callType, callerAvatar);
+    } catch (err: any) {
+      console.error('[WEBRTC SIGNALING] ❌ answer-call failed:', err?.message || err);
+      toast.error('No se pudo conectar la llamada');
+    } finally {
+      Preferences.remove({ key: 'redon_pending_call' }).catch(() => {});
+    }
+  }, [user, connectToCallee, updateCallStatus]);
+
+  runAnswerFlowRef.current = runAnswerFlow;
 
   const cleanupCallRef = useRef<(() => void) | null>(null);
   cleanupCallRef.current = cleanupCall;
@@ -1804,6 +1947,9 @@ export default function PhoneSimulator({
                   setCurrentScreen("chats");
                 }}
                 onSendMessage={handleSendMessageInRoom}
+                onChatMessagesChanged={(chatId, msgs) => {
+                  setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: msgs } : c));
+                }}
                 onTriggerCall={handleTriggerCallFromChat}
                 callInProgress={isInitiatingCall}
                 onForwardMessage={setForwardingMessage}
@@ -1840,16 +1986,19 @@ export default function PhoneSimulator({
           )}
           {currentScreen === "qr_scanner" && (
             <div className="absolute inset-0 z-50 bg-white">
+              <React.Suspense fallback={<ShallowSpinner label="Cargando escáner QR…" />}>
               <QrScanner
                 userName={registeredUser?.name || "Nelson Castro"}
                 userPhone={registeredUser?.phone || "+58 412 1234567"}
                 onBack={() => setCurrentScreen("chats")}
                 onContactAdded={handleContactAddedByQr}
               />
+              </React.Suspense>
             </div>
           )}
           {currentScreen === "my_qr" && (
             <div className="absolute inset-0 z-50 bg-white">
+              <React.Suspense fallback={<ShallowSpinner label="Cargando mi código" />}>
               <MyQrCode
               userId={user?.id || ""}
               name={registeredUser?.name || ""}
@@ -1857,37 +2006,45 @@ export default function PhoneSimulator({
               avatar={registeredUser?.avatar || ""}
               onBack={() => setCurrentScreen("chats")}
             />
+              </React.Suspense>
             </div>
           )}
           {currentScreen === "add_contact" && (
             <div className="absolute inset-0 z-50 bg-white">
+              <LazyPanel label="Cargando contacto…">
               <AddContact
                 currentUserId={user?.id || ""}
                 onBack={() => setCurrentScreen("chats")}
                 onContactAdded={handleContactAddedByQr}
               />
+              </LazyPanel>
             </div>
           )}
           {currentScreen === "add_contact_manual" && (
             <div className="absolute inset-0 z-50 bg-white">
+              <LazyPanel label="Cargando formulario…">
               <AddContactManual
                 currentUserId={user?.id || ""}
                 currentUserPhone={profile?.phone_number || registeredUser?.phone || ""}
                 onBack={() => setCurrentScreen("chats")}
               />
+              </LazyPanel>
             </div>
           )}
           {currentScreen === "synced_contacts" && (
             <div className="absolute inset-0 z-50 bg-white">
+              <LazyPanel label="Sincronizando contactos…">
               <SyncedContacts
                 currentUserId={user?.id || ""}
                 onBack={() => setCurrentScreen("chats")}
                 onStartChat={handleStartChatFromSynced}
               />
+              </LazyPanel>
             </div>
           )}
           {currentScreen === "create_group" && (
             <div className="absolute inset-0 z-50 bg-white">
+              <LazyPanel label="Cargando grupo…">
               <SimulatorCreateGroup
                 onBack={() => setCurrentScreen("chats")}
                 groupName={groupNameInput}
@@ -1907,6 +2064,7 @@ export default function PhoneSimulator({
                 onToggleAdminOnly={() => setGroupAdminOnly(!groupAdminOnly)}
                 onCreateGroup={handleCreateGroup}
               />
+              </LazyPanel>
             </div>
           )}
 
@@ -1930,7 +2088,9 @@ export default function PhoneSimulator({
 
               {/* STATES TAB — outside main content for stable flex layout */}
               <div className={currentScreen === "states" ? "flex flex-1" : "hidden"}>
-                <StatesPanel onStartChat={handleStartChatFromState} onHasUnseen={(v) => setHasUnseenStates(v)} />
+                <LazyPanel label="Cargando historias…">
+                  <StatesPanel onStartChat={handleStartChatFromState} onHasUnseen={(v) => setHasUnseenStates(v)} />
+                </LazyPanel>
               </div>
 
               {/* Main Tab Content Body */}
@@ -2152,11 +2312,14 @@ export default function PhoneSimulator({
 
                   {/* CHANNELS TAB */}
                 {currentScreen === "channels" && (
-                  <ChannelsPanel />
+                  <LazyPanel label="Cargando canales…">
+                    <ChannelsPanel />
+                  </LazyPanel>
                 )}
 
                 {/* CONTACTS TAB */}
                 <div className={`flex-1 overflow-y-auto h-full ${currentScreen === "contacts" ? "" : "hidden"}`}>
+                  <LazyPanel label="Cargando contactos…">
                   <ContactsList
                     contacts={dedupedContacts}
                     onSelectContact={(contact) => {
@@ -2178,24 +2341,30 @@ export default function PhoneSimulator({
                     onAddContact={() => setCurrentScreen("add_contact_manual")}
                     onDeleteContact={handleDeleteContact}
                   />
+                  </LazyPanel>
                 </div>
 
                 {/* CALLS TAB */}
                 {currentScreen === "calls" && user && (
+                  <LazyPanel label="Cargando llamadas…">
                   <CallLog
                     userId={user.id}
                     onBack={() => setCurrentScreen("chats")}
                     onStartChat={handleStartChatFromCall}
                   />
+                  </LazyPanel>
                 )}
 
                 {/* RATES TAB */}
                 {currentScreen === "rates" && (
+                  <LazyPanel label="Cargando tarifas…">
                   <RatesPanel />
+                  </LazyPanel>
                 )}
 
                 {/* BUSINESS TAB */}
                 {currentScreen === "business" && (
+                  <LazyPanel label="Cargando negocios…">
                   <BusinessPanel
                     onStartBusinessChat={handleStartBusinessChat}
                     flyers={flyers}
@@ -2209,6 +2378,7 @@ export default function PhoneSimulator({
                     currentUserAvatar={registeredUser?.avatar}
                     currentUserPhone={registeredUser?.phone}
                   />
+                  </LazyPanel>
                 )}
 
                 {/* PROFILE TAB */}

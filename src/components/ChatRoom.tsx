@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { X } from "lucide-react";
@@ -36,6 +36,7 @@ interface ChatRoomProps {
   onMessageDeleted?: (chatId: string, messageId: string) => void;
   onChatCleared?: (chatId: string) => void;
   onChatUpdated?: (chatId: string, updates: Partial<Chat>) => void;
+  onChatMessagesChanged?: (chatId: string, messages: Message[]) => void;
   currentUserId?: string;
   currentUserName?: string;
   refetchTrigger?: number;
@@ -43,7 +44,7 @@ interface ChatRoomProps {
   onOpenProfile?: () => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, onChatMessagesChanged, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
   const { user, profile } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -72,9 +73,21 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [searchQuery, setSearchQuery] = useState("");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [searchIndex, setSearchIndex] = useState(0);
+  // Red de seguridad anti-duplicado: un mismo id jamás se renderiza dos veces
+  // (evita mensajes espejo cuando un refetch/merge coincide con el optimista).
+  const dedupedMessages = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Message[] = [];
+    for (const m of messages) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      out.push(m);
+    }
+    return out;
+  }, [messages]);
   const filteredMessages = searchQuery.trim()
-    ? messages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
-    : messages;
+    ? dedupedMessages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
+    : dedupedMessages;
 
   const mapApiMsg = (m: any): Message => {
     const durNum = m.audio_duration ? Number(m.audio_duration) : 0;
@@ -90,6 +103,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       duration: durStr,
       fileName: m.document_name || m.file_name || m.image_alt || undefined,
       fileSize: m.document_size || undefined,
+      mimeType: m.mime_type || undefined,
       reactions: m.reactions,
       status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
       forwarded: m.forwarded || false,
@@ -126,13 +140,25 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   });
 
   // Safe merge: deduplicates by id, preserves existing references when nothing changed.
-  // Only creates new array/sorted if there are actual changes.
+  // Only creates new array/sorted if there are actual changes. NUNCA elimina una
+  // fila legítima: un mensaje optimista (temp) se funde EN EL MISMO ÍNDICE con la
+  // fila confirmada del servidor, nunca se descarta y se pierde.
   const safeMergeMessages = (prev: Message[], incoming: Message[]): Message[] => {
     if (incoming.length === 0) return prev;
 
     const incomingMap = new Map<string, Message>();
     for (const msg of incoming) {
       incomingMap.set(msg.id, msg);
+    }
+
+    // Cuenta mensajes "me" por contenido para no fusionar dos envíos distintos
+    // que comparten el mismo texto (ej. "hola" enviado dos veces).
+    const meByKeyCount = new Map<string, number>();
+    for (const m of prev) {
+      if (m.sender === "me") {
+        const k = m.text || m.mediaUrl || "";
+        if (k) meByKeyCount.set(k, (meByKeyCount.get(k) || 0) + 1);
+      }
     }
 
     let changed = false;
@@ -151,6 +177,24 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         }
         return msg;
       }
+      // Reconciliación en el mismo lugar: un temp optimista (relojito) cuyo
+      // contenido coincide con la fila confirmada se sustituye por ella en el
+      // mismo índice → UNA sola fila, ni duplicado ni pérdida.
+      if (
+        msg.sender === "me" &&
+        (msg.id?.startsWith("temp_") || msg.id?.startsWith("msg_"))
+      ) {
+        const key = msg.text || msg.mediaUrl || "";
+        if (key && (meByKeyCount.get(key) || 0) <= 1) {
+          for (const [id, srv] of incomingMap) {
+            if (srv.sender === "me" && (srv.text || srv.mediaUrl || "") === key) {
+              incomingMap.delete(id);
+              changed = true;
+              return { ...msg, ...srv, id: srv.id };
+            }
+          }
+        }
+      }
       return msg;
     });
 
@@ -167,6 +211,26 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         const tb = b.rawCreatedAt || b.timestamp || "";
         return ta < tb ? -1 : ta > tb ? 1 : 0;
       });
+    }
+
+    // Red final: jamás renderizar el mismo id dos veces.
+    const seen = new Set<string>();
+    let hadDuplicates = false;
+    const deduped = merged.filter((m) => {
+      if (seen.has(m.id)) { hadDuplicates = true; return false; }
+      seen.add(m.id);
+      return true;
+    });
+
+    if (changed || hadDuplicates) {
+      if (hadDuplicates) {
+        deduped.sort((a, b) => {
+          const ta = a.rawCreatedAt || a.timestamp || "";
+          const tb = b.rawCreatedAt || b.timestamp || "";
+          return ta < tb ? -1 : ta > tb ? 1 : 0;
+        });
+        return deduped;
+      }
       return merged;
     }
     return prev;
@@ -186,12 +250,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       // 1. Load cached messages immediately (offline-first)
       messageRepo.getMessages(chat.id).then(cached => {
         if (cached.length > 0) {
-          setMessages(prev => {
-            if (prev.length === 0) return cached.filter(m => !m.id.startsWith('temp_') && !m.id.startsWith('msg_'));
-            const existingIds = new Set(prev.map(m => m.id));
-            const newFromCache = cached.filter(m => !existingIds.has(m.id) && !m.id?.startsWith('temp_'));
-            return newFromCache.length > 0 ? [...newFromCache, ...prev] : prev;
-          });
+          // Merge consciente: elimina tems optimistas viejos (relojito) cuando la
+          // caché ya tiene la fila confirmada, y no duplica por id.
+          setMessages(prev => safeMergeMessages(prev, cached));
           setHasMoreOlder(true);
         }
 
@@ -280,6 +341,17 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     }
   }, [chat.id, messages]);
 
+  // Fuente de verdad hacia el padre: cada cambio de mensajes real se propaga una
+  // sola vez (sin re-diputar por la identidad del callback).
+  const onChatMessagesChangedRef = useRef(onChatMessagesChanged);
+  useEffect(() => { onChatMessagesChangedRef.current = onChatMessagesChanged; });
+  useEffect(() => {
+    if (chat.id && onChatMessagesChangedRef.current) {
+      onChatMessagesChangedRef.current(chat.id, messages);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.id, messages]);
+
   // Live Chat Style states with localStorage caching
   const [selectedBgId, setSelectedBgId] = useState(() => {
     return localStorage.getItem("chat_bg_id") || "default";
@@ -361,17 +433,37 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       } else {
         setMessages(prev => {
           const alreadyInState = prev.some(m => m.id === raw.id);
-          if (alreadyInState) return prev;
+          if (alreadyInState) {
+            // Un refetch ya metió la fila del servidor; si aún queda el optimista
+            // colgado, fusionarlo y eliminar la copia repetida. Se empareja POR
+            // CONTENIDO (no por orden) para no tocar un envío distinto.
+            const pendingIndex = prev.findIndex(m =>
+              (m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) &&
+              (m.status === 'sending' || m.status === 'error') &&
+              ((raw?.type ?? 'text') === (m.type ?? 'text')) &&
+              ((raw?.type ?? 'text') !== 'text' || (m.text ?? '') === (raw?.text ?? ''))
+            );
+            if (pendingIndex !== -1) {
+              const reconciled = { ...mapped, id: raw.id, status: "sent" as const, synced: true };
+              messageRepo.upsertMessage(chat.id, { ...reconciled, chatId: chat.id });
+              const updated = [...prev];
+              updated[pendingIndex] = reconciled;
+              return updated.filter((m, i) => m.id !== raw.id || i === pendingIndex);
+            }
+            return prev;
+          }
           const pendingIndex = prev.findIndex(m =>
             (m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) &&
-            (m.status === 'sending' || m.status === 'error')
+            (m.status === 'sending' || m.status === 'error') &&
+            ((raw?.type ?? 'text') === (m.type ?? 'text')) &&
+            ((raw?.type ?? 'text') !== 'text' || (m.text ?? '') === (raw?.text ?? ''))
           );
           if (pendingIndex !== -1) {
             const reconciled = { ...mapped, id: raw.id, status: "sent" as const, synced: true };
             messageRepo.upsertMessage(chat.id, { ...reconciled, chatId: chat.id });
             const updated = [...prev];
             updated[pendingIndex] = reconciled;
-            return updated;
+            return updated.filter((m, i) => m.id !== raw.id || i === pendingIndex);
           }
           return [...prev, { ...mapped, synced: true }];
         });
@@ -490,9 +582,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       virtuosoRef.current.scrollToIndex({ index: messages.length - 1, behavior: "auto" });
     }
   };
+  // Solo pega el scroll abajo si ya estás abajo; si estás leyendo hacia arriba,
+  // no te brinca (evita el parpadeo de "desaparece y aparece").
+  const atBottomRef = useRef(true);
 
   useEffect(() => {
-    if (messages.length > 0) {
+    if (messages.length > 0 && atBottomRef.current) {
       const timer = setTimeout(scrollToBottom, 50);
       return () => clearTimeout(timer);
     }
@@ -858,8 +953,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         <Virtuoso
           ref={virtuosoRef}
           className="h-full"
-          data={showSearch && searchQuery.trim() ? filteredMessages : messages}
+          data={showSearch && searchQuery.trim() ? filteredMessages : dedupedMessages}
           followOutput="smooth"
+          atBottomStateChange={(isAtBottom) => { atBottomRef.current = isAtBottom; }}
           startReached={() => {
             if (!loadingOlder && hasMoreOlder) loadOlderMessages();
           }}

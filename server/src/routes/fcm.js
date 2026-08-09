@@ -217,7 +217,7 @@ router.post('/webhook', async (req, res) => {
   }
 
   if (type === 'INSERT' && table === 'messages') {
-    const { chat_id, sender_id, text } = record;
+    const { chat_id, sender_id, text, type: msgType, file_url, document_name, document_size, document_type, mime_type, image_url, video_url, audio_url } = record;
 
     if (!chat_id || !sender_id) {
       return res.status(200).json({ ok: true, skipped: 'missing ids' });
@@ -391,6 +391,15 @@ router.post('/webhook', async (req, res) => {
                   type: 'message',
                   chatId: chat_id,
                   contactId: sender_id,
+                  msgType: msgType || undefined,
+                  fileUrl: file_url || undefined,
+                  documentName: document_name || undefined,
+                  documentSize: document_size || undefined,
+                  documentType: document_type || undefined,
+                  mimeType: mime_type || undefined,
+                  imageUrl: image_url || undefined,
+                  videoUrl: video_url || undefined,
+                  audioUrl: audio_url || undefined,
                 },
                 android: { priority: 'high', ttl: 86400000 },
               });

@@ -45,10 +45,16 @@ export default defineConfig(() => {
         output: {
           manualChunks(id) {
             if (id.includes('node_modules')) {
+              if (id.includes('@imgly')) return 'imgly';
+              if (id.includes('fabric')) return 'fabric';
+              if (id.includes('@google/genai')) return 'genai';
               if (id.includes('@supabase') || id.includes('supabase-js')) return 'supabase';
               if (id.includes('@capacitor')) return 'capacitor';
+              if (id.includes('react-virtuoso')) return 'virtuoso';
               if (id.includes('lucide')) return 'lucide';
               if (id.includes('@sentry')) return 'sentry';
+              if (id.includes('motion')) return 'motion';
+              if (id.includes('qrcode') || id.includes('jsqr')) return 'qr';
               return 'vendor';
             }
           },

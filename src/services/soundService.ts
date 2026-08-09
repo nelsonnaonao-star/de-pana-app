@@ -7,7 +7,7 @@ const STORAGE_KEYS: Record<SoundEvent, string> = {
   call: "redon_sound_call",
 };
 
-const lastAudioRef: { current: HTMLAudioElement | null } = { current: null };
+const activeAudiosRef: { current: Set<HTMLAudioElement> } = { current: new Set() };
 
 export const getSoundId = (event: SoundEvent): string => {
   try {
@@ -45,7 +45,7 @@ export const playSoundOption = (event: SoundEvent, id: string, volume = 0.7): HT
     audio.loop = !!sound.loop;
     audio.volume = volume;
     audio.play().catch(() => {});
-    lastAudioRef.current = audio;
+    activeAudiosRef.current.add(audio);
     return audio;
   } catch {
     return null;
@@ -61,7 +61,7 @@ export const playSound = (event: SoundEvent, volume = 0.7): HTMLAudioElement | n
     audio.loop = !!sound.loop;
     audio.volume = volume;
     audio.play().catch(() => {});
-    lastAudioRef.current = audio;
+    activeAudiosRef.current.add(audio);
     return audio;
   } catch {
     return null;
@@ -69,14 +69,13 @@ export const playSound = (event: SoundEvent, volume = 0.7): HTMLAudioElement | n
 };
 
 export const stopSound = (): void => {
-  const last = lastAudioRef.current;
-  if (last) {
+  for (const audio of activeAudiosRef.current) {
     try {
-      last.pause();
-      last.currentTime = 0;
+      audio.pause();
+      audio.currentTime = 0;
     } catch {}
-    lastAudioRef.current = null;
   }
+  activeAudiosRef.current.clear();
 };
 
 // Sincroniza la selección guardada en el almacenamiento nativo (Android SharedPreferences)

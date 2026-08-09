@@ -129,10 +129,12 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const discoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chatsRef = useRef<Chat[]>([]);
+  const contactsRef = useRef<Contact[]>([]);
   const cleanupListenersRef = useRef<(() => void) | null>(null);
 
   // Keep chatsRef in sync with chats state (used by discovery poll)
   useEffect(() => { chatsRef.current = chats; }, [chats]);
+  useEffect(() => { contactsRef.current = contacts; }, [contacts]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session }, error }) => {
@@ -315,16 +317,32 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         callsCount: newCalls.length,
       });
 
-      setProfile(newProfile);
-      setChats(newChats);
-      setContacts(newContacts);
-      setCalls(newCalls);
+      const chatsWipeGuard = newChats.length === 0 && cachedChats.length > 0;
+      const contactsWipeGuard = newContacts.length === 0 && cachedContacts.length > 0;
+      const callsWipeGuard = newCalls.length === 0 && cachedCalls.length > 0;
 
-      // Update cache with fresh data (always save, even if empty, to overwrite stale data)
+      // El servidor no trae `messages`; para que nada desaparezca del chat
+      // (enviado o pendiente), se conservan los mensajes locales del caché.
+      const enrichedChats = chatsWipeGuard
+        ? cachedChats
+        : newChats.map((fresh) => {
+            const prev = cachedChats.find((p) => p.id === fresh.id) as (Chat & { messages?: unknown[] }) | undefined;
+            if (Array.isArray(prev?.messages) && prev.messages.length > 0) {
+              return { ...fresh, messages: prev.messages };
+            }
+            return fresh;
+          });
+
+      setProfile(newProfile);
+      if (!chatsWipeGuard) setChats(enrichedChats);
+      if (!contactsWipeGuard) setContacts(newContacts);
+      if (!callsWipeGuard) setCalls(newCalls);
+
+      // Update cache with fresh data (avoid persisting a transient empty result over a healthy cache)
       saveCache(cacheKey(userId, "profile"), newProfile);
-      chatRepo.saveChats(userId, newChats);
-      contactRepo.saveContacts(userId, newContacts);
-      saveCache(cacheKey(userId, "calls"), newCalls);
+      if (!chatsWipeGuard) chatRepo.saveChats(userId, enrichedChats);
+      if (!contactsWipeGuard) contactRepo.saveContacts(userId, newContacts);
+      if (!callsWipeGuard) saveCache(cacheKey(userId, "calls"), newCalls);
       
       loadingUserDataRef.current = false;
       debugLog("loadUserData complete");
@@ -561,16 +579,37 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const refreshChats = async () => {
+const refreshChats = async () => {
     if (!user) return;
     const ch = await getChats(user.id);
-    setChats(ch);
-    chatRepo.saveChats(user.id, ch);
+    // Con la red inestable un fetch puede devolver vacío por error temporal:
+    // nunca vaciar un chat-list/caché que ya tiene datos.
+    const wipeGuard = ch.length === 0 && chatsRef.current.length > 0;
+    if (wipeGuard) {
+      console.warn("[SUPABASE] refreshChats returned empty — keeping cached chats");
+      return;
+    }
+    // Reconciliar: conserva los `messages` locales/pendientes del chat que se
+    // está viendo — el servidor no devuelve ese array.
+    const withMessages = ch.map((fresh) => {
+      const prev = chatsRef.current.find((p) => p.id === fresh.id) as (Chat & { messages?: unknown[] }) | undefined;
+      if (Array.isArray(prev?.messages) && prev.messages.length > 0) {
+        return { ...fresh, messages: prev.messages };
+      }
+      return fresh;
+    });
+    setChats(withMessages);
+    chatRepo.saveChats(user.id, withMessages);
   };
 
   const refreshContacts = async () => {
     if (!user) return;
     const cont = await getContacts(user.id);
+    const wipeGuard = cont.length === 0 && contactsRef.current.length > 0;
+    if (wipeGuard) {
+      console.warn("[SUPABASE] refreshContacts returned empty — keeping cached contacts");
+      return;
+    }
     setContacts(cont);
     contactRepo.saveContacts(user.id, cont);
   };

@@ -1,0 +1,44 @@
+{
+  "/onnxruntime-web/ort-wasm-simd-threaded.wasm": {
+    "chunks": [
+      {
+        "hash": "3dae4038fc722ce4ce041fbc9c63fd5c2d9864bc732a01994518f96e9ec2f357",
+        "name": "ort-wasm-simd-threaded.wasm",
+        "offsets": [
+          0,
+          11819815
+        ]
+      }
+    ],
+    "size": 11819815,
+    "mime": "application/wasm"
+  },
+  "/onnxruntime-web/ort-wasm-simd-threaded.mjs": {
+    "chunks": [
+      {
+        "hash": "aa485cf3fa61ca007b3e1ca7b65068328270f072b61cdda490b732211e1da5d9",
+        "name": "ort-wasm-simd-threaded.mjs",
+        "offsets": [
+          0,
+          25539
+        ]
+      }
+    ],
+    "size": 25539,
+    "mime": "text/javascript"
+  },
+  "/models/isnet_quint8": {
+    "chunks": [
+      {
+        "hash": "f27ae13d9f59f61a6a1b5d9a91c203f2c613346083f02072c27c91672ccda8cf",
+        "name": "isnet_quint8.onnx",
+        "offsets": [
+          0,
+          44348940
+        ]
+      }
+    ],
+    "size": 44348940,
+    "mime": "application/octet-stream"
+  }
+}

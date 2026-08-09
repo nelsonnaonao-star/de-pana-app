@@ -8,6 +8,7 @@ export interface Message {
   mediaUrl?: string;
   fileName?: string;
   fileSize?: string;
+  mimeType?: string;
   duration?: string;
   reactions?: { [key: string]: number }; // emoji -> count
   pollQuestion?: string;

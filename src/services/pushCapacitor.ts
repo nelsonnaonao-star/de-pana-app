@@ -114,7 +114,16 @@ export async function setupCapacitorPush(userId: string) {
         // We keep the native notification from CallFcmService (which has Quick Reply)
         // No need to duplicate here - just dispatch the event for in-app UI
         window.dispatchEvent(new CustomEvent('new-message-received', {
-          detail: { chatId: data.chatId, contactId: data.contactId, title: data.title, body: data.body },
+          detail: {
+            chatId: data.chatId,
+            contactId: data.contactId,
+            title: data.title,
+            body: data.body,
+            fileUrl: data.fileUrl,
+            documentName: data.documentName,
+            mimeType: data.mimeType,
+            msgType: data.msgType,
+          },
         }));
       } else if (data?.type === 'group_added' && data?.chatId) {
         // Notificación al ser agregado a un grupo, con sonido para avisar
@@ -134,7 +143,16 @@ export async function setupCapacitorPush(userId: string) {
         }));
       } else if (data.chatId) {
         window.dispatchEvent(new CustomEvent('open-chat', {
-          detail: { chatId: data.chatId, contactId: data.contactId, title: data.title, body: data.body },
+          detail: {
+            chatId: data.chatId,
+            contactId: data.contactId,
+            title: data.title,
+            body: data.body,
+            fileUrl: data.fileUrl,
+            documentName: data.documentName,
+            mimeType: data.mimeType,
+            msgType: data.msgType,
+          },
         }));
       }
     });

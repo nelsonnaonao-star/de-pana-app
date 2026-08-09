@@ -114,10 +114,9 @@ export class MessageRepository {
   }
 
   async saveMessages(chatId: string, messages: Message[]): Promise<void> {
-    const tail = messages.slice(-MAX_CACHED);
-    const batch = tail.filter(
-      (m) => !m.id.startsWith("temp_") && !m.id.startsWith("msg_")
-    ).slice(-MAX_CACHED);
+    // Persistir también mensajes pendientes/optimistas (temp/msg) para que un
+    // mensaje no confirmado siga visible al salir y volver a entrar al chat.
+    const batch = messages.slice(-MAX_CACHED);
     if (batch.length === 0) return;
 
     if (db.ready) {
