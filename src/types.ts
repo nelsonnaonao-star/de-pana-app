@@ -59,5 +59,7 @@ export interface ActiveCall {
   activeBackground?: "none" | "office" | "beach" | "neon_cyber" | "abstract";
   isGroup: boolean;
   participants?: string[];
+  participantsLimit?: number;
+  roomId?: string;
   targetUserId?: string;
 }

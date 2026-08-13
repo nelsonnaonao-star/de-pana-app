@@ -21,6 +21,13 @@ function cleanPhone(phone: string): string {
   return digitsOnly(phone).replace(/^00/, "");
 }
 
+// Suffix of the last N digits, used for country-code-agnostic matching. Both
+// "573001234567" (+57) and "3001234567" (local) share the same last-10 digits,
+// so contacts match regardless of how the number was stored.
+function lastDigits(n: string, count: number): string {
+  return n.length > count ? n.slice(-count) : n;
+}
+
 export async function requestContactPermission(): Promise<boolean> {
   try {
     const permission = await Contacts.requestPermissions();
@@ -80,31 +87,44 @@ export async function matchContactsWithSupabase(
   for (let i = 0; i < uniqueNumbers.length; i += BATCH_SIZE) {
     const batch = uniqueNumbers.slice(i, i + BATCH_SIZE);
 
-    const searchVariants = batch.flatMap((n) => {
-      const variants = [n];
+    // Country-code-agnostic suffixes (deduplicated) so a contact stored as
+    // "3001234567" (10 digits, no +57) still matches a profile whose
+    // phone_digits is "573001234567" (or the reverse).
+    const suffixVariants = new Set<string>();
+    for (const n of batch) {
+      suffixVariants.add(n);
       if (n.length >= 11) {
-        for (let i = 1; i <= 3; i++) {
-          const sliced = n.slice(i);
-          if (sliced.length >= 7) variants.push(sliced);
+        for (let k = 1; k <= 3; k++) {
+          const sliced = n.slice(k);
+          if (sliced.length >= 7) suffixVariants.add(sliced);
         }
       }
-      return variants;
-    });
+      suffixVariants.add(lastDigits(n, 10));
+      suffixVariants.add(lastDigits(n, 7));
+    }
+
+    const orFilters = [...suffixVariants]
+      .map((s) => `phone_digits.like.%${s}`)
+      .join(",");
 
     const { data, error } = await supabase
       .from("profiles")
       .select("id, username, name, phone_number, avatar_url")
-      .in("phone_digits", searchVariants);
+      .or(orFilters)
+      .limit(500);
 
     if (error) {
       console.error("[DEVICE-CONTACTS] Supabase query error:", error);
       continue;
     }
 
+    const seen = new Set<string>();
     for (const profile of data || []) {
+      if (seen.has(profile.id)) continue;
+      seen.add(profile.id);
       const profileDigits = digitsOnly(profile.phone_number);
       const deviceContact = contacts.find(
-        (c) => digitsOnly(c.cleanedPhone) === profileDigits
+        (c) => lastDigits(digitsOnly(c.cleanedPhone), 10) === lastDigits(profileDigits, 10)
       );
       matched.push({
         ...profile,

@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase";
 import { apiUrl, authFetch } from "../lib/api";
+import { logger } from "../lib/logger";
 
 export type Chat = {
   id: string;
@@ -22,42 +23,13 @@ export type Chat = {
 };
 
 export async function getChats(userId: string): Promise<Chat[]> {
-  // Get chats where user is a direct participant (profile_id/admin_id), excluding deleted
-  const { data: directChats, error } = await supabase
-    .from("chats")
-    .select("*")
-    .or(`profile_id.eq.${userId},admin_id.eq.${userId}`)
-    .is("deleted_at", null)
-    .order("updated_at", { ascending: false });
-
+  // Usar RPC SECURITY DEFINER (get_user_chats) para evitar recursión RLS entre
+  // chats <-> chat_participants y resolver chats grupales donde el usuario solo
+  // aparece en chat_participants (no como profile_id/admin_id).
+  const { data, error } = await supabase.rpc("get_user_chats", { user_uuid: userId });
   if (error) throw error;
 
-  // Also get chats where user is a member via chat_participants
-  const { data: participantRows } = await supabase
-    .from("chat_participants")
-    .select("chat_id")
-    .eq("profile_id", userId);
-
-  let groupChatIds: string[] = [];
-  if (participantRows) {
-    groupChatIds = participantRows.map(r => r.chat_id);
-    // Remove any already included via direct lookup
-    const directIds = new Set((directChats || []).map(c => c.id));
-    groupChatIds = groupChatIds.filter(id => !directIds.has(id));
-  }
-
-  let groupChats: Chat[] = [];
-  if (groupChatIds.length > 0) {
-    const { data: gc } = await supabase
-      .from("chats")
-      .select("*")
-      .in("id", groupChatIds)
-      .is("deleted_at", null)
-      .order("updated_at", { ascending: false });
-    groupChats = (gc || []) as Chat[];
-  }
-
-  const rows = [...(directChats || []), ...groupChats];
+  const rows = (data || []) as Chat[];
   const seen = new Map<string, Chat>();
   for (const chat of rows) {
     if (chat.is_group) {
@@ -89,15 +61,15 @@ export async function getChats(userId: string): Promise<Chat[]> {
   if (partnerIds.length > 0) {
     const { data: profiles } = await supabase
       .from("profiles")
-      .select("id, name, avatar_url, status")
+      .select("id, name, avatar, avatar_url, status")
       .in("id", partnerIds);
     if (profiles) {
-      const partnerMap = new Map(profiles.map(p => [p.id, { name: p.name, avatar_url: p.avatar_url, status: p.status }]));
+      const partnerMap = new Map(profiles.map(p => [p.id, { name: p.name, avatar: p.avatar, avatar_url: p.avatar_url, status: p.status }]));
       deduped = deduped.map(chat => {
         const partnerId = chat.profile_id === userId ? chat.admin_id : chat.profile_id;
         if (!chat.is_group && partnerId && partnerMap.has(partnerId)) {
           const p = partnerMap.get(partnerId)!;
-          return { ...chat, name: p.name, avatar: p.avatar_url || chat.avatar, is_online: p.status === "online" };
+          return { ...chat, name: p.name, avatar: p.avatar || p.avatar_url || "", is_online: p.status === "online" };
         }
         return chat;
       });
@@ -186,7 +158,7 @@ export async function deleteChat(chatId: string, userId: string) {
     }
     return res.json();
   } catch (serverErr) {
-    console.warn("[CHAT] Server delete failed, falling back to Supabase:", serverErr);
+    logger.warn("[CHAT] Server delete failed, falling back to Supabase", { error: serverErr });
     const { error } = await supabase
       .from("chats")
       .update({ deleted_at: new Date().toISOString() })
@@ -246,9 +218,9 @@ export async function createGroupChat(
     { onConflict: "chat_id,profile_id", ignoreDuplicates: true }
   );
   if (upsertErr) {
-    console.error("[CHATS] Failed to upsert participants:", upsertErr);
+    logger.error("[CHATS] Failed to upsert participants", { error: upsertErr });
   } else {
-    console.log("[CHATS] Participants inserted:", allMemberIds.length);
+    logger.info("[CHATS] Participants inserted", { count: allMemberIds.length });
   }
 
   // Then try server endpoint as a safety net (bypasses RLS in case policies get stricter)
@@ -261,10 +233,10 @@ export async function createGroupChat(
     });
     const result = await resp.json();
     if (!result.ok) {
-      console.warn("[CHATS] Server add-participants responded but not ok:", result);
+      logger.warn("[CHATS] Server add-participants responded but not ok", { result });
     }
   } catch (fetchErr) {
-    console.warn("[CHATS] Server endpoint unavailable (ignored):", fetchErr?.message);
+    logger.warn("[CHATS] Server endpoint unavailable (ignored)", { error: fetchErr?.message });
   }
 
   return data as Chat;
@@ -319,14 +291,14 @@ export async function getChatWithPartner(chatId: string, userId: string): Promis
     const partnerId = chat.profile_id === userId ? chat.admin_id : chat.profile_id;
     const { data: profile } = await supabase
       .from("profiles")
-      .select("name, avatar_url, status")
+      .select("name, avatar, avatar_url, status")
       .eq("id", partnerId)
       .single();
     if (profile) {
       return {
         ...chat,
         name: profile.name || chat.name,
-        avatar: profile.avatar_url || chat.avatar,
+        avatar: profile.avatar || profile.avatar_url || "",
         is_online: profile.status === "online",
       } as Chat;
     }
@@ -336,51 +308,113 @@ export async function getChatWithPartner(chatId: string, userId: string): Promis
 }
 
 export function subscribeToChats(userId: string, callback: (event: "INSERT" | "UPDATE" | "DELETE", chat: Chat) => void) {
-  // Subscribe to chats where user is profile_id
-  const ch1 = supabase
-    .channel("chats-as-profile")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "chats", filter: `profile_id=eq.${userId}` },
-      (payload) => callback(payload.eventType as any, payload.new as Chat)
-    )
-    .subscribe();
+  // Dos canales con filtros simples (profile_id / admin_id). El filtro OR de
+  // Realtime no entrega eventos, así que usamos un canal por rol:
+  // - 1:1 chats: filtro simple por profile_id o admin_id
+  // - Grupos: INSERT en chat_participants (evita escuchar TODOS los chats y hacer query N+1)
+  let channel: ReturnType<typeof supabase.channel> | null = null;
+  let isUnsubscribed = false;
+  let reconnectAttempt = 0;
+  const MAX_RECONNECT_ATTEMPTS = 10;
+  const BASE_RECONNECT_DELAY = 1000; // 1s base
+  const MAX_RECONNECT_DELAY = 30000; // 30s max
 
-  // Subscribe to chats where user is admin_id
-  const ch2 = supabase
-    .channel("chats-as-admin")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "chats", filter: `admin_id=eq.${userId}` },
-      (payload) => callback(payload.eventType as any, payload.new as Chat)
-    )
-    .subscribe();
+  const createChannel = () => {
+    if (isUnsubscribed) return;
+    
+    const newChannel = supabase
+      .channel(`chats-for-${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "chats",
+          filter: `profile_id=eq.${userId}`,
+        },
+        (payload) => callback(payload.eventType as any, payload.new as Chat)
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "chats",
+          filter: `admin_id=eq.${userId}`,
+        },
+        (payload) => callback(payload.eventType as any, payload.new as Chat)
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "chat_participants",
+          filter: `profile_id=eq.${userId}`,
+        },
+        async (payload) => {
+          const participant = payload.new as { chat_id: string; profile_id: string };
+          const { data: chat } = await supabase
+            .from("chats")
+            .select("*")
+            .eq("id", participant.chat_id)
+            .single();
+          if (chat) {
+            callback("INSERT", chat as Chat);
+          }
+        }
+      )
+      .subscribe((status) => {
+        if (isUnsubscribed) return;
+        
+        if (status === "SUBSCRIBED") {
+          reconnectAttempt = 0; // Reset on successful connection
+          logger.info("[Chats] Realtime subscribed", { userId });
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          logger.warn("[Chats] Realtime connection issue, scheduling reconnect", { status, userId, attempt: reconnectAttempt + 1 });
+          scheduleReconnect();
+        }
+      });
 
-  // Subscribe to ALL group INSERTs — filter by participant check in callback
-  const ch3 = supabase
-    .channel("chats-as-participant")
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "chats" },
-      (payload) => {
-        const chat = payload.new as Chat;
-        if (!chat.is_group) return;
-        // Check if user is a participant of this new chat
-        supabase
-          .from("chat_participants")
-          .select("chat_id", { count: "exact", head: true })
-          .eq("chat_id", chat.id)
-          .eq("profile_id", userId)
-          .then(({ count }) => {
-            if (count && count > 0) {
-              callback("INSERT", chat);
-            }
-          });
+    return newChannel;
+  };
+
+  const scheduleReconnect = () => {
+    if (isUnsubscribed || reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+        logger.error("[Chats] Max reconnect attempts reached", { userId });
       }
-    )
-    .subscribe();
+      return;
+    }
 
-  return { unsubscribe: () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); supabase.removeChannel(ch3); } };
+    reconnectAttempt++;
+    const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempt - 1), MAX_RECONNECT_DELAY);
+    const jitter = Math.random() * 1000; // Add jitter to prevent thundering herd
+    
+    logger.info("[Chats] Scheduling reconnect", { userId, attempt: reconnectAttempt, delay: Math.round(delay + jitter) });
+    
+    setTimeout(() => {
+      if (!isUnsubscribed) {
+        if (channel) {
+          supabase.removeChannel(channel);
+        }
+        channel = createChannel();
+      }
+    }, delay + jitter);
+  };
+
+  channel = createChannel();
+
+  const unsubscribe = () => {
+    isUnsubscribed = true;
+    if (channel) {
+      supabase.removeChannel(channel);
+      channel = null;
+    }
+    logger.info("[Chats] Unsubscribed and cleaned up", { userId });
+  };
+
+  return { unsubscribe };
 }
 
 export type MuteDuration = "8h" | "12h" | "24h" | "always";

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Filesystem, Directory } from "@capacitor/filesystem";
 import { Capacitor } from "@capacitor/core";
+import { logger } from "../lib/logger";
 
 interface CachedImageProps {
   src: string;
@@ -55,14 +56,17 @@ async function getCachedFile(fileName: string): Promise<string | null> {
       directory: Directory.Data,
     });
     return `data:${mime};base64,${result.data}`;
-  } catch {}
+  } catch (e) {
+    logger.warn("[CachedImage] readFile from Data failed", { error: e });
+  }
   try {
     const result = await Filesystem.readFile({
       path: `image_cache/${fileName}`,
       directory: Directory.Cache,
     });
     return `data:${mime};base64,${result.data}`;
-  } catch {
+  } catch (e) {
+    logger.warn("[CachedImage] readFile from Cache failed", { error: e });
     return null;
   }
 }
@@ -98,7 +102,8 @@ async function saveToCache(fileName: string, url: string): Promise<void> {
         directory: Directory.Data,
       });
     }
-  } catch {
+  } catch (e) {
+    logger.warn("[CachedImage] saveToCache failed", { error: e, fileName });
     // Silently fail — next load will try again
   }
 }

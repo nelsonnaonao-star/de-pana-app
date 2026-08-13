@@ -9,7 +9,7 @@ export function initSentryCapacitor() {
     environment: 'staging',
     enableAutoSessionTracking: true,
     sessionTrackingIntervalMillis: 30000,
-    tracesSampleRate: 1.0,
+    tracesSampleRate: 0.2,
     attachStacktrace: true,
     beforeSend(event, hint) {
       if (event.exception) {

@@ -1,4 +1,5 @@
 import fixWebmDuration from "fix-webm-duration";
+import { logger } from "../lib/logger";
 
 const MAX_DIMENSION = 720;
 const TARGET_BITRATE = 2_000_000;
@@ -100,7 +101,9 @@ async function doCompress(file: File): Promise<Blob> {
     if (fullStream) {
       audioTrack = fullStream.getAudioTracks()[0] || null;
     }
-  } catch {}
+  } catch (e) {
+    logger.warn("[VideoCompression] captureStream failed", { error: e });
+  }
 
   if (!audioTrack) {
     try {
@@ -110,7 +113,9 @@ async function doCompress(file: File): Promise<Blob> {
       const dest = audioCtx.createMediaStreamDestination();
       source.connect(dest);
       audioTrack = dest.stream.getAudioTracks()[0] || null;
-    } catch {}
+    } catch (e) {
+      logger.warn("[VideoCompression] AudioContext fallback failed", { error: e });
+    }
   }
 
   const canvasStream = canvas.captureStream(30);
@@ -140,7 +145,9 @@ async function doCompress(file: File): Promise<Blob> {
 
   await new Promise<void>((resolve) => {
     const render = () => {
-      try { ctx.drawImage(video, 0, 0, targetW, targetH); } catch {}
+      try { ctx.drawImage(video, 0, 0, targetW, targetH); } catch (e) {
+        logger.warn("[VideoCompression] drawImage failed", { error: e });
+      }
       if (!video.ended && !video.paused) {
         requestAnimationFrame(render);
       } else {

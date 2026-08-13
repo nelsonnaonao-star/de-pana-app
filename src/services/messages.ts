@@ -1,4 +1,5 @@
 import { apiUrl, authFetch } from "../lib/api";
+import { supabase } from "../lib/supabase";
 
 export type Message = {
   id: string;
@@ -101,16 +102,21 @@ function toMessage(row: any): Message {
 
 export async function getMessages(chatId: string, options?: { limit?: number; before?: string; after?: string }): Promise<Message[]> {
   const limit = options?.limit || 200;
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (options?.before) params.set("before", options.before);
-  if (options?.after) params.set("after", options.after);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return [];
 
-  const res = await authFetch(apiUrl(`/api/messages/${chatId}?${params.toString()}`));
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || "Error al obtener mensajes");
-  }
-  const data = await res.json();
+  // RPC SECURITY DEFINER (get_user_messages) para evitar recursión RLS entre
+  // chats <-> chat_participants y resolver grupos donde el usuario solo es participante.
+  const { data, error } = await supabase.rpc("get_user_messages", {
+    chat_uuid: chatId,
+    user_uuid: user.id,
+    p_limit: limit,
+    p_before: options?.before || null,
+    p_after: options?.after || null,
+  });
+  if (error) throw error;
   return (data || []).map(toMessage);
 }
 

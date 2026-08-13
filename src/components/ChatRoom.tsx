@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
-import { X } from "lucide-react";
+import { X, Ban, Trash2, UserPlus, Check, ShieldCheck, CheckCircle } from "lucide-react";
 import { Chat, Message } from "../types";
 import GifPicker from "./GifPicker";
 import MessageBubbleWithCache from "./chat/MessageBubbleWithCache";
@@ -17,6 +17,8 @@ import PollFormModal from "./chat/overlays/PollFormModal";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { getMessages, markAsRead, clearForMe, setEphemeralTimer } from "../services/messages";
 import { deleteChat as apiDeleteChat } from "../services/chats";
+import { addContact } from "../services/contacts";
+import { supabase } from "../lib/supabase";
 import toast from "react-hot-toast";
 import { CHAT_BACKGROUNDS } from "./chat/chatConstants";
 import { useOfflineQueue } from "../hooks/useOfflineQueue";
@@ -45,7 +47,7 @@ interface ChatRoomProps {
 }
 
 export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, onChatMessagesChanged, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
-  const { user, profile } = useSupabase();
+  const { user, profile, contacts, refreshContacts } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
 
@@ -576,6 +578,68 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     if (await hookHandleLeaveGroup()) { onChatDeleted?.(chat.id); onBack(); }
   };
 
+  // ── Solicitud de mensaje de un remitente desconocido ──
+  // El mensaje se lee normal, pero si quien escribe NO es tu contacto, se muestra
+  // la tarjeta con Rechazar / Eliminar / Guardar como contacto.
+  const partnerUserId = chat.partnerUserId;
+  const hasIncomingMsgFromOther = messages.some(m => m.sender === "other");
+  const isUnknownSender = !chat.isGroup && !!partnerUserId && partnerUserId !== uid &&
+    !contacts.some(c => c.contact_user_id === partnerUserId) &&
+    hasIncomingMsgFromOther;
+  const [reqView, setReqView] = useState<"actions" | "save" | "reject-confirm">("actions");
+  const [saveName, setSaveName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [savedBar, setSavedBar] = useState(false);
+
+  const handleSaveContact = async () => {
+    if (!uid || !partnerUserId || !saveName.trim()) return;
+    setSaving(true);
+    try {
+      const { data: partnerProfile } = await supabase
+        .from("profiles")
+        .select("avatar_url")
+        .eq("id", partnerUserId)
+        .maybeSingle();
+      await addContact(uid, partnerUserId, saveName.trim(), partnerProfile?.avatar_url || "");
+      await refreshContacts?.();
+      setSavedBar(true);
+      toast.success("Contacto guardado con éxito");
+      setTimeout(() => setSavedBar(false), 2600);
+    } catch (e) {
+      console.error("[CHAT] save contact error:", e);
+      toast.error("No se pudo guardar el contacto");
+    }
+    setSaving(false);
+  };
+
+  const handleRejectAndBlock = async () => {
+    if (!uid || !partnerUserId) return;
+    setSaving(true);
+    try {
+      const { data: existing } = await supabase
+        .from("blocks")
+        .select("id")
+        .eq("blocker_id", uid)
+        .eq("blocked_id", partnerUserId)
+        .maybeSingle();
+      if (!existing) {
+        await supabase.from("blocks").insert({ blocker_id: uid, blocked_id: partnerUserId });
+      }
+    } catch (e) {
+      console.warn("[CHAT] block duplicate/insert:", e);
+    }
+    try {
+      messageRepo.clearMessages(chat.id);
+      await apiDeleteChat(chat.id, uid);
+      onChatDeleted?.(chat.id);
+    } catch (e) {
+      console.error("[CHAT] delete on reject:", e);
+    }
+    setSaving(false);
+    toast.success("Mensaje rechazado y remitente bloqueado");
+    onBack();
+  };
+
   // ── Auto-scroll to bottom on new messages or chat open ──
   const scrollToBottom = () => {
     if (virtuosoRef.current && messages.length > 0) {
@@ -871,6 +935,120 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         ephemeralTimer={ephemeralTimer}
         onSetEphemeralTimer={handleSetEphemeralTimer}
       />
+
+      {/* ── Solicitud de mensaje de remitente desconocido ── (mensaje se lee igual) */}
+      {(isUnknownSender || savedBar) && (
+        <div className="relative z-20 mx-3 mb-2">
+          <div className="rounded-2xl bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-50 border border-teal-200 p-3 shadow-sm">
+            <div className="flex items-center gap-2.5 mb-2.5">
+                <img
+                src={chat.avatar || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23cbd5e1'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M12 14c-4 0-6 2-6 4v2h12v-2c0-2-2-4-6-4z'/%3E%3C/svg%3E"}
+                alt={chat.name || "contacto"}
+                className="w-9 h-9 rounded-full object-cover bg-slate-100 border border-teal-100"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-bold text-teal-900">Solicitud de mensaje</p>
+                <p className="text-[10px] text-slate-500 truncate">{chat.name || "Nuevo colaborador"} no está en tus contactos</p>
+              </div>
+              <ShieldCheck className="w-4 h-4 text-teal-500" />
+            </div>
+
+            {reqView === "actions" && (
+              <div className="grid grid-cols-3 gap-1.5">
+                <button
+                  onClick={() => setReqView("reject-confirm")}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl bg-white/80 hover:bg-red-50 border border-red-100 text-red-700 transition-all cursor-pointer"
+                >
+                  <Ban className="w-4 h-4" />
+                  <span className="text-[10px] font-semibold">Rechazar</span>
+                </button>
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl bg-white/80 hover:bg-slate-100 border border-slate-200 text-slate-700 transition-all cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="text-[10px] font-semibold">Eliminar</span>
+                </button>
+                <button
+                  onClick={() => setReqView("save")}
+                  className="flex flex-col items-center justify-center gap-0.5 py-1.5 rounded-xl bg-white/80 hover:bg-teal-50 border border-teal-200 text-teal-700 transition-all cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span className="text-[10px] font-semibold">Guardar</span>
+                </button>
+              </div>
+            )}
+
+            {reqView === "save" && (
+              <div className="pt-1">
+                <input
+                  value={saveName}
+                  onChange={e => setSaveName(e.target.value)}
+                  placeholder={chat.name || "Nombre del contacto"}
+                  className="w-full text-[12px] px-2.5 py-1.5 rounded-lg border border-teal-200/50 focus:outline-none focus:ring-1 focus:ring-teal-400 bg-white/90"
+                  maxLength={40}
+                  autoFocus
+                />
+                <div className="grid grid-cols-2 gap-1.5 mt-2">
+                  <button
+                    onClick={() => { setReqView("actions"); setSaveName(""); }}
+                    disabled={saving}
+                    className="py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                  >
+                    <span className="text-[11px] font-semibold">Cancelar</span>
+                  </button>
+                  <button
+                    onClick={handleSaveContact}
+                    disabled={saving || !saveName.trim()}
+                    className="py-1 rounded-lg bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50 cursor-pointer"
+                  >
+                    {saving ? (
+                      <span className="text-[11px] font-semibold">Guardando…</span>
+                    ) : (
+                      <span className="text-[11px] font-semibold">Guardar</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {reqView === "reject-confirm" && (
+              <div className="pt-1">
+                <p className="text-[9px] text-slate-500 mb-2">
+                  Bloquearás a {chat.name || "esta persona"} y eliminarás el chat. No volverán a escribirte.
+                </p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    onClick={() => setReqView("actions")}
+                    disabled={saving}
+                    className="py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
+                  >
+                    <span className="text-[11px] font-semibold">Cancelar</span>
+                  </button>
+                  <button
+                    onClick={handleRejectAndBlock}
+                    disabled={saving}
+                    className="py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 cursor-pointer"
+                  >
+                    {saving ? (
+                      <span className="text-[11px] font-semibold">Bloqueando…</span>
+                    ) : (
+                      <span className="text-[11px] font-semibold">Sí, bloquear y eliminar</span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {savedBar && (
+              <div className="flex items-center gap-1.5 mt-1 text-[11px] text-teal-800 font-semibold">
+                <CheckCircle className="w-4 h-4 text-teal-600" />
+                <span>Guardado con éxito</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* CHAT CUSTOMIZER DRAWER */}
       <ChatCustomizer

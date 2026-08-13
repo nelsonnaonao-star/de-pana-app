@@ -9,12 +9,15 @@ interface CallOverlayProps {
   call: ActiveCall;
   localStream?: MediaStream | null;
   remoteStream?: MediaStream | null;
+  remoteStreamsMap?: Map<string, MediaStream>;
+  participantCount?: number;
   onAccept: () => void;
   onDecline: () => void;
   onToggleMute: () => void;
   onToggleVideo: () => void;
   onSwitchCamera: () => void;
   onEndCall: () => void;
+  onAddMember: () => void;
 }
 
 const EMOJIS = ["👍", "❤️", "🔥", "😮", "😂", "🎉"];
@@ -23,17 +26,20 @@ export default function CallOverlay({
   call,
   localStream,
   remoteStream,
+  remoteStreamsMap,
+  participantCount = 0,
   onAccept,
   onDecline,
   onToggleMute,
   onToggleVideo,
   onSwitchCamera,
-  onEndCall
+  onEndCall,
+  onAddMember
 }: CallOverlayProps) {
   const [activeFilter, setActiveFilter] = useState<string>("none");
-  const [activeBg, setActiveBg] = useState<string>("none");
   const [showEffects, setShowEffects] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isRemotePlaying, setIsRemotePlaying] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -74,14 +80,32 @@ export default function CallOverlay({
   const attachRemoteStream = useCallback((videoEl: HTMLVideoElement, stream: MediaStream) => {
     if (videoEl.srcObject === stream) return;
     videoEl.srcObject = stream;
+
+    // El WebView de Android SIEMPRE permite autoplay en mute; arranca el video
+    // al instante sin mostrar el placeholder gris de play. Después desmentamos
+    // de forma fiable (evento 'playing' + timeout + primer toque) para que el
+    // audio llegue igual. Unir 'playing' ANTES de play() evita la carrera que
+    // dejaba la llamada muda permanentemente.
+    const unmute = () => { videoEl.muted = false; };
+    videoEl.addEventListener('playing', unmute, { once: true });
+    videoEl.muted = true;
+
     const tryPlay = (attempts = 0) => {
-      if (attempts > 20) {
-        document.addEventListener('touchstart', () => videoEl.play().catch(() => {}), { once: true });
-        return;
-      }
-      videoEl.play().catch(() => setTimeout(() => tryPlay(attempts + 1), 300));
+      videoEl.play().catch(() => {
+        if (attempts > 10) {
+          // El WebView sigue bloqueando: sin mute el placeholder no se pinta;
+          // el audio se recupera con playing/timeout.
+          videoEl.muted = false;
+          document.addEventListener('touchstart', () => videoEl.play().catch(() => {}), { once: true });
+          return;
+        }
+        setTimeout(() => tryPlay(attempts + 1), 250);
+      });
     };
     tryPlay();
+
+    setTimeout(() => { if (!videoEl.paused) unmute(); }, 1500);
+    document.addEventListener('touchstart', () => setTimeout(unmute, 50), { once: true });
   }, []);
 
   const remoteVideoCallback = useCallback((node: HTMLVideoElement | null) => {
@@ -92,6 +116,7 @@ export default function CallOverlay({
   }, [remoteStream, attachRemoteStream]);
 
   useEffect(() => {
+    setIsRemotePlaying(false);
     if (remoteVideoRef.current && remoteStream) {
       attachRemoteStream(remoteVideoRef.current, remoteStream);
     }
@@ -106,21 +131,11 @@ export default function CallOverlay({
 
   const getFilterClass = () => {
     switch (activeFilter) {
-      case "noir": return "grayscale contrast-125";
-      case "warm": return "sepia saturate-150 hue-rotate-[10deg]";
-      case "cool": return "saturate-125 hue-rotate-[200deg] brightness-95";
-      case "vintage": return "sepia contrast-85 brightness-110";
-      case "neon": return "brightness-110 contrast-125 saturate-200 hue-rotate-[320deg]";
-      default: return "";
-    }
-  };
-
-  const getBackgroundUrl = () => {
-    switch (activeBg) {
-      case "office": return "https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=400&q=80";
-      case "beach": return "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=400&q=80";
-      case "cyber": return "https://images.unsplash.com/photo-1508739773434-c26b3d09e071?auto=format&fit=crop&w=400&q=80";
-      case "abstract": return "https://images.unsplash.com/photo-1579783902614-a3fb3927b6a5?auto=format&fit=crop&w=400&q=80";
+      case "atardecer": return "sepia-[.45] saturate-[1.9] hue-rotate-[-12deg] brightness-105 contrast-110";
+      case "cielo": return "saturate-[1.7] brightness-110 contrast-105 hue-rotate-[6deg]";
+      case "bosque": return "hue-rotate-[85deg] saturate-[1.5] brightness-100 contrast-110";
+      case "noche": return "hue-rotate-[205deg] saturate-[1.4] brightness-90 contrast-125";
+      case "retro": return "sepia-[.85] saturate-[1.25] contrast-90 brightness-105 hue-rotate-[-5deg]";
       default: return "";
     }
   };
@@ -174,37 +189,71 @@ export default function CallOverlay({
           </div>
         </div>
       </div>
+  );
+}
+
+  // GROUP CALL video grid (max 4 participants: 1 local + up to 3 remotes)
+  const remoteList = remoteStreamsMap ? Array.from(remoteStreamsMap.entries()) : [];
+  const isGroupVideo = ((call.isGroup || remoteList.length >= 2) && call.type === "video" && !call.isVideoOff && call.status === "connected");
+
+  const GroupVideoContent = () => {
+    const total = 1 + remoteList.length; // local + remotes
+    const cols = total <= 1 ? 1 : total <= 2 ? 2 : total <= 4 ? 2 : 3;
+    const rows = Math.ceil(total / cols);
+    return (
+      <div className="absolute inset-0 w-full h-full z-0 bg-black grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}>
+        {/* Local (self) */}
+        <div className="relative">
+          {localStream ? (
+            <video
+              ref={(node) => { if (node && localStream) { node.srcObject = null; node.srcObject = localStream; } }}
+              autoPlay playsInline muted
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+          ) : (
+            <div className="absolute inset-0 bg-teal-800/10 flex items-center justify-center text-xs text-teal-300">Sin cámara</div>
+          )}
+          <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded-full text-[9px] font-semibold text-teal-300">Tú</div>
+        </div>
+        {/* Remotos */}
+        {remoteList.map(([peerId, stream], i) => (
+          <div key={peerId || i} className="relative">
+            <video
+              ref={(node) => { if (node && stream) attachRemoteStream(node, stream); }}
+              autoPlay playsInline
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded-full text-[9px] font-semibold text-teal-300">#{i + 1}</div>
+          </div>
+        ))}
+        <div className="absolute top-3 left-3 bg-black/50 text-[10px] px-2 py-1 rounded">
+          {participantCount} conectados
+        </div>
+      </div>
     );
-  }
+  };
 
   return (
     <div className="absolute inset-0 bg-black text-white z-[9999] flex flex-col justify-between overflow-hidden select-none">
 
       <div ref={emojiContainerRef} className="absolute inset-0 pointer-events-none z-30 overflow-hidden" />
 
-      {call.type === "video" && !call.isVideoOff && call.status === "connected" ? (
+      {isGroupVideo ? (
+        <GroupVideoContent />
+      ) : (call.type === "video" && !call.isVideoOff && call.status === "connected" ? (
         <div className="absolute inset-0 w-full h-full z-0 bg-black">
-          {activeBg !== "none" ? (
-            <img
-              src={getBackgroundUrl()}
-              alt="Virtual Background"
-              className={`absolute inset-0 w-full h-full object-cover opacity-80 ${getFilterClass()}`}
-            />
-          ) : null}
-
           <div className="absolute inset-0 flex items-center justify-center">
-            {remoteStream ? (
-              <video
-                ref={remoteVideoCallback}
-                autoPlay playsInline
-                className="absolute inset-0 w-full h-full object-cover"
-              />
-            ) : (
-              <img
-                src={call.contactAvatar}
-                alt={call.contactName}
-                className={`absolute inset-0 w-full h-full object-cover transition-all ${getFilterClass()}`}
-              />
+            <video
+              ref={remoteVideoCallback}
+              autoPlay playsInline muted
+              onLoadedData={() => setIsRemotePlaying(true)}
+              onPlaying={() => setIsRemotePlaying(true)}
+              className={`absolute inset-0 w-full h-full object-cover bg-black transition-opacity duration-300 ${isRemotePlaying ? "opacity-100" : "opacity-0"} ${getFilterClass()}`}
+            />
+            {!isRemotePlaying && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black">
+                <span className="w-8 h-8 border-2 border-slate-600 border-t-teal-400 rounded-full animate-spin" />
+              </div>
             )}
             <div className="absolute bottom-28 left-4 bg-black/60 backdrop-blur-sm px-3 py-1 rounded-xl border border-white/10 text-[10px] font-bold">
               📷 Cámara de {call.contactName}
@@ -220,7 +269,7 @@ export default function CallOverlay({
               <video
                 ref={localVideoCallback}
                 autoPlay playsInline muted
-                className={`w-full h-full object-cover ${getFilterClass()}`}
+                className={`w-full h-full object-cover bg-black ${getFilterClass()}`}
               />
             ) : (
               <div className="absolute inset-0 bg-teal-800/10 flex items-center justify-center text-[10px] text-teal-300">
@@ -237,7 +286,7 @@ export default function CallOverlay({
           {remoteStream && (
             <video
               ref={remoteVideoCallback}
-              autoPlay playsInline
+              autoPlay playsInline muted
               className="absolute inset-0 w-full h-full object-cover opacity-30"
             />
           )}
@@ -245,7 +294,7 @@ export default function CallOverlay({
             <span className="absolute inset-[-15px] rounded-full border border-teal-500/20 animate-pulse"></span>
             <span className="absolute inset-[-30px] rounded-full border border-teal-500/10 animate-ping"></span>
             <img
-              src={call.contactAvatar}
+              src={call.contactAvatar || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230a4d52'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M12 14c-4 0-6 2-6 4v2h12v-2c0-2-2-4-6-4z'/%3E%3C/svg%3E"}
               alt={call.contactName}
               className="w-28 h-28 rounded-full object-cover border-4 border-teal-400 relative z-10 shadow-lg"
             />
@@ -257,7 +306,7 @@ export default function CallOverlay({
             </p>
           </div>
         </div>
-      )}
+      ))}
 
       <div className="relative z-10 p-4 pt-10 flex justify-between items-center bg-gradient-to-b from-black/60 to-transparent">
         <div className="flex items-center gap-1.5">
@@ -295,21 +344,21 @@ export default function CallOverlay({
               className="mx-auto w-fit flex items-center gap-1 bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 hover:text-white px-3 py-1.5 rounded-full border border-teal-500/30 text-[10px] font-bold transition-all cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              {showEffects ? "Ocultar Filtros y Fondos" : "Ajustar Filtros y Fondos"}
+              {showEffects ? "Ocultar Filtros" : "Ajustar Filtros"}
             </button>
 
             {showEffects && (
               <div className="bg-black/80 rounded-2xl p-3 border border-slate-800 space-y-3.5 animate-fade-in">
-                <div className="space-y-1.5">
+<div className="space-y-1.5">
                   <span className="text-[9px] font-bold text-slate-400 block uppercase">Filtros de Video</span>
                   <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
                     {[
                       { id: "none", name: "Normal" },
-                      { id: "noir", name: "Blanco/Negro" },
-                      { id: "warm", name: "Cálido" },
-                      { id: "cool", name: "Frío" },
-                      { id: "vintage", name: "Vintage" },
-                      { id: "neon", name: "Neón" }
+                      { id: "atardecer", name: "Atardecer" },
+                      { id: "cielo", name: "Cielo" },
+                      { id: "bosque", name: "Bosque" },
+                      { id: "noche", name: "Noche" },
+                      { id: "retro", name: "Retro" }
                     ].map((filt) => (
                       <button
                         key={filt.id}
@@ -320,30 +369,6 @@ export default function CallOverlay({
                           }`}
                       >
                         {filt.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <span className="text-[9px] font-bold text-slate-400 block uppercase">Fondo Virtual</span>
-                  <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-                    {[
-                      { id: "none", name: "Sin fondo" },
-                      { id: "office", name: "Oficina" },
-                      { id: "beach", name: "Playa" },
-                      { id: "cyber", name: "Ciberespacio" },
-                      { id: "abstract", name: "Abstracto" }
-                    ].map((bg) => (
-                      <button
-                        key={bg.id}
-                        onClick={() => setActiveBg(bg.id)}
-                        className={`text-[9px] px-2.5 py-1 rounded-full whitespace-nowrap border font-medium cursor-pointer transition-all ${activeBg === bg.id
-                            ? "bg-teal-500 border-teal-400 text-white"
-                            : "border-slate-800 text-slate-300 bg-slate-900/50 hover:bg-slate-900"
-                          }`}
-                      >
-                        {bg.name}
                       </button>
                     ))}
                   </div>
@@ -381,13 +406,22 @@ export default function CallOverlay({
           </button>
 
           {call.type === "video" && (call.status === "connected" || call.status === "connecting") && (
-            <button
-              onClick={onSwitchCamera}
-              className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/15 text-white flex items-center justify-center transition-all cursor-pointer"
-              title="Cambiar cámara"
-            >
-              <RotateCw className="w-5 h-5" />
-            </button>
+            <>
+              <button
+                onClick={onAddMember}
+                className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/15 text-white flex items-center justify-center transition-all cursor-pointer"
+                title="Agregar miembro a la llamada"
+              >
+                <Users className="w-5 h-5" />
+              </button>
+              <button
+                onClick={onSwitchCamera}
+                className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/15 text-white flex items-center justify-center transition-all cursor-pointer"
+                title="Cambiar cámara"
+              >
+                <RotateCw className="w-5 h-5" />
+              </button>
+            </>
           )}
         </div>
       </div>

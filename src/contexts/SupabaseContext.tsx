@@ -11,13 +11,14 @@ declare global {
 import { supabase } from "../lib/supabase";
 import { Profile, signOut as authSignOut } from "../services/auth";
 import { Chat, getChats } from "../services/chats";
-import { Contact, getContacts } from "../services/contacts";
+import { Contact, getContacts, addContact } from "../services/contacts";
 import { Call, getCalls } from "../services/calls";
 import { registerPushNotifications, unregisterPushNotifications } from "../services/pushNotifications";
 import { setupCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
 import { chatRepo } from "../services/database/repositories/ChatRepository";
 import { contactRepo } from "../services/database/repositories/ContactRepository";
 import toast from "react-hot-toast";
+import { logger } from "../lib/logger";
 
 const CACHE_PREFIX = "redon_cache_";
 const cacheKey = (uid: string, name: string) => `${CACHE_PREFIX}${name}_${uid}`;
@@ -26,14 +27,18 @@ function loadCache<T>(key: string, fallback: T): T {
   try {
     const stored = localStorage.getItem(key);
     if (stored) return JSON.parse(stored) as T;
-  } catch {}
+  } catch (e) {
+    logger.warn("[SupabaseContext] loadCache failed", { error: e, key });
+  }
   return fallback;
 }
 
 function saveCache<T>(key: string, data: T) {
   try {
     localStorage.setItem(key, JSON.stringify(data));
-  } catch {}
+  } catch (e) {
+    logger.warn("[SupabaseContext] saveCache failed", { error: e, key });
+  }
 }
 
 function clearUserCache(userId: string) {
@@ -45,7 +50,9 @@ function clearUserCache(userId: string) {
         localStorage.removeItem(k);
       }
     }
-  } catch {}
+  } catch (e) {
+    logger.warn("[SupabaseContext] clearUserCache failed", { error: e, userId });
+  }
 }
 
 const LAST_USER_KEY = "redon_last_user";
@@ -53,7 +60,9 @@ const LAST_USER_KEY = "redon_last_user";
 function saveLastUser(userId: string) {
   try {
     localStorage.setItem(LAST_USER_KEY, JSON.stringify({ id: userId }));
-  } catch {}
+  } catch (e) {
+    logger.warn("[SupabaseContext] saveLastUser failed", { error: e, userId });
+  }
 }
 
 function loadLastUser(): { id: string } | null {
@@ -63,14 +72,18 @@ function loadLastUser(): { id: string } | null {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed.id === "string" && parsed.id.length >= 8) return parsed;
     }
-  } catch {}
+  } catch (e) {
+    logger.warn("[SupabaseContext] loadLastUser failed", { error: e });
+  }
   return null;
 }
 
 function clearLastUser() {
   try {
     localStorage.removeItem(LAST_USER_KEY);
-  } catch {}
+  } catch (e) {
+    logger.warn("[SupabaseContext] clearLastUser failed", { error: e });
+  }
 }
 
 function isPasswordRecoveryUrl(): boolean {
@@ -91,7 +104,7 @@ function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T> {
 }
 
 function debugLog(label: string, data?: any) {
-  console.log(`[SUPABASE] ${label}:`, data);
+  logger.debug(`[SUPABASE] ${label}`, data);
 }
 
 interface SupabaseContextType {
@@ -131,35 +144,125 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const chatsRef = useRef<Chat[]>([]);
   const contactsRef = useRef<Contact[]>([]);
   const cleanupListenersRef = useRef<(() => void) | null>(null);
+  
+  // Presence debounce refs (3-5s debounce to avoid flapping)
+  const presenceDebounceRef = useRef<{ onlineTimer?: ReturnType<typeof setTimeout>; offlineTimer?: ReturnType<typeof setTimeout>; pendingStatus?: "online" | "offline" }>({
+    onlineTimer: undefined,
+    offlineTimer: undefined,
+    pendingStatus: undefined,
+  });
+  const DEBOUNCE_MS = 4000; // 4s debounce for presence flapping
+
+  // Debounced presence update to avoid flapping on micro network cuts / tab switches
+  const updatePresenceDebounced = async (userId: string, status: "online" | "offline") => {
+    const ref = presenceDebounceRef.current;
+    // Clear opposite timer
+    if (status === "online") {
+      if (ref.offlineTimer) {
+        clearTimeout(ref.offlineTimer);
+        ref.offlineTimer = undefined;
+      }
+      if (!ref.onlineTimer) {
+        ref.onlineTimer = setTimeout(async () => {
+          try {
+            await supabase.from("profiles").update({ status: "online" }).eq("id", userId);
+            logger.debug("[Presence] Online status confirmed", { userId });
+          } catch {}
+          ref.onlineTimer = undefined;
+          ref.pendingStatus = undefined;
+        }, DEBOUNCE_MS);
+      }
+      ref.pendingStatus = "online";
+    } else {
+      if (ref.onlineTimer) {
+        clearTimeout(ref.onlineTimer);
+        ref.onlineTimer = undefined;
+      }
+      if (!ref.offlineTimer) {
+        ref.offlineTimer = setTimeout(async () => {
+          try {
+            await supabase.from("profiles").update({ status: "offline" }).eq("id", userId);
+            logger.debug("[Presence] Offline status confirmed", { userId });
+          } catch {}
+          ref.offlineTimer = undefined;
+          ref.pendingStatus = undefined;
+        }, DEBOUNCE_MS);
+      }
+      ref.pendingStatus = "offline";
+    }
+  };
+
+  // Flush any pending presence update immediately (used on logout/unmount)
+  const flushPresence = async (userId: string) => {
+    const ref = presenceDebounceRef.current;
+    if (ref.onlineTimer) {
+      clearTimeout(ref.onlineTimer);
+      ref.onlineTimer = undefined;
+    }
+    if (ref.offlineTimer) {
+      clearTimeout(ref.offlineTimer);
+      ref.offlineTimer = undefined;
+    }
+    if (ref.pendingStatus) {
+      try {
+        await supabase.from("profiles").update({ status: ref.pendingStatus }).eq("id", userId);
+        logger.debug("[Presence] Flushed pending status", { userId, status: ref.pendingStatus });
+      } catch {}
+      ref.pendingStatus = undefined;
+    }
+  };
 
   // Keep chatsRef in sync with chats state (used by discovery poll)
   useEffect(() => { chatsRef.current = chats; }, [chats]);
   useEffect(() => { contactsRef.current = contacts; }, [contacts]);
 
   useEffect(() => {
+    // Eager local pre-load (NO network): if we know the last user, paint their
+    // cached data immediately instead of waiting for the session round-trip.
+    if (!loadedUserId.current && !isPasswordRecoveryUrl()) {
+      const cachedLastUser = loadLastUser();
+      if (cachedLastUser?.id) {
+        logger.info("[SUPABASE] Eager cache pre-load for last user", { userId: cachedLastUser.id.slice(0, 8) });
+        setUser({ id: cachedLastUser.id });
+        loadUserData(cachedLastUser.id);
+      }
+    }
+
     supabase.auth.getSession().then(({ data: { session }, error }) => {
-      console.log("[SUPABASE] Session on mount:", session ? "EXISTS" : "NULL", "Error:", error);
+      logger.info("[SUPABASE] Session on mount", { hasSession: !!session, error });
       if (session?.user) {
         // Coming from a password-recovery email link: don't enter the app,
         // show the "set new password" screen instead.
         if (isPasswordRecoveryUrl()) {
-          console.log("[SUPABASE] Recovery token detected — showing password reset screen");
+          logger.info("[SUPABASE] Recovery token detected — showing password reset screen");
           setPasswordRecovery(true);
           setUser(session.user);
           setLoading(false);
           return;
         }
         saveLastUser(session.user.id);
+        if (loadedUserId.current && loadedUserId.current !== session.user.id) {
+          // Account switched while the app was closed: drop the eager cached
+          // state so the correct user loads below.
+          logger.info("[SUPABASE] Session is a different user — reloading for", { userId: session.user.id.slice(0, 8) });
+          loadedUserId.current = null;
+          setProfile(null);
+          setChats([]);
+          setContacts([]);
+          setCalls([]);
+        }
         setUser(session.user);
         if (!loadedUserId.current) {
           loadUserData(session.user.id);
+        } else {
+          setLoading(false);
         }
       } else {
         // No session (offline or expired). If we know a last user, enter in
         // offline mode with cached data instead of forcing the login screen.
         const lastUser = loadLastUser();
         if (lastUser?.id) {
-          console.log("[SUPABASE] No session — restoring offline mode for last user:", lastUser.id.slice(0, 8));
+          logger.info("[SUPABASE] No session — restoring offline mode for last user", { userId: lastUser.id.slice(0, 8) });
           setUser({ id: lastUser.id });
           if (!loadedUserId.current) {
             loadUserData(lastUser.id);
@@ -174,11 +277,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       const userId = session?.user?.id;
-      console.log("[AUTH]", event, userId ? userId.slice(0, 8) + "..." : "null");
+      logger.info("[AUTH]", { event, userId: userId ? userId.slice(0, 8) + "..." : "null" });
 
       switch (event) {
         case "PASSWORD_RECOVERY":
-          console.log("[AUTH] PASSWORD_RECOVERY — showing password reset screen");
+          logger.info("[AUTH] PASSWORD_RECOVERY — showing password reset screen");
           setPasswordRecovery(true);
           if (userId) {
             setUser(session.user);
@@ -188,7 +291,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
         case "SIGNED_IN":
           if (isPasswordRecoveryUrl()) {
-            console.log("[AUTH] SIGNED_IN during recovery — showing password reset screen");
+            logger.info("[AUTH] SIGNED_IN during recovery — showing password reset screen");
             setPasswordRecovery(true);
             setUser(session.user);
             setLoading(false);
@@ -208,7 +311,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           // sending the user to the login screen.
           const lastUser = loadLastUser();
           if (lastUser?.id) {
-            console.log("[SUPABASE] SIGNED_OUT without manual logout — restoring offline mode:", lastUser.id.slice(0, 8));
+            logger.info("[SUPABASE] SIGNED_OUT without manual logout — restoring offline mode", { userId: lastUser.id.slice(0, 8) });
             loadedUserId.current = null;
             setUser({ id: lastUser.id });
             loadUserData(lastUser.id);
@@ -256,6 +359,37 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Self-heal: si tras una carga la lista de contactos quedó vacía pero el
+  // usuario sí tiene chats 1:1 (p. ej. tras instalar un nuevo APK la caché
+  // local y/o la copia de contactos desaparecieron), re-provisiona cada
+  // interlocutor como contacto para que la lista nunca quede en "No tienes".
+  const healContactsRef = useRef<Set<string>>(new Set());
+  const healContactsFromChats = async (uid: string, chats: Chat[]) => {
+    const partners = new Map<string, { name: string; avatar: string }>();
+    for (const c of chats) {
+      if (c.is_group || !c.profile_id || !c.admin_id) continue;
+      const partnerId = c.profile_id === uid ? c.admin_id : c.profile_id;
+      if (!partnerId || partnerId === uid) continue;
+      partners.set(partnerId, { name: c.name || "", avatar: c.avatar || "" });
+    }
+    const pending = [...partners.entries()].filter(([pid]) => !healContactsRef.current.has(pid));
+    if (pending.length === 0) return 0;
+    for (const [pid, meta] of pending) {
+      healContactsRef.current.add(pid);
+      try {
+        await addContact(uid, pid, meta.name, meta.avatar);
+      } catch (e) {
+        logger.warn("[SUPABASE] healContact failed", { error: e, pid });
+      }
+    }
+    const fresh = await getContacts(uid);
+    if (loadedUserId.current === uid) {
+      setContacts(fresh);
+      contactRepo.saveContacts(uid, fresh);
+    }
+    return pending.length;
+  };
+
   async function loadUserData(userId: string) {
     if (loadedUserId.current === userId) return;
     loadedUserId.current = userId;
@@ -270,6 +404,13 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     ]);
     const cachedCalls = loadCache<Call[]>(cacheKey(userId, "calls"), []);
     
+    // Account switched while loading: bail out so the eager cached state of an
+    // old user never overwrites the correct user's data.
+    if (loadedUserId.current !== userId) {
+      loadingUserDataRef.current = false;
+      return;
+    }
+
     debugLog("cache loaded", { 
       hasProfile: !!cachedProfile, 
       chatsCount: cachedChats.length, 
@@ -300,6 +441,13 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         contacts: contactsResult.status,
         calls: callsResult.status,
       });
+
+      // Account switched while the network fetch was in flight — discard
+      // stale results so they never overwrite the correct user's data.
+      if (loadedUserId.current !== userId) {
+        loadingUserDataRef.current = false;
+        return;
+      }
 
       const hasProfileError = profilesResult.status === "fulfilled" && profilesResult.value?.error;
       if (hasProfileError) {
@@ -338,6 +486,17 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       if (!contactsWipeGuard) setContacts(newContacts);
       if (!callsWipeGuard) setCalls(newCalls);
 
+      // Si la lista de contactos quedó vacía (caché perdida tras instalar un
+      // APK nuevo) pero hay chats 1:1, regístralos automáticamente como
+      // contactos para no tener que guardarlos a mano.
+      if (!contactsWipeGuard && newContacts.length === 0 && newChats.length > 0) {
+        healContactsFromChats(userId, newChats)
+          .then((added) => {
+            if (added > 0) debugLog("self-healed contacts from chats", { added });
+          })
+          .catch((err) => logger.error("[SUPABASE] heal contacts failed", { error: err }));
+      }
+
       // Update cache with fresh data (avoid persisting a transient empty result over a healthy cache)
       saveCache(cacheKey(userId, "profile"), newProfile);
       if (!chatsWipeGuard) chatRepo.saveChats(userId, enrichedChats);
@@ -351,8 +510,8 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       debugLog("loadUserData error", err);
     }
 
-    registerPushNotifications(userId).catch(err => console.error("[SupabaseContext] registerPushNotifications failed:", err));
-    setupCapacitorPush(userId).catch(err => console.error("[SupabaseContext] setupCapacitorPush failed:", err));
+    registerPushNotifications(userId).catch(err => logger.error("[SupabaseContext] registerPushNotifications failed", { error: err }));
+    setupCapacitorPush(userId).catch(err => logger.error("[SupabaseContext] setupCapacitorPush failed", { error: err }));
 
     // Clean up any existing presence channel for this user before creating a new one
     if (presenceChannelRef.current) {
@@ -370,14 +529,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         const state = channel.presenceState();
         const isOnline = Object.keys(state).length > 0;
         if (!isOnline) {
-          supabase.from("profiles").update({ status: "offline" }).eq("id", userId);
+          updatePresenceDebounced(userId, "offline");
         }
       });
       channel.on("presence", { event: "join" }, () => {
-        supabase.from("profiles").update({ status: "online" }).eq("id", userId);
+        updatePresenceDebounced(userId, "online");
       });
       channel.on("presence", { event: "leave" }, () => {
-        supabase.from("profiles").update({ status: "offline" }).eq("id", userId);
+        updatePresenceDebounced(userId, "offline");
       });
       channel.subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
@@ -430,13 +589,13 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "chat_participants", filter: `profile_id=eq.${userId}` },
       async (payload: any) => {
-        console.log("🔥 REALTIME chat_participants INSERT received:", payload);
+        logger.info("🔥 REALTIME chat_participants INSERT received", { payload });
         const chatId = payload.new?.chat_id;
         if (!chatId) {
-          console.warn("[SUPABASE] chat_participants INSERT event missing chat_id", payload);
+          logger.warn("[SUPABASE] chat_participants INSERT event missing chat_id", { payload });
           return;
         }
-        console.log("[SUPABASE] New chat_participant for chat:", chatId);
+        logger.info("[SUPABASE] New chat_participant for chat", { chatId });
         try {
           const { data: chatData, error: chatError } = await supabase
             .from("chats")
@@ -444,22 +603,22 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
             .eq("id", chatId)
             .single();
           if (chatError) {
-            console.error("[SUPABASE] Failed to fetch new chat (RLS?):", chatError);
+            logger.error("[SUPABASE] Failed to fetch new chat (RLS?)", { error: chatError });
             return;
           }
           if (!chatData) {
-            console.warn("[SUPABASE] New chat not found:", chatId);
+            logger.warn("[SUPABASE] New chat not found", { chatId });
             return;
           }
-          console.log("[SUPABASE] Fetched new chat data:", chatData);
+          logger.info("[SUPABASE] Fetched new chat data", { chatData });
 
           // Update React state (prepend to chat list)
           setChats(prev => {
             if (prev.some(c => c.id === chatId)) {
-              console.log("[SUPABASE] Chat already in list, skipping:", chatId);
+              logger.info("[SUPABASE] Chat already in list, skipping", { chatId });
               return prev;
             }
-            console.log("[SUPABASE] Prepending chat to list:", chatId);
+            logger.info("[SUPABASE] Prepending chat to list", { chatId });
             return [chatData as Chat, ...prev];
           });
 
@@ -468,10 +627,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
             const existingChats = await chatRepo.getChats(userId);
             if (!existingChats.some(c => c.id === chatId)) {
               await chatRepo.saveChats(userId, [chatData as Chat, ...existingChats]);
-              console.log("[SUPABASE] Saved new chat to SQLite:", chatId);
+              logger.info("[SUPABASE] Saved new chat to SQLite", { chatId });
             }
           } catch (sqliteErr) {
-            console.warn("[SUPABASE] Failed to persist new chat to SQLite:", sqliteErr);
+            logger.warn("[SUPABASE] Failed to persist new chat to SQLite", { error: sqliteErr });
           }
 
           const groupName = (chatData as any).name || "Grupo";
@@ -480,20 +639,20 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
             toast.success(`Te agregaron al grupo "${groupName}"`);
           }
         } catch (e) {
-          console.error("[SUPABASE] Error processing chat_participants event:", e);
+          logger.error("[SUPABASE] Error processing chat_participants event", { error: e });
         }
       }
     );
     participantsChannel.subscribe((status: string) => {
-      console.log("[SUPABASE] chat_participants channel status:", status, "for user:", userId);
+      logger.info("[SUPABASE] chat_participants channel status", { status, userId });
       if (status === "CHANNEL_ERROR") {
-        console.error("[SUPABASE] ❌ CHANNEL_ERROR on chat_participants — Realtime may not be enabled for this table in Supabase dashboard, or RLS is blocking.");
+        logger.error("[SUPABASE] CHANNEL_ERROR on chat_participants — Realtime may not be enabled for this table in Supabase dashboard, or RLS is blocking.");
       } else if (status === "TIMED_OUT") {
-        console.error("[SUPABASE] ❌ TIMED_OUT on chat_participants — network issue or server unreachable.");
+        logger.error("[SUPABASE] TIMED_OUT on chat_participants — network issue or server unreachable.");
       } else if (status === "CLOSED") {
-        console.warn("[SUPABASE] chat_participants channel CLOSED, will not receive events.");
+        logger.warn("[SUPABASE] chat_participants channel CLOSED, will not receive events.");
       } else if (status === "SUBSCRIBED") {
-        console.log("[SUPABASE] ✅ chat_participants SUBSCRIBED — listening for new groups.");
+        logger.info("[SUPABASE] chat_participants SUBSCRIBED — listening for new groups.");
       }
     });
     participantsChannelRef.current = participantsChannel;
@@ -502,19 +661,19 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     const handleBeforeUnload = () => {
       presenceChannelRef.current?.untrack();
       if (userId) {
-        supabase.from("profiles").update({ status: "offline" }).eq("id", userId).then(() => {});
+        flushPresence(userId);
       }
     };
 
-    // visibilitychange: toggle online/offline when app goes to background
+    // visibilitychange: toggle online/offline when app goes to background (debounced)
     const handleVisibility = () => {
       if (!userId) return;
       if (document.hidden) {
         presenceChannelRef.current?.untrack();
         if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-        supabase.from("profiles").update({ status: "offline" }).eq("id", userId).then(() => {});
+        updatePresenceDebounced(userId, "offline");
       } else {
-        supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
+        updatePresenceDebounced(userId, "online");
         presenceChannelRef.current?.track({ user_id: userId, online_at: new Date().toISOString() });
         if (!heartbeatRef.current) {
           heartbeatRef.current = setInterval(() => {
@@ -546,7 +705,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         const knownIds = new Set(chatsRef.current.map(c => c.id));
         const newChats = fresh.filter(c => !knownIds.has(c.id));
         if (newChats.length === 0) return;
-        console.log("[SUPABASE] Poll found new chat(s):", newChats.map(c => c.id));
+        logger.info("[SUPABASE] Poll found new chat(s)", { chatIds: newChats.map(c => c.id) });
         setChats(prev => {
           const existing = new Set(prev.map(c => c.id));
           const toAdd = newChats.filter(c => !existing.has(c.id));
@@ -554,7 +713,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           return [...toAdd, ...prev];
         });
       } catch (e) {
-        console.warn("[SUPABASE] Discovery poll error:", e);
+        logger.warn("[SUPABASE] Discovery poll error", { error: e });
       }
     }, 6000);
 
@@ -586,7 +745,7 @@ const refreshChats = async () => {
     // nunca vaciar un chat-list/caché que ya tiene datos.
     const wipeGuard = ch.length === 0 && chatsRef.current.length > 0;
     if (wipeGuard) {
-      console.warn("[SUPABASE] refreshChats returned empty — keeping cached chats");
+      logger.warn("[SUPABASE] refreshChats returned empty — keeping cached chats");
       return;
     }
     // Reconciliar: conserva los `messages` locales/pendientes del chat que se
@@ -607,7 +766,7 @@ const refreshChats = async () => {
     const cont = await getContacts(user.id);
     const wipeGuard = cont.length === 0 && contactsRef.current.length > 0;
     if (wipeGuard) {
-      console.warn("[SUPABASE] refreshContacts returned empty — keeping cached contacts");
+      logger.warn("[SUPABASE] refreshContacts returned empty — keeping cached contacts");
       return;
     }
     setContacts(cont);
@@ -629,14 +788,16 @@ const refreshChats = async () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ level, args: args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)) }),
       }).catch(() => {});
-    } catch {}
+    } catch (e) {
+      logger.warn("[SupabaseContext] sendLog failed", { error: e });
+    }
   }
 
   // Expose debug function globally so user can run it from browser console
   window.__debugChats = async () => {
-    if (!user) { console.error("No user logged in"); return; }
+    if (!user) { logger.error("No user logged in"); return; }
     const lines: string[] = [];
-    const log = (msg: string) => { lines.push(msg); console.log(msg); sendLog("info", msg); };
+    const log = (msg: string) => { lines.push(msg); logger.info(msg); sendLog("info", msg); };
     log("=== CHAT DIAGNOSTIC ===");
     log("User ID: " + user.id);
     // 1. Check chat_participants
@@ -671,7 +832,7 @@ const refreshChats = async () => {
   };
 
   window.__startAutoDebug = () => {
-    console.log("Auto-debug started (every 5s). Run __stopAutoDebug() to stop.");
+    logger.info("Auto-debug started (every 5s). Run __stopAutoDebug() to stop.");
     if (window.__autoDebugInterval) clearInterval(window.__autoDebugInterval);
     window.__autoDebugInterval = setInterval(() => window.__debugChats(), 5000);
   };
@@ -679,7 +840,7 @@ const refreshChats = async () => {
     if (window.__autoDebugInterval) {
       clearInterval(window.__autoDebugInterval);
       window.__autoDebugInterval = null;
-      console.log("Auto-debug stopped.");
+      logger.info("Auto-debug stopped.");
     }
   };
 
@@ -710,10 +871,11 @@ const refreshChats = async () => {
     if (participantsChannelRef.current) { supabase.removeChannel(participantsChannelRef.current); participantsChannelRef.current = null; }
     presenceChannelRef.current?.untrack();
     presenceChannelRef.current?.unsubscribe();
+    presenceChannelRef.current = null;
     cleanupListenersRef.current?.();
     cleanupListenersRef.current = null;
     if (user) {
-      await supabase.from("profiles").update({ status: "offline" }).eq("id", user.id);
+      flushPresence(user.id);
     }
     await unregisterPushNotifications();
     await unregisterCapacitorPush();

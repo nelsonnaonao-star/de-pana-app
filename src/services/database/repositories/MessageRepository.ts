@@ -1,6 +1,7 @@
 import { db } from "../DatabaseService";
 import { getItem, setItem, removeItem } from "../../storageService";
 import type { Message } from "../../../types";
+import { logger } from "../../../lib/logger";
 
 const CACHE_PREFIX = "redon_cache_msgs_";
 const MAX_CACHED = 200;
@@ -43,7 +44,9 @@ function fromRow(row: Record<string, unknown>): Message {
     try {
       const parsed = JSON.parse(row.payload) as Message;
       return parsed;
-    } catch {}
+    } catch (e) {
+      logger.warn("[MessageRepo] Failed to parse payload", { error: e });
+    }
   }
   return {
     id: row.id as string,
@@ -106,7 +109,7 @@ export class MessageRepository {
         );
         return rows.map(fromRow);
       } catch (e) {
-        console.warn("[MessageRepo] SQLite error, fallback", e);
+        logger.warn("[MessageRepo] SQLite error, fallback", { error: e });
       }
     }
     const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
@@ -128,7 +131,7 @@ export class MessageRepository {
           }))
         );
       } catch (e) {
-        console.warn("[MessageRepo] SQLite error, fallback", e);
+        logger.warn("[MessageRepo] SQLite error, fallback", { error: e });
       }
     }
     await setItem(`${CACHE_PREFIX}${chatId}`, batch);
@@ -144,7 +147,7 @@ export class MessageRepository {
           },
         ]);
       } catch (e) {
-        console.warn("[MessageRepo] upsert SQLite error, fallback", e);
+        logger.warn("[MessageRepo] upsert SQLite error, fallback", { error: e });
       }
     }
   }
@@ -160,7 +163,7 @@ export class MessageRepository {
           message: fromRow(r),
         }));
       } catch (e) {
-        console.warn("[MessageRepo] getAllUnsynced SQLite error", e);
+        logger.warn("[MessageRepo] getAllUnsynced SQLite error", { error: e });
       }
     }
     return [];
@@ -172,7 +175,7 @@ export class MessageRepository {
         await db.run("UPDATE messages SET synced = 1 WHERE id = ?", [msgId]);
         return;
       } catch (e) {
-        console.warn("[MessageRepo] markSynced error", e);
+        logger.warn("[MessageRepo] markSynced error", { error: e });
       }
     }
   }
@@ -182,7 +185,7 @@ export class MessageRepository {
       try {
         await db.run("DELETE FROM messages WHERE chat_id = ? AND id = ?", [chatId, msgId]);
       } catch (e) {
-        console.warn("[MessageRepo] deleteMessage error", e);
+        logger.warn("[MessageRepo] deleteMessage error", { error: e });
       }
     }
   }
@@ -193,7 +196,7 @@ export class MessageRepository {
         await db.run("DELETE FROM messages WHERE chat_id = ?", [chatId]);
         return;
       } catch (e) {
-        console.warn("[MessageRepo] clear SQLite error, fallback", e);
+        logger.warn("[MessageRepo] clear SQLite error, fallback", { error: e });
       }
     }
     await removeItem(`${CACHE_PREFIX}${chatId}`);

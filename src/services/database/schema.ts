@@ -96,4 +96,15 @@ CREATE TABLE IF NOT EXISTS stories (
 
 CREATE INDEX IF NOT EXISTS idx_stories_user_id ON stories(user_id);
 CREATE INDEX IF NOT EXISTS idx_stories_created_at ON stories(created_at);
+
+CREATE TABLE IF NOT EXISTS call_rooms (
+  id TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  participant_count INTEGER DEFAULT 1,
+  is_group_call INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_call_rooms_chat_id ON call_rooms(chat_id);
 `;

@@ -4,6 +4,7 @@ import {
   TrendingUp, Calculator, DollarSign, Euro, 
   ShieldCheck, Check, RefreshCw
 } from "lucide-react";
+import { logger } from "../lib/logger";
 
 interface RateItem {
   id: string;
@@ -30,14 +31,18 @@ function loadCachedRates(): { rates: RateItem[]; updatedAt: string } {
         return { rates: parsed.rates, updatedAt: parsed.updatedAt || "" };
       }
     }
-  } catch {}
+  } catch (e) {
+    logger.warn("[RatesPanel] loadCachedRates failed", { error: e });
+  }
   return { rates: FALLBACK_RATES, updatedAt: "" };
 }
 
 function saveCachedRates(rates: RateItem[], updatedAt: string) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ rates, updatedAt }));
-  } catch {}
+  } catch (e) {
+    logger.warn("[RatesPanel] saveCachedRates failed", { error: e });
+  }
 }
 
 function fetchWithTimeout(url: string, ms: number): Promise<Response> {
@@ -107,7 +112,7 @@ export default function RatesPanel() {
       setLastUpdated(now);
       saveCachedRates(items, now);
     } catch (e) {
-      console.warn("[RatesPanel] fetch failed, usando fallback:", e);
+      logger.warn("[RatesPanel] fetch failed, usando fallback", { error: e });
     } finally {
       setLoading(false);
     }

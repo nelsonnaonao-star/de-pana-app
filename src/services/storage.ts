@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { logger } from "../lib/logger";
 
 const BUCKET = "chat-images";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
@@ -79,9 +80,7 @@ export async function compressImage(blob: Blob): Promise<Blob> {
   const compress = compressToTarget(blob);
 
   const result = await Promise.race([compress, timeout]);
-  console.log(
-    `[STORAGE] ${(blob.size / 1024).toFixed(0)}KB → ${(result.size / 1024).toFixed(0)}KB`
-  );
+  logger.info(`[STORAGE] ${(blob.size / 1024).toFixed(0)}KB → ${(result.size / 1024).toFixed(0)}KB`);
   return result;
 }
 

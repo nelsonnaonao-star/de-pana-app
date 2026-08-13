@@ -1,8 +1,10 @@
 package com.redon.app;
 
 import android.app.KeyguardManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -26,8 +28,19 @@ import androidx.core.app.NotificationManagerCompat;
 public class IncomingCallActivity extends AppCompatActivity {
 
     private static final String TAG = "IncomingCallActivity";
+    private static final String ACTION_CALL_ANSWERED = "com.redon.app.ACTION_CALL_ANSWERED";
     private Ringtone ringtone;
     private PowerManager.WakeLock wakeLock;
+    private final BroadcastReceiver answeredReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // Contestada desde otro lado (notificación/app): silencia y cierra de inmediato.
+            stopRingtone();
+            dismissCurrentNotification();
+            finish();
+        }
+    };
+    private int notificationId = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -70,7 +83,7 @@ public class IncomingCallActivity extends AppCompatActivity {
         String callerId = getIntent().getStringExtra("callerId");
         String rawCallerName = getIntent().getStringExtra("callerName");
         String rawCallType = getIntent().getStringExtra("callType");
-        int notificationId = getIntent().getIntExtra("notificationId", ("call-" + (chatId != null ? chatId : "")).hashCode());
+        notificationId = getIntent().getIntExtra("notificationId", ("call-" + (chatId != null ? chatId : "")).hashCode());
 
         final String callerName = rawCallerName != null ? rawCallerName : "Llamada entrante";
         final String callType = rawCallType != null ? rawCallType : "audio";
@@ -148,6 +161,19 @@ public class IncomingCallActivity extends AppCompatActivity {
                 finish();
             }
         }, 30000);
+
+        // Si la llamada se contesta desde la notificación o la app mientras esta
+        // pantalla está abierta, detén el ringtone al instante (evita "sigue sonando").
+        IntentFilter answeredFilter = new IntentFilter(ACTION_CALL_ANSWERED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(answeredReceiver, answeredFilter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(answeredReceiver, answeredFilter);
+        }
+    }
+
+    private void dismissCurrentNotification() {
+        if (notificationId != -1) dismissNotification(notificationId);
     }
 
     private void stopRingtone() {
@@ -166,6 +192,7 @@ public class IncomingCallActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        try { unregisterReceiver(answeredReceiver); } catch (Exception ignored) {}
         stopRingtone();
         if (wakeLock != null && wakeLock.isHeld()) {
             try { wakeLock.release(); } catch (Exception ignored) {}

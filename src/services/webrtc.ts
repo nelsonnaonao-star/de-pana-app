@@ -413,33 +413,78 @@ export class WebRTCService {
 
   async switchCamera(): Promise<MediaStream | null> {
     if (!this.localStream || !this.pc) return null;
-    const newFacing = this.currentFacingMode === "user" ? "environment" : "user";
+    const oldVideoTrack = this.localStream.getVideoTracks()[0];
+    if (!oldVideoTrack) return null;
 
     try {
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: newFacing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
-        audio: false,
-      });
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const currentDeviceId = oldVideoTrack.getSettings().deviceId;
+      const nextCamera = devices
+        .filter((d) => d.kind === "videoinput")
+        .find((d) => d.deviceId && currentDeviceId && d.deviceId !== currentDeviceId);
 
-      const newVideoTrack = newStream.getVideoTracks()[0];
-      if (!newVideoTrack) return null;
+      // Liberar la cámara actual ANTES de adquirir la otra: muchos WebViews de
+      // Android fallan (NotReadableError) si "environment" se pide mientras
+      // "user" sigue activa. Esperar un instante permite al sistema liberarla.
+      oldVideoTrack.stop();
+      await new Promise((r) => setTimeout(r, 350));
 
-      const oldVideoTrack = this.localStream.getVideoTracks()[0];
-      if (oldVideoTrack) {
-        oldVideoTrack.stop();
-        this.localStream.removeTrack(oldVideoTrack);
-        this.localStream.addTrack(newVideoTrack);
-
-        const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) {
-          await sender.replaceTrack(newVideoTrack);
-        }
+      let acquired: MediaStream;
+      if (nextCamera && nextCamera.deviceId) {
+        acquired = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: nextCamera.deviceId }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
+          audio: false,
+        });
+      } else {
+        const newFacing: "user" | "environment" = this.currentFacingMode === "user" ? "environment" : "user";
+        acquired = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: newFacing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } },
+          audio: false,
+        });
       }
 
-      this.currentFacingMode = newFacing;
+      const newVideoTrack = acquired.getVideoTracks()[0];
+      if (!newVideoTrack) {
+        acquired.getTracks().forEach((t) => t.stop());
+        return null;
+      }
+
+      // MediaStream NUEVO (audio actual vivo + cámara nueva) para que React
+      // re-remonte el <video> local con el nuevo srcObject.
+      const rebuilt = new MediaStream();
+      for (const t of this.localStream.getAudioTracks()) rebuilt.addTrack(t);
+      rebuilt.addTrack(newVideoTrack);
+      this.localStream = rebuilt;
+
+      const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
+      if (sender) {
+        await sender.replaceTrack(newVideoTrack);
+      }
+
+      this.currentFacingMode = this.currentFacingMode === "user" ? "environment" : "user";
       return this.localStream;
     } catch (err) {
       console.error("[WebRTC] switchCamera error:", err);
+      // Restaurar la cámara frontal para no dejar la llamada sin video cuando
+      // la adquisición de la cámara opuesta falla.
+      try {
+        const restore = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: false,
+        });
+        const restored = restore.getVideoTracks()[0];
+        if (restored) {
+          const rebuilt = new MediaStream();
+          for (const t of this.localStream.getAudioTracks()) rebuilt.addTrack(t);
+          rebuilt.addTrack(restored);
+          this.localStream = rebuilt;
+          const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
+          if (sender) await sender.replaceTrack(restored);
+          this.currentFacingMode = "user";
+        }
+      } catch {
+        // Ignorar: nada que podamos hacer aquí.
+      }
       return null;
     }
   }

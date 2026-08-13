@@ -1,26 +1,18 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
-import * as Sentry from '@sentry/react';
-import {browserTracingIntegration, replayIntegration} from '@sentry/react';
+import {Capacitor} from '@capacitor/core';
 import {SupabaseProvider} from './contexts/SupabaseContext';
 import App from './App.tsx';
 import './index.css';
 
-Sentry.init({
-  dsn: import.meta.env.VITE_SENTRY_DSN,
-  environment: 'staging',
-  integrations: [
-    browserTracingIntegration(),
-    replayIntegration({
-      maskAllText: true,
-      blockAllMedia: true,
-    }),
-  ],
-  tracesSampleRate: 1.0,
-  replaysOnErrorSampleRate: 1.0,
-  replaysSessionSampleRate: 0.1,
-  enableLogs: true,
-});
+// Error-reporting (web) initializes lazily after first paint so the heavy
+// Sentry chunk never blocks cold-start parsing. On native it's initialized
+// lazily via lib/sentry.ts.
+if (!Capacitor.isNativePlatform()) {
+  window.setTimeout(() => {
+    import('./lib/initSentryWeb').then(({initSentryWeb}) => initSentryWeb()).catch(() => {});
+  }, 5000);
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

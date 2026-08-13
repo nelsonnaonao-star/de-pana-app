@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../lib/supabase";
 import { addGroupMember, removeGroupMember, leaveGroup as apiLeaveGroup, updateChat, muteGroup, unmuteGroup, getGroupMute, MuteDuration } from "../../services/chats";
 import { searchUsers } from "../../services/contacts";
+import { logger } from "../../lib/logger";
 
 import toast from "react-hot-toast";
 
@@ -50,7 +51,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
           setGroupMembers(mapped);
         }
       } catch (e) {
-        console.error("[CHAT] Error fetching group members:", e);
+        logger.error("[CHAT] Error fetching group members", { error: e });
       }
     })();
   }, [showGroupInfo, isGroup, chatId]);
@@ -66,7 +67,9 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
         const existingIds = new Set(groupMembers.map(m => m.profile_id));
         const filtered = results.filter(r => !existingIds.has(r.id));
         setAddMemberResults(filtered);
-      } catch {}
+      } catch (e) {
+        logger.warn("[CHAT] searchUsers failed", { error: e });
+      }
     }, 300);
     return () => clearTimeout(timer);
   }, [addMemberQuery, uid, groupMembers]);
@@ -83,7 +86,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       setEditingGroupName(false);
       toast.success("Nombre del grupo actualizado");
     } catch (e) {
-      console.error("[CHAT] Error updating group name:", e);
+      logger.error("[CHAT] Error updating group name", { error: e });
       toast.error("Error al actualizar nombre");
     }
   }, [groupNameDraft, localGroupName, chatId]);
@@ -123,7 +126,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
           })
           .eq("id", chatId);
       } catch (e) {
-        console.error("[CHAT] Failed to insert system message:", e);
+        logger.error("[CHAT] Failed to insert system message", { error: e });
       }
 
       const { data: profile } = await supabase
@@ -139,7 +142,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       setAddMemberResults([]);
       toast.success("Miembro agregado");
     } catch (e) {
-      console.error("[CHAT] Error adding member:", e);
+      logger.error("[CHAT] Error adding member", { error: e });
       toast.error("Error al agregar miembro");
     } finally {
       setAddingMember(false);
@@ -152,7 +155,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       setGroupMembers(prev => prev.filter(m => m.profile_id !== profileId));
       toast.success("Miembro eliminado del grupo");
     } catch (e) {
-      console.error("[CHAT] Error removing member:", e);
+      logger.error("[CHAT] Error removing member", { error: e });
       toast.error("Error al eliminar miembro");
     }
   }, [chatId]);
@@ -165,7 +168,9 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       try {
         const { data } = await supabase.from("chats").select("avatar").eq("id", chatId).single();
         if (data) setGroupAvatar(data.avatar || "");
-      } catch {}
+      } catch (e) {
+        logger.warn("[CHAT] Error fetching group avatar", { error: e });
+      }
     })();
   }, [showGroupInfo, isGroup, chatId]);
 
@@ -180,7 +185,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       toast.success("Foto de grupo actualizada");
       return url;
     } catch (e) {
-      console.error("[CHAT] Error changing group photo:", e);
+      logger.error("[CHAT] Error changing group photo", { error: e });
       toast.error("Error al cambiar foto");
       return null;
     }
@@ -192,7 +197,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       toast.success("Has salido del grupo");
       return true;
     } catch (e) {
-      console.error("[CHAT] Error leaving group:", e);
+      logger.error("[CHAT] Error leaving group", { error: e });
       toast.error("Error al salir del grupo");
       return false;
     }
@@ -206,7 +211,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       setMuteUntil(duration === "always" ? null : null);
       toast.success(duration === "always" ? "Grupo silenciado (Siempre)" : `Grupo silenciado`);
     } catch (e) {
-      console.error("[CHAT] Error muting group:", e);
+      logger.error("[CHAT] Error muting group", { error: e });
       toast.error("Error al silenciar el grupo");
     } finally {
       setMuting(false);
@@ -221,7 +226,7 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
       setMuteUntil(null);
       toast.success("Sonido del grupo activado");
     } catch (e) {
-      console.error("[CHAT] Error unmuting group:", e);
+      logger.error("[CHAT] Error unmuting group", { error: e });
       toast.error("Error al activar el sonido");
     } finally {
       setMuting(false);

@@ -7,12 +7,12 @@ import {
   Check, AlertTriangle, Info, Search, Plus, 
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
-  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy, User, Wifi
+  Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy, User, Wifi,
+  X, Loader2, UserPlus
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Chat, Message, ActiveCall } from "../types";
 import WelcomeScreen from "./WelcomeScreen";
-import ChatRoom from "./ChatRoom";
 import CallOverlay from "./CallOverlay";
 import type { BusinessFlyer } from "./BusinessPanel";
 import BottomTabBar from "./phone/BottomTabBar";
@@ -23,9 +23,12 @@ import { useSupabase } from "../contexts/SupabaseContext";
 import { clearForMe, sendMessage as apiSendMessage } from "../services/messages";
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
 import { getAllFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
-import { deleteContact } from "../services/contacts";
+import { deleteContact, getContacts, type Contact } from "../services/contacts";
+import { logger } from "../lib/logger";
+import { syncService } from "../services/sync/SyncService";
 
 import { WebRTCService } from "../services/webrtc";
+import { WebRTCGroupService, isGroupCallAtLimit } from "../services/rtc-group";
 import { startCall as apiStartCall, updateCallRating, updateCallStatus } from "../services/calls";
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -59,6 +62,7 @@ const AddContact = React.lazy(() => import("./AddContact"));
 const AddContactManual = React.lazy(() => import("./AddContactManual"));
 const SyncedContacts = React.lazy(() => import("./SyncedContacts"));
 const SimulatorCreateGroup = React.lazy(() => import("./simulator/SimulatorCreateGroup"));
+const ChatRoom = React.lazy(() => import("./ChatRoom"));
 const ShallowSpinner = ({ label }: { label: string }) => (
   <div className="flex items-center justify-center h-full w-full bg-white">
     <div className="flex flex-col items-center gap-3">
@@ -189,38 +193,38 @@ export default function PhoneSimulator({
 
     bp(() => {
       if (activeCallRef.current) {
-        console.log("[BACK] Active call — ending call");
+        logger.info("[BACK] Active call — ending call");
         cleanupCallRef.current?.();
         return true;
       }
       if (contextMenuChatRef.current) {
-        console.log("[BACK] Context menu open — closing");
+        logger.info("[BACK] Context menu open — closing");
         setContextMenuChat(null);
         setContextMenuPos(null);
         return true;
       }
       if (showActionMenuRef.current) {
-        console.log("[BACK] Action menu open — closing");
+        logger.info("[BACK] Action menu open — closing");
         setShowActionMenu(false);
         return true;
       }
       const screen = currentScreenRef.current;
       if (screen === "chat_room" && chatRoomBackHandlerRef.current) {
         if (chatRoomBackHandlerRef.current()) {
-          console.log("[BACK] ChatRoom consumed back (reply/edit/attachment/search)");
+          logger.info("[BACK] ChatRoom consumed back (reply/edit/attachment/search)");
           return true;
         }
       }
       const target = backScreens[screen];
       if (target) {
-        console.log("[BACK] Navigating from", screen, "->", target);
+        logger.info("[BACK] Navigating from", { from: screen, to: target });
         if (screen === "chat_room") {
           setSelectedChatId(null);
         }
         setCurrentScreen(target as any);
         return true;
       }
-      console.log("[BACK] Root screen — should exit app");
+      logger.info("[BACK] Root screen — should exit app");
       sse?.(true);
       return false;
     });
@@ -254,6 +258,17 @@ export default function PhoneSimulator({
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const webrtcRef = useRef<WebRTCService | null>(null);
 
+  // Group call (mesh, up to 4)
+  const [groupLocalStream, setGroupLocalStream] = useState<MediaStream | null>(null);
+  const [groupRemoteStreams, setGroupRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [groupParticipantCount, setGroupParticipantCount] = useState(0);
+  const groupCallRef = useRef<InstanceType<typeof import("../services/rtc-group").WebRTCGroupService> | null>(null);
+  const [groupCallError, setGroupCallError] = useState<string | null>(null);
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [addMemberContacts, setAddMemberContacts] = useState<Contact[]>([]);
+  const [addMemberLoading, setAddMemberLoading] = useState(false);
+  const [invitingContactId, setInvitingContactId] = useState<string | null>(null);
+
   // Ringback tone for outgoing calls (synthesized via Web Audio API)
   const ringbackCtxRef = useRef<AudioContext | null>(null);
   const ringbackIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -271,9 +286,9 @@ export default function PhoneSimulator({
       stopIncomingRingtone();
       const audio = playSound("call", 0.8);
       ringtoneAudioRef.current = audio;
-      if (audio) console.log('[APP] 🔊 Incoming ringtone started');
+      if (audio) logger.info("[APP] Incoming ringtone started");
     } catch (e) {
-      console.warn('[APP] Failed to play incoming ringtone:', e);
+      logger.warn("[APP] Failed to play incoming ringtone", { error: e });
     }
   }, []);
 
@@ -282,7 +297,7 @@ export default function PhoneSimulator({
     if (ringtoneAudioRef.current) {
       try { ringtoneAudioRef.current.pause(); ringtoneAudioRef.current.currentTime = 0; } catch {}
       ringtoneAudioRef.current = null;
-      console.log('[APP] 🔇 Incoming ringtone stopped');
+      logger.info("[APP] Incoming ringtone stopped");
     }
   }, []);
 
@@ -293,9 +308,9 @@ export default function PhoneSimulator({
       }
       const audio = playSound("message", 0.7);
       notificationAudioRef.current = audio;
-      if (audio) console.log('[APP] 🔊 Notification sound played');
+      if (audio) logger.info("[APP] Notification sound played");
     } catch (e) {
-      console.warn('[APP] Failed to play notification sound:', e);
+      logger.warn("[APP] Failed to play notification sound", { error: e });
     }
   }, []);
 
@@ -319,9 +334,9 @@ export default function PhoneSimulator({
       };
       playBeep();
       ringbackIntervalRef.current = setInterval(playBeep, 1000);
-      console.log('[WEBRTC SIGNALING] 🔊 Ringback tone started');
+      logger.info("[WEBRTC SIGNALING] Ringback tone started");
     } catch (e) {
-      console.warn('[WEBRTC SIGNALING] Failed to play ringback tone:', e);
+      logger.warn("[WEBRTC SIGNALING] Failed to play ringback tone", { error: e });
     }
   }, []);
 
@@ -333,7 +348,7 @@ export default function PhoneSimulator({
     if (ringbackCtxRef.current) {
       try { ringbackCtxRef.current.close(); } catch {}
       ringbackCtxRef.current = null;
-      console.log('[WEBRTC SIGNALING] 🔇 Ringback tone stopped');
+      logger.info("[WEBRTC SIGNALING] Ringback tone stopped");
     }
   }, []);
 
@@ -346,6 +361,19 @@ export default function PhoneSimulator({
     }
     return hash;
   }
+
+  // Cancela la notificación nativa de llamada entrante (ID = hash("call-"+chatId),
+  // igual que CallFcmService/MainActivity) para que su tono no siga sonando al contestar.
+  const cancelIncomingCallNotification = useCallback(async (chatId?: string, callId?: string) => {
+    if (!Capacitor.isNativePlatform()) return;
+    const source = chatId || callId || "";
+    if (!source) return;
+    try {
+      await LocalNotifications.cancel({ notifications: [{ id: javaHashCode("call-" + source) }] });
+    } catch (e) {
+      logger.warn('[CALL] Failed to cancel incoming call notification', { error: e });
+    }
+  }, []);
 
   // Call rating after a connected call ends
   const [callRating, setCallRating] = useState<{ callId: string; contactName: string } | null>(null);
@@ -462,7 +490,7 @@ export default function PhoneSimulator({
       }));
       setFlyers(mapped);
     } catch (err) {
-      console.error("[PhoneSimulator] fetch flyers failed:", err);
+      logger.error("[PhoneSimulator] fetch flyers failed", { error: err });
     }
   }, [user]);
 
@@ -497,7 +525,9 @@ export default function PhoneSimulator({
       if (created?.id) {
         setFlyers(prev => prev.map(f => (f.id === newFlyer.id ? { ...f, id: created.id } : f)));
       }
-    } catch {}
+    } catch (e) {
+      logger.error("[PhoneSimulator] create flyer failed", { error: e });
+    }
   };
 
   const handleDeleteFlyer = async (flyerId: string) => {
@@ -505,12 +535,14 @@ export default function PhoneSimulator({
     if (!user) return;
     try {
       await deleteFlyer(flyerId);
-    } catch {}
+    } catch (e) {
+      logger.error("[PhoneSimulator] delete flyer failed", { error: e, flyerId });
+    }
   };
 
   const handleIncrementView = (flyerId: string) => {
     setFlyers(prev => prev.map(f => f.id === flyerId ? { ...f, views: f.views + 1 } : f));
-    incrementFlyerView(flyerId).catch(err => console.error("[PhoneSimulator] incrementFlyerView failed:", err));
+    incrementFlyerView(flyerId).catch(err => logger.error("[PhoneSimulator] incrementFlyerView failed", { error: err, flyerId }));
   };
 
   const handleForwardMessage = async (chatId: string) => {
@@ -547,14 +579,14 @@ export default function PhoneSimulator({
       setForwardingMessage(null);
       setForwardSearchQuery("");
     } catch (e) {
-      console.error("[FORWARD] Error:", e);
+      logger.error("[FORWARD] Error", { error: e });
       toast.error("Error al reenviar mensaje");
     }
   };
 
   const handleIncrementClick = (flyerId: string) => {
     setFlyers(prev => prev.map(f => f.id === flyerId ? { ...f, clicks: f.clicks + 1 } : f));
-    incrementFlyerClick(flyerId).catch(err => console.error("[PhoneSimulator] incrementFlyerClick failed:", err));
+    incrementFlyerClick(flyerId).catch(err => logger.error("[PhoneSimulator] incrementFlyerClick failed", { error: err, flyerId }));
   };
 
   const handleStartBusinessChat = async (businessName: string, avatar: string, initialText: string, flyerId: string, contactPhone?: string) => {
@@ -622,7 +654,7 @@ export default function PhoneSimulator({
           }
         }
       } catch (e) {
-        console.warn("[BIZ] phone lookup failed:", e);
+        logger.warn("[BIZ] phone lookup failed", { error: e, businessDigits });
       }
     }
 
@@ -725,8 +757,7 @@ export default function PhoneSimulator({
     }
 
     setSelectedChatId(targetId);
-    setCurrentScreen("chat_room");
-  };
+      };
 
   const handleRegister = (name: string, phone: string, avatar: string) => {
     setRegisteredUser({ name, phone, avatar, bio: "" });
@@ -789,7 +820,9 @@ export default function PhoneSimulator({
           map[row.chat_id] = row.cleared_at;
         }
         setClearAtMap(map);
-      } catch {}
+      } catch (e) {
+        logger.warn("Failed to load chat_clears", { error: e, userId: user.id });
+      }
     })();
   }, [user?.id]);
 
@@ -868,7 +901,9 @@ export default function PhoneSimulator({
           setSelectedChatId(newChat.id);
           setCurrentScreen("chat_room");
         }
-      } catch {}
+      } catch (e) {
+        logger.error("[PhoneSimulator] support chat creation failed", { error: e });
+      }
     }
   };
 
@@ -880,33 +915,48 @@ export default function PhoneSimulator({
   }, [externalCallTrigger, onClearExternalCallTrigger]);
 
   // Track when we send a message to avoid counting own messages as unread
-  const lastSentAtRef = useRef<Record<string, number>>({});
+const lastSentAtRef = useRef<Record<string, number>>({});
   const chatsRef = useRef(chats);
   chatsRef.current = chats;
   const clearedAtMapRef = useRef(clearedAtMap);
   clearedAtMapRef.current = clearedAtMap;
+
+  // Handle message synced callback: replace tempId with server ID and update status
+  const handleMessageSynced = useCallback((tempId: string, chatId: string, savedId: string) => {
+    setChats(prev => prev.map(chat => {
+      if (chat.id !== chatId) return chat;
+      return {
+        ...chat,
+        messages: chat.messages.map(msg => {
+          if (msg.id === tempId) {
+            return { ...msg, id: savedId, status: "sent", synced: true };
+          }
+          return msg;
+        })
+      };
+    }));
+  }, []);
+
+  // Initialize SyncService for offline message queue when user is available
+  useEffect(() => {
+    if (!user) return;
+    syncService.start().catch(err => logger.error("[PhoneSimulator] SyncService start failed", { error: err }));
+    syncService.onSynced(handleMessageSynced);
+    return () => {
+      syncService.offSynced(handleMessageSynced);
+      syncService.stop();
+    };
+  }, [user?.id, handleMessageSynced]);
 
   // Realtime subscription for chats table (INSERT/UPDATE) — detects new chats from other users
   useEffect(() => {
     if (!user) return;
     const sub = subscribeToChats(user.id, async (event, chat) => {
       if (event === "INSERT") {
-        // New chat — fetch full data
-        const { data: full } = await supabase
-          .from("chats")
-          .select("*")
-          .eq("id", chat.id)
-          .single();
-        if (!full) {
-          const fetched = await getChatWithPartner(chat.id, user.id);
-          if (!fetched) return;
-          setChats(prev => {
-            if (prev.some(c => c.id === fetched.id)) return prev;
-            return [fetched as any, ...prev].sort(sortChats);
-          });
-          refreshChats();
-          return;
-        }
+        // New chat — resolve the partner's avatar/name (never use the raw row avatar,
+        // which may have been stamped with the *creator's* own avatar by the sender).
+        const full = await getChatWithPartner(chat.id, user.id);
+        if (!full) return;
         setChats(prev => {
           if (prev.some(c => c.id === full.id)) return prev;
           return [full as any, ...prev].sort(sortChats);
@@ -999,7 +1049,7 @@ export default function PhoneSimulator({
 
   useEffect(() => {
     if (!user) return;
-    console.log('[WEBRTC SIGNALING] 📡 Subscribing to Supabase Realtime calls for user:', user.id);
+    logger.info('[WEBRTC SIGNALING] Subscribing to Supabase Realtime calls', { userId: user.id });
     const channel = supabase
       .channel(`calls-realtime-${user.id}`)
       .on('postgres_changes', {
@@ -1009,13 +1059,13 @@ export default function PhoneSimulator({
         filter: `callee_id=eq.${user.id}`,
       }, async (payload: any) => {
         const call = payload.new;
-        console.log('[WEBRTC SIGNALING] 📩 Realtime INSERT received:', JSON.stringify({ id: call.id, status: call.status, caller_id: call.caller_id, callee_id: call.callee_id, type: call.type }));
+        logger.info('[WEBRTC SIGNALING] Realtime INSERT received', { id: call.id, status: call.status, callerId: call.caller_id, calleeId: call.callee_id, type: call.type });
         if (call.status !== 'ringing') {
-          console.log('[WEBRTC SIGNALING] ❌ Ignoring call with status:', call.status);
+          logger.warn('[WEBRTC SIGNALING] Ignoring call with status', { status: call.status });
           return;
         }
         if (activeCallRef.current) {
-          console.log('[WEBRTC SIGNALING] ❌ Already in a call, ignoring incoming call');
+          logger.warn('[WEBRTC SIGNALING] Already in a call, ignoring incoming call');
           return;
         }
         let callerName = "Desconocido";
@@ -1030,7 +1080,9 @@ export default function PhoneSimulator({
             callerName = data.name || "Desconocido";
             callerAvatar = data.avatar || data.avatar_url || "";
           }
-        } catch {}
+        } catch (e) {
+          logger.warn('[WEBRTC SIGNALING] Failed to fetch caller profile', { error: e, callerId: call.caller_id });
+        }
         if (activeCallRef.current) return;
         // Safety: verify call is still ringing in DB (may have been cancelled)
         try {
@@ -1040,12 +1092,14 @@ export default function PhoneSimulator({
             .eq("id", call.id)
             .single();
           if (freshCall && freshCall.status !== "ringing") {
-            console.log('[WEBRTC SIGNALING] ❌ Call already ended, skipping incoming UI — status:', freshCall.status);
+            logger.info('[WEBRTC SIGNALING] Call already ended, skipping incoming UI', { status: freshCall.status });
             return;
           }
-        } catch {}
+        } catch (e) {
+          logger.warn('[WEBRTC SIGNALING] Fresh call check failed', { error: e, callId: call.id });
+        }
         if (activeCallRef.current) return;
-        console.log('[WEBRTC SIGNALING] ✅ Setting activeCall from Realtime — caller:', callerName, 'status: incoming');
+        logger.info('[WEBRTC SIGNALING] Setting activeCall from Realtime', { callerName, status: 'incoming' });
         playIncomingRingtone();
         setActiveCall({
           id: call.id,
@@ -1058,6 +1112,7 @@ export default function PhoneSimulator({
           isVideoOff: false,
           isGroup: false,
           targetUserId: call.caller_id,
+          roomId: call.chat_id || undefined,
         });
       })
       .on('postgres_changes', {
@@ -1073,7 +1128,7 @@ export default function PhoneSimulator({
         if (prev?.status === call.status) return;
         if (!activeCallRef.current || activeCallRef.current.id !== call.id) return;
         if (activeCallRef.current.status !== 'incoming') return;
-        console.log('[WEBRTC SIGNALING] 📩 Call ended while incoming — auto-dismissing. Status:', call.status);
+        logger.info('[WEBRTC SIGNALING] Call ended while incoming — auto-dismissing', { status: call.status });
         stopIncomingRingtone();
         callWasConnectedRef.current = false;
         callContactNameRef.current = '';
@@ -1082,13 +1137,13 @@ export default function PhoneSimulator({
             const notifId = javaHashCode("call-" + (call.chat_id || call.id || ""));
             await LocalNotifications.cancel({ notifications: [{ id: notifId }] });
           } catch (e) {
-            console.warn('[WEBRTC SIGNALING] Failed to cancel notification:', e);
+            logger.warn('[WEBRTC SIGNALING] Failed to cancel notification', { error: e });
           }
         }
         setActiveCall(null);
       })
       .subscribe((status) => {
-        console.log('[WEBRTC SIGNALING] 📡 Realtime subscription status:', status);
+        logger.info('[WEBRTC SIGNALING] Realtime subscription status', { status });
       });
     return () => { supabase.removeChannel(channel); };
   }, [user?.id]);
@@ -1103,10 +1158,10 @@ export default function PhoneSimulator({
       const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
       const chatId = d?.chatId || d?.roomId || '';
       const incomingCallId = d?.callId;
-      console.log('[WEBRTC SIGNALING] 📱 FCM incoming-call event received:', JSON.stringify(d));
+      logger.info('[WEBRTC SIGNALING] FCM incoming-call event received', { hasChatId: !!chatId, hasCallerId: !!d?.callerId, callType: d?.type });
 
       if (d?.type === 'call_dismissed') {
-        console.log('[WEBRTC SIGNALING] 📱 FCM call_dismissed received — stopping ringing');
+        logger.info('[WEBRTC SIGNALING] FCM call_dismissed received — stopping ringing');
         if (activeCallRef.current && incomingCallId && activeCallRef.current.id === incomingCallId) {
           stopIncomingRingtone();
           setActiveCall(null);
@@ -1124,12 +1179,14 @@ export default function PhoneSimulator({
               .eq("id", incomingCallId)
               .single();
             if (freshCall && freshCall.status !== "ringing") {
-              console.log('[WEBRTC SIGNALING] ❌ FCM call already ended, skipping UI — status:', freshCall.status);
+              logger.info('[WEBRTC SIGNALING] FCM call already ended, skipping UI', { status: freshCall.status });
               return;
             }
-          } catch {}
+          } catch (e) {
+            logger.warn('[WEBRTC SIGNALING] FCM call status check failed', { error: e });
+          }
         }
-        console.log('[WEBRTC SIGNALING] ✅ Setting activeCall from FCM — caller:', d.callerName, 'status: incoming, callId:', incomingCallId);
+        logger.info('[WEBRTC SIGNALING] Setting activeCall from FCM', { callerName: d.callerName, callId: incomingCallId });
         answeredCallRef.current = false;
         playIncomingRingtone();
         setActiveCall({
@@ -1143,15 +1200,16 @@ export default function PhoneSimulator({
           isVideoOff: false,
           isGroup: false,
           targetUserId: d.callerId,
+          roomId: chatId,
         });
       } else if (chatId && d?.callerId && activeCallRef.current && activeCallRef.current.status === 'incoming') {
         const currentId = activeCallRef.current.id;
         if (incomingCallId && incomingCallId !== currentId && !incomingCallId.startsWith('call_')) {
-          console.log('[WEBRTC SIGNALING] 📱 Updating callId from', currentId, 'to', incomingCallId);
+          logger.info('[WEBRTC SIGNALING] Updating callId', { from: currentId, to: incomingCallId });
           setActiveCall(prev => prev ? { ...prev, id: incomingCallId } : null);
         }
       } else {
-        console.log('[WEBRTC SIGNALING] ❌ FCM incoming-call ignored:', { chatId, callerId: d?.callerId, hasActiveCall: !!activeCallRef.current });
+        logger.warn('[WEBRTC SIGNALING] FCM incoming-call ignored', { chatId, callerId: d?.callerId, hasActiveCall: !!activeCallRef.current });
       }
     };
     const handleOpenChat = (e: Event) => {
@@ -1163,16 +1221,15 @@ export default function PhoneSimulator({
       }
     };
     const handleNewMessage = (e: Event) => {
-      console.log('[EVENT] ═══════ new-message-received DISPARADO ═══════');
+      logger.info('[EVENT] new-message-received dispatched');
       const detail = (e as CustomEvent).detail;
-      console.log('[EVENT] raw detail:', typeof detail === 'string' ? detail : JSON.stringify(detail));
       const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
-      console.log('[EVENT] parsed chatId:', d?.chatId, 'contactId:', d?.contactId, 'body:', d?.body?.substring(0, 50));
+      logger.info('[EVENT] parsed', { chatId: d?.chatId, contactId: d?.contactId, hasBody: !!d?.body });
       if (!d?.chatId) {
-        console.log('[EVENT] ❌ No chatId, abortando');
+        logger.warn('[EVENT] No chatId, aborting');
         return;
       }
-      console.log('[EVENT] selectedChatId:', selectedChatId, 'currentScreen:', currentScreen);
+      logger.info('[EVENT] context', { selectedChatId, currentScreen });
       setChats(prev => {
         const idx = prev.findIndex(chat => chat.id === d.chatId);
         if (idx === -1) {
@@ -1195,7 +1252,7 @@ export default function PhoneSimulator({
       }
     };
     const handleAnswerCall = (e: Event) => {
-      console.log('[WEBRTC SIGNALING] 📱 answer-call event received');
+      logger.info('[WEBRTC SIGNALING] answer-call event received');
       runAnswerFlowRef.current?.((e as CustomEvent).detail);
     };
     window.addEventListener('incoming-call', handleIncomingCall);
@@ -1212,11 +1269,11 @@ export default function PhoneSimulator({
       try {
         const pending = await Preferences.get({ key: 'redon_pending_call' });
         if (pending?.value) {
-          console.log('[WEBRTC SIGNALING] 📦 Pending call answer restored from storage');
+          logger.info('[WEBRTC SIGNALING] Pending call answer restored from storage');
           await runAnswerFlowRef.current?.(pending.value);
         }
       } catch (e) {
-        console.warn('[WEBRTC SIGNALING] Pending answer read failed:', e);
+        logger.warn('[WEBRTC SIGNALING] Pending answer read failed', { error: e });
       }
     })();
 
@@ -1292,8 +1349,17 @@ export default function PhoneSimulator({
     stopSound();
     webrtcRef.current?.cleanup();
     webrtcRef.current = null;
+    groupCallRef.current?.cleanup();
+    groupCallRef.current = null;
     setLocalStream(null);
     setRemoteStream(null);
+    setGroupLocalStream(null);
+    setGroupRemoteStreams(new Map());
+    setGroupParticipantCount(0);
+    setGroupCallError(null);
+    setShowAddMember(false);
+    setAddMemberContacts([]);
+    setInvitingContactId(null);
     setActiveCall(null);
     callWasConnectedRef.current = false;
     answeredCallRef.current = false;
@@ -1304,9 +1370,10 @@ export default function PhoneSimulator({
 
   // Conecta como callee la llamada ya aceptada (se usa al responder desde la
   // notificación con la app en segundo plano/minimizada).
-  const connectToCallee = useCallback(async (callId: string, callerId: string, callerName: string, callType: string, avatar?: string) => {
+  const connectToCallee = useCallback(async (callId: string, callerId: string, callerName: string, callType: string, avatar?: string, roomId?: string) => {
     if (!user) return;
     stopIncomingRingtone();
+    cancelIncomingCallNotification(roomId, callId);
     setActiveCall({
       id: callId,
       contactName: callerName || 'Llamada entrante',
@@ -1318,39 +1385,40 @@ export default function PhoneSimulator({
       isVideoOff: false,
       isGroup: false,
       targetUserId: callerId,
+      roomId,
     });
     try {
       const webrtc = new WebRTCService(callId, user.id);
       webrtcRef.current = webrtc;
       webrtc.onRemoteStream = (stream) => {
-        console.log('[WEBRTC SIGNALING] 📹 Remote stream received (answer-call) — CONNECTED');
+        logger.info('[WEBRTC SIGNALING] Remote stream received (answer-call) — CONNECTED');
         setRemoteStream(stream);
         setActiveCall((prev) => prev ? { ...prev, status: 'connected' } : null);
         callWasConnectedRef.current = true;
         callContactNameRef.current = activeCallRef.current?.contactName || callerName || '';
       };
       webrtc.onConnectionStateChange = (state) => {
-        console.log('[WEBRTC SIGNALING] 🔗 Callee ICE state:', state);
+        logger.info('[WEBRTC SIGNALING] Callee ICE state', { state });
       };
       webrtc.onCallEnded = () => {
-        console.log('[WEBRTC SIGNALING] 📞 Call ended (auto-answered callee)');
+        logger.info('[WEBRTC SIGNALING] Call ended (auto-answered callee)');
         cleanupCall();
       };
-      console.log('[WEBRTC SIGNALING] 📞 Callee (answer-call): getting local stream...');
+      logger.info('[WEBRTC SIGNALING] Callee (answer-call): getting local stream...');
       const local = await webrtc.startLocalStream(true, callType === 'video');
       setLocalStream(local);
-      console.log('[WEBRTC SIGNALING] ✅ Callee (answer-call): getUserMedia done');
+      logger.info('[WEBRTC SIGNALING] Callee (answer-call): getUserMedia done');
       await webrtc.createPeerConnection();
       await webrtc.subscribeToSignals();
       webrtc.signalCalleeReady()
-        .then(() => console.log('[WEBRTC SIGNALING] ✅ Callee-ready signal sent'))
-        .catch((e) => console.warn('[WEBRTC SIGNALING] ⚠️ Callee-ready signal failed:', e?.message));
+        .then(() => logger.info('[WEBRTC SIGNALING] Callee-ready signal sent'))
+        .catch((e) => logger.warn('[WEBRTC SIGNALING] Callee-ready signal failed', { error: e?.message }));
     } catch (err) {
-      console.error('[WEBRTC SIGNALING] ❌ Failed to answer call:', err);
+      logger.error('[WEBRTC SIGNALING] Failed to answer call', { error: err });
       toast.error('No se pudo conectar la llamada');
       cleanupCall();
     }
-  }, [user, stopIncomingRingtone, cleanupCall, callWasConnectedRef, callContactNameRef, activeCallRef, setLocalStream, setRemoteStream, setActiveCall]);
+  }, [user, stopIncomingRingtone, cleanupCall, callWasConnectedRef, callContactNameRef, activeCallRef, setLocalStream, setRemoteStream, setActiveCall, setGroupLocalStream, setGroupRemoteStreams, setGroupParticipantCount, cancelIncomingCallNotification]);
 
   // Flujo de "respuesta" desde la notificación (evento answer-call) o desde el
   // sticky persistido por MainActivity en arranques en frío.
@@ -1369,11 +1437,11 @@ export default function PhoneSimulator({
     const callerName = d?.callerName || 'Llamada entrante';
     const callerAvatar = d?.callerAvatar || '';
     if (!chatId || !callerId) {
-      console.warn('[WEBRTC SIGNALING] ❌ answer-call sin chatId/callerId:', { chatId, callerId });
+      logger.warn('[WEBRTC SIGNALING] answer-call sin chatId/callerId', { chatId, callerId });
       return;
     }
     answeredCallRef.current = true;
-    console.log('[WEBRTC SIGNALING] ✅ answer-call — auto aceptando, caller:', callerName);
+    logger.info('[WEBRTC SIGNALING] answer-call — auto aceptando', { callerName });
     try {
       const { data: rows, error } = await supabase
         .from('calls')
@@ -1385,13 +1453,13 @@ export default function PhoneSimulator({
       if (error) throw error;
       const call = rows?.[0];
       if (!call) {
-        console.warn('[WEBRTC SIGNALING] ❌ No hay llamada para responder:', { chatId });
+        logger.warn('[WEBRTC SIGNALING] No hay llamada para responder', { chatId });
         throw new Error('Llamada no encontrada');
       }
-      updateCallStatus(call.id, 'accepted').catch((e) => console.warn('[CALL] Failed to set accepted:', e));
-      await connectToCallee(call.id, callerId, callerName, callType, callerAvatar);
+      updateCallStatus(call.id, 'accepted').catch((e) => logger.warn('[CALL] Failed to set accepted', { error: e }));
+      await connectToCallee(call.id, callerId, callerName, callType, callerAvatar, call.chat_id || chatId);
     } catch (err: any) {
-      console.error('[WEBRTC SIGNALING] ❌ answer-call failed:', err?.message || err);
+      logger.error('[WEBRTC SIGNALING] answer-call failed', { error: err?.message || err });
       toast.error('No se pudo conectar la llamada');
     } finally {
       Preferences.remove({ key: 'redon_pending_call' }).catch(() => {});
@@ -1403,11 +1471,181 @@ export default function PhoneSimulator({
   const cleanupCallRef = useRef<(() => void) | null>(null);
   cleanupCallRef.current = cleanupCall;
 
+  // Group call (mesh, max 4). Does NOT touch the 1:1 WebRTCService flow.
+  const startGroupCall = useCallback(async (type: "audio" | "video") => {
+    if (!user || !activeChat) return;
+    const isGroup = Boolean(activeChat.isGroup) || activeChat.id === "grupo_redon";
+    if (!isGroup) return;
+
+    groupCallRef.current?.cleanup();
+    setGroupCallError(null);
+
+    try {
+      const webrtc = new WebRTCGroupService(activeChat.id, user.id);
+      groupCallRef.current = webrtc;
+
+      setGroupParticipantCount(webrtc.getParticipantsCount());
+
+      webrtc.onRemoteStream = (peerId: string, stream: MediaStream) => {
+        setGroupRemoteStreams((prev) => {
+          const next = new Map(prev);
+          const existed = next.has(peerId);
+          next.set(peerId, stream);
+          setGroupParticipantCount((c) => Math.max(c, next.size));
+          void existed; // keep refs lint happy
+          return next;
+        });
+      };
+
+      webrtc.onParticipantLeft = (peerId: string) => {
+        setGroupRemoteStreams((prev) => {
+          const next = new Map(prev);
+          next.delete(peerId);
+          return next;
+        });
+        setGroupParticipantCount((c) => Math.max(0, c - 1));
+      };
+
+      webrtc.onCallEnded = () => {
+        logger.info("[GRUPOCALL] call ended by remote");
+        endGroupCall();
+      };
+
+      await webrtc.startLocalStream(true, type === "video");
+      setGroupLocalStream(webrtc.getLocalStream());
+
+      await webrtc.subscribeToRoom();
+      await webrtc.announceJoin();
+      setGroupParticipantCount(webrtc.getParticipantsCount());
+
+      setActiveCall({
+        id: "group_" + activeChat.id,
+        contactName: activeChat.name,
+        contactAvatar: activeChat.avatar,
+        type,
+        status: "outgoing",
+        durationSeconds: 0,
+        isMuted: false,
+        isVideoOff: false,
+        isGroup: true,
+        roomId: activeChat.id,
+        participants: [],
+        participantsLimit: 4,
+      });
+    } catch (err) {
+      logger.error("[GRUPOCALL] start error", { error: err });
+      setGroupCallError("No se pudo iniciar la videollamada grupal");
+      setActiveCall(null);
+      groupCallRef.current?.cleanup();
+      groupCallRef.current = null;
+    }
+  }, [user, activeChat, setIsInitiatingCall]);
+
+  const endGroupCall = useCallback(() => {
+    void groupCallRef.current?.endCall();
+    groupCallRef.current?.cleanup();
+    groupCallRef.current = null;
+    setGroupLocalStream(null);
+    setGroupRemoteStreams(new Map());
+    setGroupParticipantCount(0);
+    setActiveCall(null);
+    setGroupCallError(null);
+  }, [setActiveCall]);
+
+  // Abre el selector de contactos para invitar a alguien a la videollamada en curso.
+  const openAddMember = useCallback(async () => {
+    if (!user) return;
+    const active = activeCallRef.current;
+    if (!active) return;
+    setShowAddMember(true);
+    setAddMemberLoading(true);
+    try {
+      const contacts = await getContacts(user.id);
+      const excluded = new Set<string>();
+      excluded.add(user.id);
+      if (active.targetUserId) excluded.add(active.targetUserId);
+      groupRemoteStreams.forEach((_, peerId) => excluded.add(peerId));
+      setAddMemberContacts(
+        contacts.filter(
+          (c) => c.contact_user_id && !excluded.has(c.contact_user_id)
+        )
+      );
+    } catch (err) {
+      logger.error("[GRUPOCALL] load contacts error", { error: err });
+      toast.error("No se pudieron cargar los contactos");
+      setShowAddMember(false);
+    } finally {
+      setAddMemberLoading(false);
+    }
+  }, [user, groupRemoteStreams]);
+
+  // Invita a un contacto al room mesh actual insertando una llamada con el mismo
+  // chat_id (room). El webhook FCM + realtime mostrará la llamada entrante y al
+  // aceptarla se unirá al mismo room.
+  const inviteMemberToCall = useCallback(async (contact: Contact) => {
+    if (!user) return;
+    const active = activeCallRef.current;
+    if (!active) return;
+    const inviteeId = contact.contact_user_id;
+    if (!inviteeId) return;
+    if (groupParticipantCount >= 3) {
+      toast.error("Límite de 4 usuarios alcanzado");
+      return;
+    }
+    const roomId = active.roomId || active.id;
+    setInvitingContactId(contact.id);
+    try {
+      const dbCall = await apiStartCall({
+        caller_id: user.id,
+        callee_id: inviteeId,
+        type: "video",
+        chat_id: roomId,
+      });
+      logger.info("[GRUPOCALL] Invited contact to room", { contactName: contact.name, roomId, callId: dbCall?.id });
+      showToast(`${contact.name} invitado a la videollamada`);
+      setShowAddMember(false);
+      // Auto-descartar la invitación si nadie la acepta en 45s.
+      if (dbCall?.id) {
+        setTimeout(() => {
+          void (async () => {
+            try {
+              const { data } = await supabase
+                .from("calls")
+                .select("status")
+                .eq("id", dbCall.id)
+                .single();
+              if (data && data.status === "ringing") {
+                await updateCallStatus(dbCall.id, "missed");
+              }
+            } catch (e) {
+              logger.warn("[GRUPOCALL] Auto-missed call update failed", { error: e, callId: dbCall.id });
+            }
+          })();
+        }, 45000);
+      }
+    } catch (err) {
+      logger.error("[GRUPOCALL] invite error", { error: err });
+      toast.error("No se pudo invitar a la llamada");
+    } finally {
+      setInvitingContactId(null);
+    }
+  }, [user, groupParticipantCount, showToast]);
+
   const handleTriggerCallFromChat = async (type: "audio" | "video") => {
     if (!activeChat || !user || isInitiatingCall) return;
+    const isGroup = Boolean(activeChat.isGroup) || activeChat.id === "grupo_redon";
+    if (isGroup) {
+      if (isGroupCallAtLimit(groupParticipantCount)) {
+        toast.error("Límite de 4 usuarios alcanzado");
+        return;
+      }
+      try { await Haptics.impact({ style: ImpactStyle.Light }); } catch {}
+      await startGroupCall(type);
+      return;
+    }
     setIsInitiatingCall(true);
     try { await Haptics.impact({ style: ImpactStyle.Light }); } catch {}
-    console.log('[WEBRTC SIGNALING] 📞 Starting outgoing call to:', activeChat.name, 'type:', type);
+    logger.info('[WEBRTC SIGNALING] Starting outgoing call', { contactName: activeChat.name, type });
 
     const partnerId = activeChat.partnerUserId || "";
 
@@ -1415,7 +1653,7 @@ export default function PhoneSimulator({
     let callId = "call_" + Date.now();
     if (partnerId) {
       try {
-        console.log('[WEBRTC SIGNALING] 📞 Inserting call into DB...');
+        logger.info('[WEBRTC SIGNALING] Inserting call into DB');
         const dbCall = await apiStartCall({
           caller_id: user.id,
           callee_id: partnerId,
@@ -1423,8 +1661,10 @@ export default function PhoneSimulator({
           chat_id: activeChat.id,
         });
         if (dbCall?.id) callId = dbCall.id;
-        console.log('[WEBRTC SIGNALING] ✅ Call inserted, id:', callId);
-      } catch (e) { console.warn('[WEBRTC SIGNALING] apiStartCall error:', e); }
+        logger.info('[WEBRTC SIGNALING] Call inserted', { callId });
+      } catch (e) {
+        logger.warn('[WEBRTC SIGNALING] apiStartCall error', { error: e });
+      }
     }
 
     // Show call overlay IMMEDIATELY so the caller always sees "Llamando..."
@@ -1438,7 +1678,9 @@ export default function PhoneSimulator({
       isMuted: false,
       isVideoOff: false,
       isGroup: activeChat.id === "grupo_redon",
-      targetUserId: partnerId
+      targetUserId: partnerId,
+      roomId: activeChat.id,
+      participantsLimit: 4,
     });
 
     try {
@@ -1446,7 +1688,7 @@ export default function PhoneSimulator({
       webrtcRef.current = webrtc;
 
       webrtc.onRemoteStream = (stream) => {
-        console.log('[WEBRTC CRÍTICO] 🎉 Emisor recibió remote stream — LLAMADA CONECTADA');
+        logger.info('[WEBRTC SIGNALING] Remote stream received — CALL CONNECTED');
         setRemoteStream(stream);
         setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
         callWasConnectedRef.current = true;
@@ -1455,43 +1697,43 @@ export default function PhoneSimulator({
       };
 
       webrtc.onConnectionStateChange = (state) => {
-        console.log('[WEBRTC SIGNALING] 🔗 ICE state:', state);
+        logger.info('[WEBRTC SIGNALING] ICE state', { state });
       };
 
       webrtc.onCallEnded = () => {
-        console.log('[WEBRTC SIGNALING] 📞 Call ended');
+        logger.info('[WEBRTC SIGNALING] Call ended');
         const endedCallId = activeCallRef.current?.id;
         if (endedCallId && !endedCallId.startsWith('call_')) {
-          updateCallStatus(endedCallId, 'ended').catch(e => console.warn('[CALL] Failed to update call status on ended:', e));
+          updateCallStatus(endedCallId, 'ended').catch(e => logger.warn('[CALL] Failed to update call status on ended', { error: e }));
         }
         stopRingbackTone();
         cleanupCall();
       };
 
-      console.log('[WEBRTC SIGNALING] 📞 Getting local stream...');
+      logger.info('[WEBRTC SIGNALING] Getting local stream...');
       const local = await webrtc.startLocalStream(true, type === "video");
       setLocalStream(local);
 
-      console.log('[WEBRTC SIGNALING] 📞 Creating peer connection...');
+      logger.info('[WEBRTC SIGNALING] Creating peer connection...');
       await webrtc.createPeerConnection();
-      console.log('[WEBRTC SIGNALING] 📞 Subscribing to signals...');
+      logger.info('[WEBRTC SIGNALING] Subscribing to signals...');
       await webrtc.subscribeToSignals();
-      console.log('[WEBRTC SIGNALING] 📞 Creating offer...');
+      logger.info('[WEBRTC SIGNALING] Creating offer...');
       await webrtc.createOffer();
-      console.log('[WEBRTC SIGNALING] ✅ Offer sent — waiting for answer');
+      logger.info('[WEBRTC SIGNALING] Offer sent — waiting for answer');
 
       playRingbackTone();
 
       if (partnerId) {
-        console.log('[WEBRTC SIGNALING] 📞 Push handled by Supabase webhook — skip duplicate');
+        logger.info('[WEBRTC SIGNALING] Push handled by Supabase webhook — skip duplicate');
       }
 
       // ICE connection timeout: auto-cleanup after 45s
       const iceTimeoutRef = { current: setTimeout(() => {
         if (webrtcRef.current && activeCallRef.current?.status === "outgoing") {
-          console.warn('[WEBRTC SIGNALING] ⏰ ICE timeout — no connection after 45s');
+          logger.warn('[WEBRTC SIGNALING] ICE timeout — no connection after 45s');
           if (callId && !callId.startsWith('call_')) {
-            updateCallStatus(callId, 'missed').catch(e => console.warn('[CALL] Failed to update call status to missed:', e));
+            updateCallStatus(callId, 'missed').catch(e => logger.warn('[CALL] Failed to update call status to missed', { error: e }));
           }
           stopRingbackTone();
           cleanupCall();
@@ -1500,19 +1742,19 @@ export default function PhoneSimulator({
 
       // When callee-ready signal arrives: cancel timeout + only resend if not yet connected
       webrtc.onCalleeReady = async () => {
-        console.log('[WEBRTC SIGNALING] ✅ Callee is ready');
+        logger.info('[WEBRTC SIGNALING] Callee is ready');
         clearTimeout(iceTimeoutRef.current);
         const remoteTracks = webrtcRef.current?.getRemoteStream()?.getTracks().length ?? 0;
         if (remoteTracks > 0) {
-          console.log('[WEBRTC SIGNALING] ℹ️ Remote stream already has tracks, skipping resendOffer');
+          logger.info('[WEBRTC SIGNALING] Remote stream already has tracks, skipping resendOffer');
           return;
         }
         stopRingbackTone();
         try {
           await webrtc.resendOffer();
-          console.log('[WEBRTC SIGNALING] ✅ Offer re-sent after callee-ready');
+          logger.info('[WEBRTC SIGNALING] Offer re-sent after callee-ready');
         } catch (e) {
-          console.error('[WEBRTC SIGNALING] ❌ Failed to re-send offer:', e);
+          logger.error('[WEBRTC SIGNALING] Failed to re-send offer', { error: e });
         }
       };
 
@@ -1523,7 +1765,7 @@ export default function PhoneSimulator({
         origOnRemoteStream?.(stream);
       };
     } catch (err) {
-      console.error('[WEBRTC SIGNALING] ❌ Failed to start call:', err);
+      logger.error('[WEBRTC SIGNALING] Failed to start call', { error: err });
       stopRingbackTone();
       webrtcRef.current?.cleanup();
       webrtcRef.current = null;
@@ -1538,7 +1780,9 @@ export default function PhoneSimulator({
       try {
         await refreshChats();
         await refreshContacts();
-      } catch {}
+      } catch (e) {
+        logger.warn("[PhoneSimulator] refresh after QR contact add failed", { error: e });
+      }
     }
     setCurrentScreen("chats");
     showToast("Contacto agregado por QR ✅");
@@ -1584,7 +1828,7 @@ export default function PhoneSimulator({
           setCurrentScreen("chat_room");
         }
       } catch (e) {
-        console.warn("Error starting chat:", e);
+        logger.warn("Error starting chat", { error: e });
       }
     }
   };
@@ -1621,7 +1865,7 @@ export default function PhoneSimulator({
           setCurrentScreen("chat_room");
         }
       } catch (e) {
-        console.warn("Error starting chat from calls:", e);
+        logger.warn("Error starting chat from calls", { error: e });
       }
     }
   };
@@ -1669,8 +1913,8 @@ export default function PhoneSimulator({
         setSelectedChatId(groupChat.id);
         setCurrentScreen("chat_room");
       }
-    } catch (e) {
-      console.error("[GROUP] Error creating group:", e);
+} catch (e) {
+      logger.error("[GROUP] Error creating group", { error: e });
     }
   };
 
@@ -1681,7 +1925,7 @@ export default function PhoneSimulator({
       await refreshContacts();
       showToast("Contacto eliminado");
     } catch (e) {
-      console.warn("[CONTACT] Delete error:", e);
+      logger.warn("[CONTACT] Delete error", { error: e });
       showToast("Error al eliminar contacto");
     }
   };
@@ -1705,7 +1949,7 @@ export default function PhoneSimulator({
         });
       }
     } catch (e) {
-      console.warn("[PROFILE] Error fetching contact profile:", e);
+      logger.warn("[PROFILE] Error fetching contact profile", { error: e });
     }
   }, [activeChat, user?.id]);
 
@@ -1723,7 +1967,7 @@ export default function PhoneSimulator({
           setCurrentScreen("chats");
         }
       } catch (e) {
-        console.warn("[CHAT] Delete chat API error:", e);
+        logger.warn("[CHAT] Delete chat API error", { error: e });
         showToast("Error al eliminar chat");
       }
     } else {
@@ -1753,7 +1997,7 @@ export default function PhoneSimulator({
       }
       showToast("Mensajes eliminados");
     } catch (e) {
-      console.error("[CHAT] clearForMe error:", e);
+      logger.error("[CHAT] clearForMe error", { error: e });
       showToast("Error al eliminar mensajes");
     }
   };
@@ -1794,14 +2038,6 @@ export default function PhoneSimulator({
     return { chat, shouldAnimate };
   });
 
-  console.log("[PHONESIM] Rendering:", { 
-    currentScreen,
-    registeredUser: !!registeredUser, 
-    user: !!user, 
-    filteredChats: filteredChats.length,
-    chatsLoaded,
-    supabaseChats: supabaseChats.length
-  });
   return (
     <div className="relative w-screen h-screen bg-white flex flex-col overflow-hidden select-none">
       {/* Toast Alert Notification */}
@@ -1817,22 +2053,61 @@ export default function PhoneSimulator({
       {activeCall && (
         <CallOverlay
           call={activeCall}
-          localStream={localStream}
+          localStream={activeCall.isGroup ? groupLocalStream : localStream}
           remoteStream={remoteStream}
+          remoteStreamsMap={activeCall.isGroup ? groupRemoteStreams : undefined}
+          participantCount={activeCall.isGroup ? groupParticipantCount : 0}
+          onAddMember={() => openAddMember()}
           onAccept={async () => {
             if (!user) return;
+            if (activeCall.isGroup) {
+              // Incoming group call: join room
+              const roomId = activeCall.roomId || activeCall.id.replace("group_", "");
+              if (!roomId) { setGroupCallError("No se pudo unir a la sala"); return; }
+              try {
+                const webrtc = new WebRTCGroupService(roomId, user.id);
+                groupCallRef.current = webrtc;
+                await webrtc.startLocalStream(true, activeCall.type === "video");
+                setGroupLocalStream(webrtc.getLocalStream());
+                webrtc.onRemoteStream = (peerId: string, stream: MediaStream) => {
+                  setGroupRemoteStreams((prev) => {
+                    const next = new Map(prev);
+                    next.set(peerId, stream);
+                    setGroupParticipantCount((c) => Math.max(c, next.size));
+                    return next;
+                  });
+                };
+                webrtc.onParticipantLeft = (peerId: string) => {
+                  setGroupRemoteStreams((prev) => {
+                    const next = new Map(prev);
+                    next.delete(peerId);
+                    return next;
+                  });
+                  setGroupParticipantCount((c) => Math.max(0, c - 1));
+                };
+                webrtc.onCallEnded = () => endGroupCall();
+                await webrtc.subscribeToRoom();
+                await webrtc.announceJoin();
+                setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
+} catch (err) {
+                logger.error("[GRUPOCALL] join error", { error: err });
+                setGroupCallError("No se pudo unir a la llamada grupal");
+              }
+              return;
+            }
             const callId = activeCall.id;
             const callType = activeCall.type;
-            console.log('[WEBRTC SIGNALING] ✅ Call accepted by receiver, callId:', callId);
+            logger.info('[WEBRTC SIGNALING] Call accepted by receiver', { callId });
             stopIncomingRingtone();
+            cancelIncomingCallNotification(activeCall.roomId, callId);
             setActiveCall((prev) => prev ? { ...prev, status: "connecting" } : null);
 
-            try {
+try {
               const webrtc = new WebRTCService(callId, user.id);
               webrtcRef.current = webrtc;
 
               webrtc.onRemoteStream = (stream) => {
-                console.log('[WEBRTC SIGNALING] 📹 Remote stream received on callee side — call CONNECTED');
+                logger.info('[WEBRTC SIGNALING] Remote stream received on callee side — call CONNECTED');
                 setRemoteStream(stream);
                 setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
                 callWasConnectedRef.current = true;
@@ -1840,72 +2115,155 @@ export default function PhoneSimulator({
               };
 
               webrtc.onConnectionStateChange = (state) => {
-                console.log('[WEBRTC SIGNALING] 🔗 Callee ICE state:', state);
+                logger.info('[WEBRTC SIGNALING] Callee ICE state', { state });
               };
 
               webrtc.onCallEnded = () => {
-                console.log('[WEBRTC SIGNALING] 📞 Call ended (callee)');
+                logger.info('[WEBRTC SIGNALING] Call ended (callee)');
                 cleanupCall();
               };
 
-              console.log('[WEBRTC SIGNALING] 📞 Callee: getting local stream...');
+              logger.info('[WEBRTC SIGNALING] Callee: getting local stream...');
               const local = await webrtc.startLocalStream(true, callType === "video");
               setLocalStream(local);
-              console.log('[WEBRTC SIGNALING] ✅ Callee: getUserMedia done');
+              logger.info('[WEBRTC SIGNALING] Callee: getUserMedia done');
 
-              console.log('[WEBRTC SIGNALING] 📞 Callee: creating PeerConnection FIRST (before subscribe)...');
+              logger.info('[WEBRTC SIGNALING] Callee: creating PeerConnection FIRST (before subscribe)...');
               await webrtc.createPeerConnection();
-              console.log('[WEBRTC SIGNALING] ✅ Callee: PeerConnection created, this.pc is ready');
+              logger.info('[WEBRTC SIGNALING] Callee: PeerConnection created, this.pc is ready');
 
-              console.log('[WEBRTC SIGNALING] 📞 Callee: subscribing to signals...');
+              logger.info('[WEBRTC SIGNALING] Callee: subscribing to signals...');
               await webrtc.subscribeToSignals();
-              console.log('[WEBRTC SIGNALING] ✅ Callee: subscribed to signals');
+              logger.info('[WEBRTC SIGNALING] Callee: subscribed to signals');
 
               webrtc.signalCalleeReady()
-                .then(() => console.log('[WEBRTC SIGNALING] ✅ Callee-ready signal sent'))
-                .catch((e) => console.warn('[WEBRTC SIGNALING] ⚠️ Callee-ready signal failed:', e?.message));
-            } catch (err) {
-              console.error('[WEBRTC SIGNALING] ❌ Failed to accept call:', err);
+                .then(() => logger.info('[WEBRTC SIGNALING] Callee-ready signal sent'))
+                .catch((e) => logger.warn('[WEBRTC SIGNALING] Callee-ready signal failed', { error: e?.message }));
+} catch (err) {
+              logger.error('[WEBRTC SIGNALING] Failed to accept call', { error: err });
             }
           }}
           onDecline={() => {
-            console.log('[WEBRTC SIGNALING] ❌ Call declined');
+            logger.warn('[WEBRTC SIGNALING] Call declined');
             const callId = activeCallRef.current?.id;
-            if (callId && !callId.startsWith('call_')) {
-              updateCallStatus(callId, 'missed').catch(e => console.warn('[CALL] Failed to update call status to missed:', e));
+            if (activeCall.isGroup) {
+              endGroupCall();
+            } else {
+              if (callId && !callId.startsWith('call_')) {
+                updateCallStatus(callId, 'missed').catch(e => logger.warn('[CALL] Failed to update call status to missed', { error: e }));
+              }
+              stopIncomingRingtone();
+              cancelIncomingCallNotification(activeCall.roomId, callId);
+              cleanupCall();
             }
-            stopIncomingRingtone();
-            cleanupCall();
+            void callId;
           }}
           onToggleMute={() => {
             setActiveCall((prev) => {
               const next = prev ? { ...prev, isMuted: !prev.isMuted } : null;
-              if (next) webrtcRef.current?.setMuted(next.isMuted);
+              if (next && next.isGroup) groupCallRef.current?.setMuted(next.isMuted);
+              if (next && !next.isGroup) webrtcRef.current?.setMuted(next.isMuted);
               return next;
             });
           }}
           onToggleVideo={() => {
             setActiveCall((prev) => {
               const next = prev ? { ...prev, isVideoOff: !prev.isVideoOff } : null;
-              if (next) webrtcRef.current?.setVideoEnabled(!next.isVideoOff);
+              if (next && next.isGroup) groupCallRef.current?.setVideoEnabled(!next.isVideoOff);
+              if (next && !next.isGroup) webrtcRef.current?.setVideoEnabled(!next.isVideoOff);
               return next;
             });
           }}
           onSwitchCamera={async () => {
+            if (activeCall.isGroup) {
+              const newStream = await groupCallRef.current?.switchCamera();
+              if (newStream) {
+                setGroupLocalStream(newStream);
+                setLocalStream(newStream);
+              }
+              return;
+            }
             const newStream = await webrtcRef.current?.switchCamera();
             if (newStream) setLocalStream(newStream);
           }}
           onEndCall={async () => {
-            console.log('[WEBRTC SIGNALING] 📞 Ending call');
+            logger.info('[WEBRTC SIGNALING] Ending call');
             const endedCallId = activeCallRef.current?.id;
+            if (activeCall.isGroup) {
+              if (endedCallId && !endedCallId.startsWith('group_') && !endedCallId.startsWith('call_')) {
+                updateCallStatus(endedCallId, 'ended').catch(e => logger.warn('[CALL] Failed to update call status on end', { error: e }));
+              }
+              if (activeCall.isGroup) {
+                endGroupCall();
+              } else {
+                await groupCallRef.current?.endCall();
+                cleanupCall();
+              }
+              return;
+            }
             if (endedCallId && !endedCallId.startsWith('call_')) {
-              updateCallStatus(endedCallId, 'ended').catch(e => console.warn('[CALL] Failed to update call status on end:', e));
+              updateCallStatus(endedCallId, 'ended').catch(e => logger.warn('[CALL] Failed to update call status on end', { error: e }));
             }
             stopRingbackTone();
             await webrtcRef.current?.endCall();
             cleanupCall();
           }}
         />
+      )}
+
+      {/* ADD MEMBER MODAL */}
+      {showAddMember && activeCall && (
+        <div className="absolute inset-0 z-[10000] bg-black/70 flex items-end justify-center">
+          <div className="w-full bg-white rounded-t-3xl p-4 pb-8 max-h-[70%] flex flex-col">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-bold text-slate-800">Agregar a la videollamada</h3>
+              <button
+                onClick={() => setShowAddMember(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-all cursor-pointer"
+                title="Cerrar"
+              >
+                <X className="w-4 h-4 text-slate-500" />
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-400 mb-3">
+              {Math.min(groupParticipantCount + 1, 4)}/4 participantes · se unirán por videollamada
+            </p>
+            {addMemberLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <Loader2 className="w-6 h-6 text-teal-500 animate-spin" />
+              </div>
+            ) : (
+              <div className="overflow-y-auto flex-1">
+                {addMemberContacts.length === 0 ? (
+                  <p className="text-center text-[11px] text-slate-400 py-10">
+                    No tienes contactos de RED ON para invitar
+                  </p>
+                ) : (
+                  addMemberContacts.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => inviteMemberToCall(c)}
+                      disabled={invitingContactId !== null}
+                      className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-slate-50 active:bg-slate-100 transition-all text-left cursor-pointer disabled:opacity-50"
+                    >
+                      <img
+                        src={c.avatar || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e2e8f0'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M12 14c-4 0-6 2-6 4v2h12v-2c0-2-2-4-6-4z'/%3E%3C/svg%3E"}
+                        alt={c.name}
+                        className="w-10 h-10 rounded-full object-cover bg-slate-100"
+                      />
+                      <span className="flex-1 text-[13px] font-semibold text-slate-700 truncate">{c.name}</span>
+                      {invitingContactId === c.id ? (
+                        <Loader2 className="w-4 h-4 text-teal-500 animate-spin" />
+                      ) : (
+                        <UserPlus className="w-4 h-4 text-teal-500" />
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* CALL RATING MODAL */}
@@ -1915,9 +2273,9 @@ export default function PhoneSimulator({
           onSend={async (rating: number) => {
             try {
               await updateCallRating(callRating.callId, rating);
-              console.log('[CALL] Rating saved:', rating);
+              logger.info('[CALL] Rating saved', { rating });
             } catch (e) {
-              console.error('[CALL] Failed to save rating:', e);
+              logger.error('[CALL] Failed to save rating', { error: e });
             }
             setCallRating(null);
           }}
@@ -1940,6 +2298,7 @@ export default function PhoneSimulator({
           {/* FULL-SCREEN SCREENS (rendered as overlays so the tabs tree stays mounted) */}
           {currentScreen === "chat_room" && activeChat && (
             <div className="absolute inset-0 z-50 bg-white">
+              <React.Suspense fallback={<ChatListSkeleton />}>
               <ChatRoom
                 chat={activeChat}
                 onBack={() => {
@@ -1982,6 +2341,7 @@ export default function PhoneSimulator({
                 onRegisterBackHandler={(handler) => { chatRoomBackHandlerRef.current = handler; }}
                 onOpenProfile={handleOpenProfile}
               />
+              </React.Suspense>
             </div>
           )}
           {currentScreen === "qr_scanner" && (
@@ -2108,12 +2468,20 @@ export default function PhoneSimulator({
                       </button>
                     </div>
 
-                    {chatsWithAnimFlag.map(({ chat, shouldAnimate }) => {
+                        {chatsWithAnimFlag.map(({ chat, shouldAnimate }) => {
                       const isSwiped = swipedChatId === chat.id;
                       let touchStartX = 0;
                       let touchStartY = 0;
                       let currentTranslate = 0;
                       let isDragging = false;
+
+                      // Never show my OWN avatar on a 1:1 chat tile. The chats.row avatar
+                      // can be (incorrectly) stamped with the creator's avatar by the sender,
+                      // which previously made the tile render my photo instead of the partner's.
+                      const ownAvatarUrl = profile?.avatar || profile?.avatar_url || registeredUser?.avatar || "";
+                      const isOwnAvatar = !!chat.avatar && !!ownAvatarUrl &&
+                        (chat.avatar === ownAvatarUrl || chat.avatar === registeredUser?.avatar);
+                      const displayAvatar = (!chat.isGroup && isOwnAvatar) ? "" : chat.avatar;
 
                       const onTouchStart = (e: React.TouchEvent) => {
                         cancelLongPress();
@@ -2214,8 +2582,8 @@ export default function PhoneSimulator({
                           >
                             <div className="relative shrink-0">
                               <div className={`p-[2px] rounded-full border-2 border-dashed ${chat.isGroup ? "border-purple-500/90" : "border-rose-500/90"} transition-transform hover:rotate-12 duration-500`}>
-                                {chat.avatar ? (
-                                  <CachedImage src={chat.avatar} alt={chat.name} className="w-14 h-14 rounded-full object-cover" loading="lazy" />
+                                {displayAvatar ? (
+                                  <CachedImage src={displayAvatar} alt={chat.name} className="w-14 h-14 rounded-full object-cover" loading="lazy" />
                                 ) : chat.isGroup ? (
                                   <div className="w-14 h-14 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
                                     <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2433,10 +2801,10 @@ export default function PhoneSimulator({
                               avatarManualRef.current = true;
                               await updateProfile(user.id, { avatar_url: url, avatar: url });
                               setRegisteredUser(prev => prev ? { ...prev, avatar: url } : prev);
-                              refreshProfile().catch(err => console.error("[PhoneSimulator] refreshProfile failed:", err));
+refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile failed", { error: err }));
                               showToast("Foto de perfil actualizada ✅");
                             } catch (err) {
-                              console.error("Avatar upload failed:", err);
+                              logger.error("Avatar upload failed", { error: err });
                               showToast("Error al subir la foto ❌");
                             } finally {
                               setIsUploadingAvatar(false);
@@ -2478,7 +2846,7 @@ export default function PhoneSimulator({
                                   setIsEditingProfile(false);
                                   showToast("Perfil actualizado ✅");
                                 } catch (err) {
-                                  console.error("Profile update failed:", err);
+                                  logger.error("Profile update failed", { error: err });
                                   showToast("Error al actualizar perfil ❌");
                                 }
                               }}
@@ -2819,7 +3187,7 @@ export default function PhoneSimulator({
                                         showToast("ID de usuario actualizado ✨");
                                         setActiveSettingsModal(null);
                                       } catch (err) {
-                                        console.error("Username update failed:", err);
+                                        logger.error("Username update failed", { error: err });
                                         showToast("Error al actualizar ID ❌");
                                       }
                                     }}
@@ -3397,7 +3765,7 @@ async function resolveMediaUrl(msg: Message): Promise<string | undefined> {
       : "uploads";
     return await uploadChatMedia(blob, folder);
   } catch (e) {
-    console.warn("[FORWARD] resolveMediaUrl failed for", url, e);
+    logger.warn("[FORWARD] resolveMediaUrl failed", { error: e, url });
     throw e;
   }
 }

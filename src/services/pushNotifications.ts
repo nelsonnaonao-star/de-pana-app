@@ -1,4 +1,5 @@
 import { apiUrl, authFetch } from "../lib/api";
+import { logger } from "../lib/logger";
 
 async function registerTokenWithServer(token: string, userId: string, attempt = 1): Promise<void> {
   const serverUrl = import.meta.env.VITE_SERVER_URL;
@@ -12,12 +13,13 @@ async function registerTokenWithServer(token: string, userId: string, attempt = 
       await new Promise(r => setTimeout(r, 3000 * attempt));
       return registerTokenWithServer(token, userId, attempt + 1);
     }
-  } catch {
-    if (attempt < 3) {
-      await new Promise(r => setTimeout(r, 3000 * attempt));
-      return registerTokenWithServer(token, userId, attempt + 1);
+} catch (e) {
+      logger.warn("[PushNotifications] registerTokenWithServer failed", { error: e, attempt });
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, 3000 * attempt));
+        return registerTokenWithServer(token, userId, attempt + 1);
+      }
     }
-  }
 }
 
 export async function registerPushNotifications(userId: string): Promise<boolean> {
@@ -49,9 +51,10 @@ export async function registerPushNotifications(userId: string): Promise<boolean
     });
 
     return res.ok;
-  } catch {
-    return false;
-  }
+} catch (e) {
+      logger.warn("[PushNotifications] registerPushNotifications failed", { error: e });
+      return false;
+    }
 }
 
 export async function unregisterPushNotifications(): Promise<void> {
@@ -62,7 +65,9 @@ export async function unregisterPushNotifications(): Promise<void> {
       if (subscription) await subscription.unsubscribe();
       await registration.unregister();
     }
-  } catch {}
+  } catch (e) {
+    logger.warn("[PushNotifications] unregister failed", { error: e });
+  }
 }
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {

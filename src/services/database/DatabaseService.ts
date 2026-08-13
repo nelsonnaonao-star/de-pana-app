@@ -86,6 +86,15 @@ class DatabaseService {
       `ALTER TABLE contacts ADD COLUMN payload TEXT`,
       `CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(raw_created_at)`,
       `CREATE INDEX IF NOT EXISTS idx_messages_synced ON messages(synced)`,
+      `CREATE TABLE IF NOT EXISTS call_rooms (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        participant_count INTEGER DEFAULT 1,
+        is_group_call INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now'))
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_call_rooms_chat_id ON call_rooms(chat_id)`,
     ];
     for (const sql of migrations) {
       try {

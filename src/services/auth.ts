@@ -1,6 +1,7 @@
 import { supabase } from "../lib/supabase";
 import { apiUrl, authFetch } from "../lib/api";
 import toast from "react-hot-toast";
+import { logger } from "../lib/logger";
 
 export type Profile = {
   id: string;
@@ -25,7 +26,7 @@ export type Profile = {
 
 async function trySignIn(email: string, password: string) {
   const result = await supabase.auth.signInWithPassword({ email, password });
-  if (result.error) console.debug("[AUTH] signIn fail:", email, result.error.message);
+  if (result.error) logger.debug("[AUTH] signIn fail", { email, error: result.error.message });
   return result;
 }
 
@@ -33,7 +34,7 @@ export async function login(identifier: string, password: string) {
   const input = identifier.toLowerCase().trim().replace(/^@/, "");
   const cleanDigits = input.replace(/\D/g, "");
 
-  console.debug("[LOGIN] Buscando perfil para:", input);
+  logger.debug("[LOGIN] Buscando perfil para", { input });
 
   let profile = null;
 
@@ -63,7 +64,7 @@ export async function login(identifier: string, password: string) {
     throw new Error("Usuario o teléfono no encontrado. Verifica tus datos.");
   }
 
-  console.debug("[LOGIN] Perfil encontrado:", profile.username);
+  logger.debug("[LOGIN] Perfil encontrado", { username: profile.username });
 
   const { data, error } = await trySignIn(`${profile.username}@redon.app`, password);
 
@@ -73,14 +74,14 @@ export async function login(identifier: string, password: string) {
     }
 
     if (error.message.toLowerCase().includes("confirm") || error.message.toLowerCase().includes("email not confirmed")) {
-      console.debug("[LOGIN] Auto-confirm necesario");
+      logger.debug("[LOGIN] Auto-confirm necesario");
       try {
         await authFetch(apiUrl("/api/auth/auto-confirm"), {
           method: "POST",
           body: JSON.stringify({ userId: profile.id }),
         });
       } catch (e) {
-        console.warn("[LOGIN] Auto-confirm falló:", e);
+        logger.warn("[LOGIN] Auto-confirm falló", { error: e });
       }
 
       const retry = await trySignIn(`${profile.username}@redon.app`, password);
@@ -151,7 +152,7 @@ export async function register(
   });
 
   if (error) {
-    console.error("[REGISTER] signUp error:", error);
+    logger.error("[REGISTER] signUp error", { error });
     throw new Error(error.message);
   }
   if (!data.user) throw new Error("Error al crear usuario");
@@ -162,7 +163,7 @@ export async function register(
       body: JSON.stringify({ userId: data.user.id }),
     });
   } catch (e) {
-    console.warn("[REGISTER] Auto-confirm falló:", e);
+    logger.warn("[REGISTER] Auto-confirm falló", { error: e });
   }
 
   const { error: upsertError } = await supabase.from("profiles").upsert({
@@ -176,7 +177,7 @@ export async function register(
   });
 
   if (upsertError && !upsertError.message?.includes("duplicate key")) {
-    console.error("[REGISTER] Upsert error:", upsertError);
+    logger.error("[REGISTER] Upsert error", { error: upsertError });
     throw new Error(upsertError.message || "Error al crear perfil");
   }
 
@@ -221,7 +222,9 @@ export async function resetPassword(identifier: string) {
       userFound = true;
       email = profile.real_email ? profile.real_email : `${profile.username}@redon.app`;
     }
-  } catch {}
+  } catch (e) {
+    logger.warn("[AUTH] Profile lookup failed during reset", { error: e });
+  }
 
   if (!userFound) throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
 

@@ -1,5 +1,5 @@
 import express from "express";
-import path from "path";
+import path from "node:path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import * as Sentry from "@sentry/node";
@@ -7,17 +7,19 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const app = express();
+app.disable("x-powered-by");
+const PORT = Number.parseInt(process.env.PORT || "3000", 10);
+
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: "staging",
   tracesSampleRate: 1.0,
+  integrations: [Sentry.expressIntegration()],
 });
 
-const app = express();
-const PORT = parseInt(process.env.PORT || "3000", 10);
+Sentry.setupExpressErrorHandler(app);
 
-app.use(Sentry.Handlers.requestHandler());
-app.use(Sentry.Handlers.tracingHandler());
 app.use(express.json());
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -134,6 +136,4 @@ async function startServer() {
   });
 }
 
-startServer();
-
-app.use(Sentry.Handlers.errorHandler());
+await startServer();

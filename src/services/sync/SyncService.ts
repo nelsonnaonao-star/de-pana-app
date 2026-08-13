@@ -4,6 +4,7 @@ import { messageRepo } from "../database/repositories/MessageRepository";
 import { sendMessage as apiSendMessage } from "../messages";
 import { uploadChatMedia } from "../storage";
 import { Capacitor } from "@capacitor/core";
+import { logger } from "../../lib/logger";
 
 export type SyncedCallback = (
   tempId: string,
@@ -11,11 +12,23 @@ export type SyncedCallback = (
   savedId: string
 ) => void;
 
+export interface QueuedMessage {
+  tempId: string;
+  chatId: string;
+  message: any;
+  retries: number;
+  createdAt: number;
+}
+
 class SyncService {
   private listeners: SyncedCallback[] = [];
   private processing = false;
   private networkHandler: PluginListenerHandle | null = null;
   private started = false;
+  private messageQueue: QueuedMessage[] = [];
+  private processingQueue = false;
+  private readonly MAX_RETRIES = 5;
+  private readonly BASE_DELAY = 2000; // 2s base
 
   onSynced(cb: SyncedCallback): void {
     this.listeners.push(cb);
@@ -34,7 +47,9 @@ class SyncService {
         if (status.connected) {
           this.processQueue();
         }
-      } catch {}
+      } catch (e) {
+        logger.warn("[SyncService] Network.getStatus failed", { error: e });
+      }
 
       try {
         this.networkHandler = await Network.addListener(
@@ -45,7 +60,9 @@ class SyncService {
             }
           }
         );
-      } catch {}
+      } catch (e) {
+        logger.warn("[SyncService] Network.addListener failed", { error: e });
+      }
     }
 
     window.addEventListener("online", this.onBrowserOnline);
@@ -55,7 +72,9 @@ class SyncService {
     if (this.networkHandler) {
       try {
         this.networkHandler.remove();
-      } catch {}
+      } catch (e) {
+        logger.warn("[SyncService] networkHandler.remove failed", { error: e });
+      }
       this.networkHandler = null;
     }
     window.removeEventListener("online", this.onBrowserOnline);
@@ -63,30 +82,111 @@ class SyncService {
 
   private onBrowserOnline = (): void => {
     this.processQueue();
+    this.processMessageQueue();
   };
+
+  /**
+   * Encola un mensaje para envío inmediato con persistencia en SQLite.
+   * Si falla, queda en cola local con retries y se reintenta automáticamente al volver la red.
+   */
+  async queueMessage(chatId: string, message: any): Promise<void> {
+    const tempId = message.id;
+    const queued: QueuedMessage = {
+      tempId,
+      chatId,
+      message: { ...message, status: "sending", synced: false },
+      retries: 0,
+      createdAt: Date.now(),
+    };
+
+    // 1. Persistir inmediatamente en SQLite (synced = false)
+    await messageRepo.upsertMessage(chatId, { ...message, status: "sending", synced: false });
+    
+    // 2. Añadir a cola en memoria para reintento rápido
+    this.messageQueue.push(queued);
+
+    // 3. Intentar enviar inmediatamente
+    await this.trySend(queued);
+  }
+
+  private async trySend(queued: QueuedMessage): Promise<boolean> {
+    const { chatId, message, retries } = queued;
+    
+    try {
+      const saved = await this.sendSingle(queued.chatId, queued.message);
+      if (saved?.id) {
+        // Éxito: actualizar a "sent" y synced = true
+        const updated = { ...message, id: saved.id, status: "sent", synced: true };
+        await messageRepo.deleteMessage(chatId, message.id as string);
+        await messageRepo.upsertMessage(chatId, updated);
+        this.removeFromQueue(queued.tempId);
+        this.notifyListeners(queued.tempId, chatId, saved.id);
+        logger.info("[SyncService] queued message sent", { tempId: queued.tempId, savedId: saved.id });
+        return true;
+      }
+    } catch (err) {
+      logger.warn("[SyncService] queue send failed, will retry", { 
+        tempId: queued.tempId, 
+        attempt: retries + 1, 
+        error: err 
+      });
+    }
+    return false;
+  }
+
+  private async processMessageQueue(): Promise<void> {
+    if (this.processingQueue || this.messageQueue.length === 0) return;
+    this.processingQueue = true;
+
+    const queue = [...this.messageQueue];
+    
+    for (const queued of queue) {
+      if (queued.retries >= 5) {
+        logger.error("[SyncService] Max retries reached, keeping in queue", { tempId: queued.tempId });
+        continue;
+      }
+      
+      queued.retries++;
+      const delay = Math.min(2000 * Math.pow(2, queued.retries - 1), 30000);
+      
+      logger.info("[SyncService] Retrying queued message", { tempId: queued.tempId, attempt: queued.retries });
+      await new Promise(r => setTimeout(r, delay));
+      
+      await this.trySend(queued);
+    }
+    
+    this.processingQueue = false;
+  }
+
+  private removeFromQueue(tempId: string): void {
+    this.messageQueue = this.messageQueue.filter(m => m.tempId !== tempId);
+  }
 
   async processQueue(): Promise<void> {
     if (this.processing) return;
     this.processing = true;
 
     try {
+      // 1. Procesar mensajes no sincronizados de SQLite (cola legacy)
       const pending = await messageRepo.getAllUnsynced();
-      if (pending.length === 0) {
-        this.processing = false;
-        return;
-      }
-
-      console.log(`[SyncService] processing ${pending.length} pending messages`);
-
-      for (const item of pending) {
-        try {
-          await this.sendSingle(item.chatId, item.message);
-        } catch (err) {
-          console.warn("[SyncService] failed for message", item.message.id, err);
+      if (pending.length > 0) {
+        logger.info(`[SyncService] processing ${pending.length} legacy pending messages`);
+        for (const item of pending) {
+          try {
+            await this.sendSingle(item.chatId, item.message);
+          } catch (err) {
+            logger.warn("[SyncService] failed for legacy message", { messageId: item.message.id, error: err });
+          }
         }
       }
+
+      // 2. Procesar cola en memoria (nuevos mensajes encolados vía queueMessage)
+      if (this.messageQueue.length > 0) {
+        logger.info(`[SyncService] processing ${this.messageQueue.length} queued messages`);
+        await this.processMessageQueue();
+      }
     } catch (err) {
-      console.error("[SyncService] processQueue error:", err);
+      logger.error("[SyncService] processQueue error", { error: err });
     }
 
     this.processing = false;
@@ -95,7 +195,7 @@ class SyncService {
   private async sendSingle(
     chatId: string,
     msg: any
-  ): Promise<void> {
+  ): Promise<any> {
     let imageUrl: string | undefined;
     let audioUrl: string | undefined;
     let videoUrl: string | undefined;
@@ -160,7 +260,7 @@ class SyncService {
         if (saved?.id) break;
       } catch (err) {
         lastError = err;
-        console.warn(`[SyncService] attempt ${attempt}/${MAX_RETRIES} failed for ${msg.id}:`, err);
+        logger.warn(`[SyncService] attempt ${attempt}/${MAX_RETRIES} failed`, { messageId: msg.id, error: err });
         if (attempt < MAX_RETRIES) {
           await new Promise(r => setTimeout(r, 2000 * attempt));
         }
@@ -168,7 +268,7 @@ class SyncService {
     }
 
     if (!saved?.id) {
-      console.error(`[SyncService] all ${MAX_RETRIES} attempts failed for ${msg.id}:`, lastError);
+      logger.error(`[SyncService] all ${MAX_RETRIES} attempts failed`, { messageId: msg.id, error: lastError });
       return;
     }
 
@@ -177,8 +277,9 @@ class SyncService {
       await messageRepo.deleteMessage(chatId, msg.id as string);
       await messageRepo.upsertMessage(chatId, updated as any);
       this.notifyListeners(msg.id as string, chatId, saved.id);
-      console.log("[SyncService] synced", msg.id, "->", saved.id);
+      logger.info("[SyncService] synced", { tempId: msg.id, savedId: saved.id });
     }
+    return saved;
   }
 
   private async uploadIfNeeded(
@@ -209,7 +310,9 @@ class SyncService {
     for (const cb of this.listeners) {
       try {
         cb(tempId, chatId, savedId);
-      } catch {}
+      } catch (e) {
+        logger.warn("[SyncService] listener callback failed", { error: e });
+      }
     }
   }
 }

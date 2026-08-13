@@ -1,4 +1,5 @@
 import { db } from "../DatabaseService";
+import { logger } from "../../../lib/logger";
 
 interface StoryRow {
   id: string;
@@ -30,7 +31,9 @@ function toRow(story: any): unknown[] {
 
 function fromRow(row: StoryRow): any {
   if (row.payload) {
-    try { return JSON.parse(row.payload); } catch {}
+    try { return JSON.parse(row.payload); } catch (e) {
+      logger.warn("[StoryRepo] Failed to parse payload", { error: e });
+    }
   }
   return {
     ...row,
@@ -49,7 +52,7 @@ export class StoryRepository {
         );
         return rows.map(fromRow);
       } catch (e) {
-        console.warn("[StoryRepo] SQLite error", e);
+        logger.warn("[StoryRepo] SQLite error", { error: e });
       }
     }
     return [];
@@ -65,7 +68,7 @@ export class StoryRepository {
         }))
       );
     } catch (e) {
-      console.warn("[StoryRepo] save error", e);
+      logger.warn("[StoryRepo] save error", { error: e });
     }
   }
 
@@ -76,7 +79,7 @@ export class StoryRepository {
         "DELETE FROM stories WHERE created_at < datetime('now', '-48 hours')"
       );
     } catch (e) {
-      console.warn("[StoryRepo] clearExpired error", e);
+      logger.warn("[StoryRepo] clearExpired error", { error: e });
     }
   }
 }

@@ -80,6 +80,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
   const [storyReplyText, setStoryReplyText] = useState("");
   const [isStoryPaused, setIsStoryPaused] = useState(false);
   const isStoryPausedRef = useRef(false);
+  const [replyFeedback, setReplyFeedback] = useState<string | null>(null);
 
   const [viewersData, setViewersData] = useState<{ viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null>(null);
   const [showViewersSheet, setShowViewersSheet] = useState(false);
@@ -181,6 +182,12 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     const t = setTimeout(() => setReactionFeedback(null), 1200);
     return () => clearTimeout(t);
   }, [reactionFeedback]);
+
+  useEffect(() => {
+    if (!replyFeedback) return;
+    const t = setTimeout(() => setReplyFeedback(null), 1800);
+    return () => clearTimeout(t);
+  }, [replyFeedback]);
 
   useEffect(() => {
     if (!activeUserStates) return;
@@ -289,7 +296,9 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     const initialText = `Respondí a tu estado ${contextQuote}:\n\n${storyReplyText}`;
 
     onStartChat(activeUserStates.userName, activeUserStates.userAvatar, initialText);
-    handleCloseStoryViewer();
+    setStoryReplyText("");
+    setStoryPaused(false);
+    setReplyFeedback("Has respondido a esta historia");
   };
 
   const saveStoryToApi = (story: Story) => {
@@ -465,6 +474,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     showViewersSheet,
     myCurrentReaction,
     reactionFeedback,
+    replyFeedback,
     newTextContent,
     selectedGradientIdx,
     newImageCaption,

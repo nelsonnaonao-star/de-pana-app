@@ -11,6 +11,7 @@ interface StoryViewerProps {
   storyProgress: number;
   reactionFeedback: string | null;
   myCurrentReaction: string | null;
+  replyFeedback?: string | null;
   viewersData: { viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null;
   showViewersSheet: boolean;
   storyReplyText: string;
@@ -27,7 +28,7 @@ interface StoryViewerProps {
 
 export default function StoryViewer({
   activeUserStates, activeStoryIdx, storyProgress,
-  reactionFeedback, myCurrentReaction, viewersData, storyReplyText,
+  reactionFeedback, myCurrentReaction, replyFeedback, viewersData, storyReplyText,
   isPaused, onSetPaused,
   onClose, onTap, onSendReply, onToggleReaction,
   onSetStoryReplyText, onShowViewersSheet,
@@ -248,6 +249,14 @@ export default function StoryViewer({
         </div>
       )}
 
+      {replyFeedback && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30 animate-fade-in">
+          <div className="bg-teal-500/90 backdrop-blur-md rounded-3xl px-6 py-3 border border-white/20 shadow-2xl">
+            <span className="text-white text-sm font-bold tracking-tight">✅ Has respondido a esta historia</span>
+          </div>
+        </div>
+      )}
+
       {!activeUserStates.isMe ? (
         <div className="p-3 bg-black/85 border-t border-white/10 z-20 flex flex-col gap-2 shrink-0">
           <div className="flex items-center justify-center gap-2.5">
@@ -268,7 +277,12 @@ export default function StoryViewer({
               type="text" required
               placeholder="Responder al estado de manera privada..."
               value={storyReplyText}
-              onChange={(e) => onSetStoryReplyText(e.target.value)}
+              onFocus={() => onSetPaused(true)}
+              onBlur={() => onSetPaused(false)}
+              onChange={(e) => {
+                onSetPaused(true);
+                onSetStoryReplyText(e.target.value);
+              }}
               className="flex-1 bg-white/10 text-white placeholder-slate-400 text-[10px] px-3.5 py-2.5 rounded-xl border border-white/10 outline-none focus:border-teal-400"
             />
             <button

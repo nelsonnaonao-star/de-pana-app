@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import { logger } from "../lib/logger";
 
 interface AudioVisualizerProps {
   audioUrl: string;
@@ -86,7 +87,9 @@ export default function AudioVisualizer({ audioUrl, playing, barCount = 16 }: Au
       animationRef.current && cancelAnimationFrame(animationRef.current);
       audio.pause();
       audio.src = "";
-      try { ctx.close(); } catch {}
+      try { ctx.close(); } catch (e) {
+        logger.warn("[AudioVisualizer] AudioContext close failed", { error: e });
+      }
     };
   }, [playing, audioUrl]);
 

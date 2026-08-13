@@ -1,5 +1,6 @@
 import { db } from "../DatabaseService";
 import type { Chat } from "../../../services/chats";
+import { logger } from "../../../lib/logger";
 
 const LOCALSTORAGE_PREFIX = "redon_cache_chats_";
 
@@ -31,7 +32,9 @@ function fromRow(row: Record<string, unknown>): Chat {
   if (row.payload && typeof row.payload === "string") {
     try {
       return JSON.parse(row.payload) as Chat;
-    } catch {}
+    } catch (e) {
+      logger.warn("[ChatRepo] Failed to parse payload", { error: e });
+    }
   }
   return {
     id: row.id as string,
@@ -78,13 +81,15 @@ export class ChatRepository {
         );
         return rows.map(fromRow);
       } catch (e) {
-        console.warn("[ChatRepo] SQLite error, fallback", e);
+        logger.warn("[ChatRepo] SQLite error, fallback", { error: e });
       }
     }
     try {
       const stored = localStorage.getItem(`${LOCALSTORAGE_PREFIX}${userId}`);
       if (stored) return JSON.parse(stored) as Chat[];
-    } catch {}
+    } catch (e) {
+      logger.warn("[ChatRepo] localStorage get failed", { error: e });
+    }
     return [];
   }
 
@@ -103,12 +108,14 @@ export class ChatRepository {
         ];
         await db.executeSet(set);
       } catch (e) {
-        console.warn("[ChatRepo] save SQLite error, fallback", e);
+        logger.warn("[ChatRepo] save SQLite error, fallback", { error: e });
       }
     }
     try {
       localStorage.setItem(`${LOCALSTORAGE_PREFIX}${userId}`, JSON.stringify(chats));
-    } catch {}
+    } catch (e) {
+      logger.warn("[ChatRepo] localStorage set failed", { error: e });
+    }
   }
 
   async upsertChat(chat: Chat): Promise<void> {
@@ -118,7 +125,7 @@ export class ChatRepository {
           { statement: INSERT_SQL, values: rowValues(chat, chat.profile_id || chat.admin_id || "") },
         ]);
       } catch (e) {
-        console.warn("[ChatRepo] upsert SQLite error, fallback", e);
+        logger.warn("[ChatRepo] upsert SQLite error, fallback", { error: e });
       }
     }
     const key = `${LOCALSTORAGE_PREFIX}`;
@@ -136,7 +143,9 @@ export class ChatRepository {
           }
         }
       }
-    } catch {}
+    } catch (e) {
+      logger.warn("[ChatRepo] localStorage upsert failed", { error: e });
+    }
   }
 
   async clearChats(userId: string): Promise<void> {
@@ -145,12 +154,14 @@ export class ChatRepository {
         await db.run("DELETE FROM chats WHERE user_id = ?", [userId]);
         return;
       } catch (e) {
-        console.warn("[ChatRepo] clear SQLite error, fallback", e);
+        logger.warn("[ChatRepo] clear SQLite error, fallback", { error: e });
       }
     }
     try {
       localStorage.removeItem(`${LOCALSTORAGE_PREFIX}${userId}`);
-    } catch {}
+    } catch (e) {
+      logger.warn("[ChatRepo] localStorage clear failed", { error: e });
+    }
   }
 }
 

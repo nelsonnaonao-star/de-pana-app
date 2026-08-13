@@ -1,5 +1,6 @@
 import { db } from "../DatabaseService";
 import type { Contact } from "../../../services/contacts";
+import { logger } from "../../../lib/logger";
 
 const LOCALSTORAGE_PREFIX = "redon_cache_contacts_";
 
@@ -24,7 +25,9 @@ function fromRow(row: Record<string, unknown>): Contact {
   if (row.payload && typeof row.payload === "string") {
     try {
       return JSON.parse(row.payload) as Contact;
-    } catch {}
+    } catch (e) {
+      logger.warn("[ContactRepo] Failed to parse payload", { error: e });
+    }
   }
   return {
     id: row.id as string,
@@ -65,13 +68,15 @@ export class ContactRepository {
         );
         return rows.map(fromRow);
       } catch (e) {
-        console.warn("[ContactRepo] SQLite error, fallback", e);
+        logger.warn("[ContactRepo] SQLite error, fallback", { error: e });
       }
     }
     try {
       const stored = localStorage.getItem(`${LOCALSTORAGE_PREFIX}${userId}`);
       if (stored) return JSON.parse(stored) as Contact[];
-    } catch {}
+    } catch (e) {
+      logger.warn("[ContactRepo] localStorage get failed", { error: e });
+    }
     return [];
   }
 
@@ -91,7 +96,7 @@ export class ContactRepository {
         await db.executeSet(set);
         return;
       } catch (e) {
-        console.warn("[ContactRepo] save SQLite error, fallback", e);
+        logger.warn("[ContactRepo] save SQLite error, fallback", { error: e });
       }
     }
     try {
@@ -99,7 +104,9 @@ export class ContactRepository {
         `${LOCALSTORAGE_PREFIX}${userId}`,
         JSON.stringify(contacts)
       );
-    } catch {}
+    } catch (e) {
+      logger.warn("[ContactRepo] localStorage set failed", { error: e });
+    }
   }
 
   async upsertContact(contact: Contact): Promise<void> {
@@ -113,7 +120,7 @@ export class ContactRepository {
         ]);
         return;
       } catch (e) {
-        console.warn("[ContactRepo] upsert SQLite error, fallback", e);
+        logger.warn("[ContactRepo] upsert SQLite error, fallback", { error: e });
       }
     }
     const key = `${LOCALSTORAGE_PREFIX}`;
@@ -131,7 +138,9 @@ export class ContactRepository {
           }
         }
       }
-    } catch {}
+    } catch (e) {
+      logger.warn("[ContactRepo] localStorage upsert failed", { error: e });
+    }
   }
 
   async clearContacts(userId: string): Promise<void> {
@@ -140,12 +149,14 @@ export class ContactRepository {
         await db.run("DELETE FROM contacts WHERE user_id = ?", [userId]);
         return;
       } catch (e) {
-        console.warn("[ContactRepo] clear SQLite error, fallback", e);
+        logger.warn("[ContactRepo] clear SQLite error, fallback", { error: e });
       }
     }
     try {
       localStorage.removeItem(`${LOCALSTORAGE_PREFIX}${userId}`);
-    } catch {}
+    } catch (e) {
+      logger.warn("[ContactRepo] localStorage clear failed", { error: e });
+    }
   }
 }
 

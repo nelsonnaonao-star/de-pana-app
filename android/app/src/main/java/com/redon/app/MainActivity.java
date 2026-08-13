@@ -91,6 +91,17 @@ public class MainActivity extends BridgeActivity {
                 int notificationId = ("call-" + chatId).hashCode();
                 NotificationManagerCompat.from(this).cancel(notificationId);
                 Log.d(TAG, "Cancelled call notification for chatId: " + chatId);
+
+                // Avisar a cualquier IncomingCallActivity activa (e.g. contestada desde
+                // la barra de notificaciones) para que detenga su ringtone al instante,
+                // evitando que siga sonando tras responder.
+                try {
+                    Intent stopIntent = new Intent("com.redon.app.ACTION_CALL_ANSWERED");
+                    stopIntent.putExtra("chatId", chatId);
+                    sendBroadcast(stopIntent);
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to broadcast call answered", e);
+                }
             }
         } else if ("OPEN_CHAT".equals(action) || "OPEN_APP".equals(action) || (chatId != null && "message".equals(type))) {
             if (chatId != null) {

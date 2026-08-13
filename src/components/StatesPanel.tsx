@@ -28,7 +28,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
     uploadedMedia, showPublishDecisionModal, isEditingProState, publishStep, publishComment,
     activeUserStates, activeStoryIdx, storyProgress, storyReplyText,
     isStoryPaused, setStoryPaused,
-    viewersData, showViewersSheet, myCurrentReaction, reactionFeedback,
+    viewersData, showViewersSheet, myCurrentReaction, reactionFeedback, replyFeedback,
     newTextContent, selectedGradientIdx, newImageCaption, selectedImageUrl,
     myUserStateRepresentation, GRADIENTS,
     setSubView, setPublishComment, setShowViewersSheet,
@@ -307,6 +307,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
           storyProgress={storyProgress}
           reactionFeedback={reactionFeedback}
           myCurrentReaction={myCurrentReaction}
+          replyFeedback={replyFeedback}
           viewersData={viewersData}
           showViewersSheet={showViewersSheet}
           storyReplyText={storyReplyText}
