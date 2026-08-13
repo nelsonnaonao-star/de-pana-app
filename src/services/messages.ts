@@ -120,11 +120,13 @@ export async function getMessages(chatId: string, options?: { limit?: number; be
   return (data || []).map(toMessage);
 }
 
-export async function sendMessage(message: Partial<Message>): Promise<Message> {
+export async function sendMessage(message: Partial<Message> & { client_id?: string; temp_id?: string }): Promise<Message> {
   const res = await authFetch(apiUrl("/api/messages/send"), {
     method: "POST",
     body: JSON.stringify({
       chat_id: message.chat_id,
+      client_id: message.client_id,
+      temp_id: message.temp_id,
       sender_id: message.sender_id,
       receiver_id: message.receiver_id,
       text: message.text,

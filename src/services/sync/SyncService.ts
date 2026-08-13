@@ -1,6 +1,7 @@
 import { Network } from "@capacitor/network";
 import type { PluginListenerHandle } from "@capacitor/core";
 import { messageRepo } from "../database/repositories/MessageRepository";
+import { recordReconciledId } from "../../lib/reconciledIds";
 import { sendMessage as apiSendMessage } from "../messages";
 import { uploadChatMedia } from "../storage";
 import { Capacitor } from "@capacitor/core";
@@ -115,12 +116,13 @@ class SyncService {
     try {
       const saved = await this.sendSingle(queued.chatId, queued.message);
       if (saved?.id) {
-        // Éxito: actualizar a "sent" y synced = true
+        // Éxito: notificar YA (marca ✓ en la UI montada) y luego sustituir de
+        // forma atómica tempId -> savedId en SQLite sin bloquear el ✓.
         const updated = { ...message, id: saved.id, status: "sent", synced: true };
-        await messageRepo.deleteMessage(chatId, message.id as string);
-        await messageRepo.upsertMessage(chatId, updated);
+        recordReconciledId(chatId, message.id as string, saved.id);
         this.removeFromQueue(queued.tempId);
         this.notifyListeners(queued.tempId, chatId, saved.id);
+        this.reconcileQuietly(chatId, message.id as string, updated);
         logger.info("[SyncService] queued message sent", { tempId: queued.tempId, savedId: saved.id });
         return true;
       }
@@ -249,6 +251,7 @@ class SyncService {
           sticker_url: stickerUrl,
           gif_url: gifUrl,
           forwarded: (msg.forwarded as boolean) || undefined,
+          temp_id: (msg.id as string) || undefined,
           latitude: (msg.latitude as number) ?? undefined,
           longitude: (msg.longitude as number) ?? undefined,
           location_name: (msg.locationName as string) || (msg.location_name as string) || undefined,
@@ -274,12 +277,24 @@ class SyncService {
 
     if (saved?.id) {
       const updated = { ...(msg as any), id: saved.id, status: "sent", synced: true };
-      await messageRepo.deleteMessage(chatId, msg.id as string);
-      await messageRepo.upsertMessage(chatId, updated as any);
+      recordReconciledId(chatId, msg.id as string, saved.id);
       this.notifyListeners(msg.id as string, chatId, saved.id);
+      this.reconcileQuietly(chatId, msg.id as string, updated);
       logger.info("[SyncService] synced", { tempId: msg.id, savedId: saved.id });
     }
     return saved;
+  }
+
+  // Sustitución atómica tempId -> savedId en SQLite SIN bloquear ni rechazar:
+  // la UI ya se marcó "sent" vía notifyListeners; aquí solo se deja persistida
+  // la fila real para que las re-lecturas (cache-first) devuelvan el id real.
+  private reconcileQuietly(chatId: string, tempId: string, saved: any): void {
+    messageRepo.reconcileTemp(chatId, tempId, saved).catch((err: unknown) => {
+      logger.warn("[SyncService] reconcileTemp falló (UI ya marcó sent)", {
+        tempId,
+        error: err,
+      });
+    });
   }
 
   private async uploadIfNeeded(

@@ -1,4 +1,4 @@
-import { MutableRefObject, FormEvent } from "react";
+import { MutableRefObject, FormEvent, useRef } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Chat, Message } from "../../types";
@@ -7,12 +7,27 @@ import { uploadChatMedia } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
 import { revokeCachedMedia } from "../../services/mediaCache";
 import { supabase } from "../../lib/supabase";
+import { recordReconciledId } from "../../lib/reconciledIds";
 import toast from "react-hot-toast";
 
 function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return "0 KB";
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// UUID para idempotencia de envíos (el servidor lo usa como clave de reintento:
+// un mismo envío reintentado jamás inserta duplicados).
+function newClientId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = Math.floor(Math.random() * 16);
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
 
 export interface UseMessageActionsParams {
@@ -115,6 +130,8 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     sendingRecordingRef, recordingTimer, videoPreviewRef,
   } = params;
 
+  const sendingLockRef = useRef<Promise<void>>(Promise.resolve());
+
   const handleReplyMessage = (msg: Message) => {
     setReplyTo(msg);
   };
@@ -131,6 +148,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       async (pos) => {
         const { latitude, longitude } = pos.coords;
         const tempId = `temp_${Date.now()}_loc`;
+        const clientId = newClientId();
         const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         const newMsg: Message = {
           id: tempId,
@@ -153,6 +171,8 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
           if (!isLocalChat) {
             const saved = await apiSendMessage({
               chat_id: chatId,
+              client_id: clientId,
+              temp_id: tempId,
               type: "location",
               sender_id: uid,
               text: `📍 ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
@@ -160,14 +180,12 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
               longitude,
               location_name: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
             });
-            messageRepo.upsertMessage(chatId, { ...newMsg, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
-            messageRepo.deleteMessage(chatId, tempId);
-            setMessages(prev => {
-              const found = prev.some(m => m.id === tempId);
-              console.log("🛠️ RECONCILIACIÓN EN CURSO:", { tempId, loEncontro: found, serverId: saved.id });
-              if (!found) return prev;
-              return prev.map(m => m.id === tempId ? { ...m, ...saved, status: "sent", synced: true, id: saved.id } : m);
-            });
+            const savedRow = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+            recordReconciledId(chatId, tempId, saved.id);
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+            messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+              console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+            );
           } else {
             const updated = { ...newMsg, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
             messageRepo.upsertMessage(chatId, updated);
@@ -197,7 +215,8 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     if (!text.trim()) return;
     if (isSendingRef.current) { console.warn('[CHAT] send blocked — already sending'); return; }
     isSendingRef.current = true;
-    const tempId = `temp_${Date.now()}_txt`;
+        const tempId = `temp_${Date.now()}_txt`;
+        const clientId = newClientId();
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const newMsg: Message = {
       id: tempId,
@@ -237,6 +256,8 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       } else {
         const saved = await apiSendMessage({
           chat_id: chatId,
+          client_id: clientId,
+          temp_id: tempId,
           text,
           type: "text",
           sender_id: uid,
@@ -244,14 +265,12 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
           reply_to_text: replyTo?.text,
           reply_to_sender: replyTo?.sender === "me" ? "Tú" : chatName,
         });
-        messageRepo.upsertMessage(chatId, { ...newMsg, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
-        messageRepo.deleteMessage(chatId, tempId);
-        setMessages(prev => {
-          const found = prev.some(m => m.id === tempId);
-          console.log("🛠️ RECONCILIACIÓN EN CURSO:", { tempId, loEncontro: found, serverId: saved.id });
-          if (!found) return prev;
-          return prev.map(m => m.id === tempId ? { ...m, ...saved, status: "sent", synced: true, id: saved.id } : m);
-        });
+        const savedRow = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+        recordReconciledId(chatId, tempId, saved.id);
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+        messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+          console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+        );
       }
     } catch (e) {
       console.error("[CHAT] Error al enviar mensaje:", e);
@@ -266,6 +285,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     isSendingRef.current = true;
     if (type === "emoji") {
       const tempId = `temp_${Date.now()}_emoji`;
+      const clientId = newClientId();
       const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const newMsg: Message = {
         id: tempId,
@@ -288,16 +308,19 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
         if (!isLocalChat) {
           const saved = await apiSendMessage({
             chat_id: chatId,
+            client_id: clientId,
+            temp_id: tempId,
             type: "sticker",
             sticker_url: value,
             image_url: value,
             sender_id: uid,
           });
-          messageRepo.upsertMessage(chatId, { ...newMsg, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
-          messageRepo.deleteMessage(chatId, tempId);
-          setMessages(prev => prev.map(m =>
-            m.id === tempId ? { ...m, ...saved, id: saved.id, status: "sent", is_pending: false, synced: true } : m
-          ));
+          const savedRow = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+            recordReconciledId(chatId, tempId, saved.id);
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+            messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+              console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+            );
         } else {
           const updated = { ...newMsg, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
           messageRepo.upsertMessage(chatId, updated);
@@ -314,6 +337,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     }
     const url = value;
     const tempId = `temp_${Date.now()}_stkr`;
+    const clientId = newClientId();
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const newMsg: Message = {
       id: tempId,
@@ -343,20 +367,20 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       } else {
 const saved = await apiSendMessage({
            chat_id: chatId,
+           client_id: clientId,
+           temp_id: tempId,
            type: type === "sticker" ? "sticker" : "image",
            sender_id: uid,
            sticker_url: type === "sticker" ? url : undefined,
            gif_url: type === "gif" ? url : undefined,
            image_url: url,
          });
-messageRepo.upsertMessage(chatId, { ...newMsg, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
-messageRepo.deleteMessage(chatId, tempId);
-           setMessages(prev => {
-             const found = prev.some(m => m.id === tempId);
-             console.log("🛠️ RECONCILIACIÓN EN CURSO:", { tempId, loEncontro: found, serverId: saved.id });
-             if (!found) return prev;
-             return prev.map(m => m.id === tempId ? { ...m, ...saved, status: "sent", synced: true, id: saved.id } : m);
-           });
+const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+           recordReconciledId(chatId, tempId, saved.id);
+           setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+           messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+             console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+           );
        }
      } catch (e) {
        console.error("[CHAT] Error al enviar sticker:", e);
@@ -373,6 +397,7 @@ messageRepo.deleteMessage(chatId, tempId);
        const isCapacitor = !!(window as any).Capacitor;
        if (isCapacitor) {
         const tempId = "msg_" + Date.now();
+        const clientIdCamera = newClientId();
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
 
         try {
@@ -411,17 +436,15 @@ messageRepo.deleteMessage(chatId, tempId);
           });
 
           if (!isLocalChat) {
-            const payload: any = { chat_id: chatId, sender_id: uid, type, text: "Imagen" };
+            const payload: any = { chat_id: chatId, sender_id: uid, type, text: "Imagen", client_id: clientIdCamera, temp_id: tempId };
             payload.image_url = url;
             const saved = await apiSendMessage(payload);
-messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
-        messageRepo.deleteMessage(chatId, tempId);
-        setMessages(prev => {
-              const found = prev.some(m => m.id === tempId);
-              console.log("🛠️ RECONCILIACIÓN EN CURSO:", { tempId, loEncontro: found, serverId: saved.id });
-              if (!found) return prev;
-              return prev.map(m => m.id === tempId ? { ...m, ...saved, status: "sent", synced: true, id: saved.id } : m);
-            });
+            const savedRow = { ...mediaUpdated, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+            recordReconciledId(chatId, tempId, saved.id);
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+            messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+              console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+            );
           } else {
             const final = { ...mediaUpdated, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
             messageRepo.upsertMessage(chatId, final);
@@ -451,6 +474,7 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
       if (!file) return;
 
       const tempId = "msg_" + Date.now();
+      const clientIdFile = newClientId();
       const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
       let posterUrl: string | undefined;
@@ -499,7 +523,7 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
         });
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
         if (!isLocalChat) {
-          const payload: any = { chat_id: chatId, sender_id: uid, type, text: file.name };
+          const payload: any = { chat_id: chatId, sender_id: uid, type, text: file.name, client_id: clientIdFile, temp_id: tempId };
           if (type === "image") { payload.image_url = url; payload.text = "Imagen"; }
           else if (type === "video") { payload.video_url = url; payload.text = "Video"; }
           else if (type === "audio") { payload.audio_url = url; payload.text = "Audio"; }
@@ -511,14 +535,12 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
             payload.mime_type = file.type || null;
           }
           const saved = await apiSendMessage(payload);
-          messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
-          messageRepo.deleteMessage(chatId, tempId);
-          setMessages(prev => {
-            const found = prev.some(m => m.id === tempId);
-            console.log("🛠️ RECONCILIACIÓN EN CURSO:", { tempId, loEncontro: found, serverId: saved.id });
-            if (!found) return prev;
-            return prev.map(m => m.id === tempId ? { ...m, ...saved, status: "sent", synced: true, id: saved.id } : m);
-          });
+          const savedRow = { ...mediaUpdated, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+          recordReconciledId(chatId, tempId, saved.id);
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+          messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+            console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+          );
         } else {
           const final = { ...mediaUpdated, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
           messageRepo.upsertMessage(chatId, final);
@@ -547,6 +569,7 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
     ];
 
     const tempId = "msg_" + Date.now();
+    const clientIdPoll = newClientId();
     const newMsg: Message = {
       id: tempId,
       sender: "me",
@@ -570,6 +593,8 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
       if (!isLocalChat) {
         const saved = await apiSendMessage({
           chat_id: chatId,
+          client_id: clientIdPoll,
+          temp_id: tempId,
           type: "poll",
           sender_id: uid,
           text: pollQuestion,
@@ -692,6 +717,7 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
 
   const handleFinishVoiceNote = async () => {
     if (!recordingType || !mediaRecorderRef.current || sendingRecordingRef.current) return;
+    console.log("[VOICE] finishVoiceNote inicio", { type: recordingType, secs: recordingSeconds });
     sendingRecordingRef.current = true;
     const currentRecordingType = recordingType;
     const currentDuration = recordingSeconds;
@@ -713,8 +739,10 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
     const blob = new Blob(buffers, {
       type: currentRecordingType === "voice" ? "audio/webm" : "video/webm",
     });
+    console.log("[VOICE] blob listo", { chunks: buffers.length, bytes: blob.size, type: blob.type });
     const durStr = `${Math.floor(currentDuration / 60)}:${(currentDuration % 60).toString().padStart(2, "0")}`;
     const tempId = "msg_" + Date.now();
+    const clientId = newClientId();
     const localUrl = URL.createObjectURL(blob);
     const newMsg: Message = {
       id: tempId,
@@ -739,10 +767,24 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
     mediaRecorderRef.current = null;
     chunksRef.current = [];
 
+    // La grabación ya quedó cautiva; libera el candado de captura para que la
+    // siguiente nota pueda grabarse/cerrarse aunque esta siga subiendo.
+    sendingRecordingRef.current = false;
+
+    // Serializa SOLO la subida/envío: nunca se descarta ni se pierde una nota.
+    const prevSending = sendingLockRef.current;
+    let releaseSending: (() => void) | null = null;
+    sendingLockRef.current = new Promise<void>((resolve) => { releaseSending = resolve; });
+    await prevSending;
+
     try {
-      const url = await uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video");
+      const uploadTimeout = new Promise<string>((_, reject) =>
+        setTimeout(() => reject(new Error("upload voz/video timeout (25s)")), 25000)
+      );
+      const url = await Promise.race([uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video"), uploadTimeout]);
+      console.log("[VOICE] upload OK", { url });
       const mediaUpdated = { ...newMsg, mediaUrl: url };
-      messageRepo.upsertMessage(chatId, mediaUpdated);
+      messageRepo.upsertMessage(chatId, mediaUpdated).catch(() => {});
       setMessages(prev => {
         if (!prev.some(m => m.id === tempId)) return prev;
         return prev.map(m => m.id === tempId ? mediaUpdated : m);
@@ -750,23 +792,43 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
 
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
       if (!isLocalChat) {
-        const saved = await apiSendMessage({
-          chat_id: chatId,
-          sender_id: uid,
-          type: currentRecordingType === "voice" ? "voice_note" : "video_note",
-          audio_url: currentRecordingType === "voice" ? url : undefined,
-          video_url: currentRecordingType === "video" ? url : undefined,
-          audio_duration: String(currentDuration),
-          text: currentRecordingType === "voice" ? "Nota de voz" : "Nota de video",
-        });
-        messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at });
-        messageRepo.deleteMessage(chatId, tempId);
-        setMessages(prev => {
-          const found = prev.some(m => m.id === tempId);
-          console.log("🛠️ RECONCILIACIÓN EN CURSO:", { tempId, loEncontro: found, serverId: saved.id });
-          if (!found) return prev;
-          return prev.map(m => m.id === tempId ? { ...m, ...saved, status: "sent", synced: true, id: saved.id } : m);
-        });
+        // Reintento automático con idempotencia: con red móvil inestable el POST
+        // puede fallar/timeoutear; se reintenta con el MISMO client_id (fila única
+        // en el servidor) para que la nota nunca se pierda ni se duplique.
+        let saved: any = null;
+        let lastErr: unknown = null;
+        for (let attempt = 1; attempt <= 3 && !saved; attempt++) {
+          try {
+            saved = await apiSendMessage({
+              chat_id: chatId,
+              sender_id: uid,
+              type: currentRecordingType === "voice" ? "voice_note" : "video_note",
+              client_id: clientId,
+              temp_id: tempId,
+              audio_url: currentRecordingType === "voice" ? url : undefined,
+              video_url: currentRecordingType === "video" ? url : undefined,
+              audio_duration: String(currentDuration),
+              text: currentRecordingType === "voice" ? "Nota de voz" : "Nota de video",
+            });
+          } catch (e) {
+            lastErr = e;
+            console.warn(`[CHAT] Voice send attempt ${attempt}/3 failed, retrying`, { tempId, error: e });
+            await new Promise(r => setTimeout(r, 1500 * attempt));
+          }
+        }
+        if (!saved?.id) throw lastErr || new Error("send failed");
+        console.log("[VOICE] apiSendMessage OK", { tempId, savedId: saved.id });
+        const savedRow: Message = { ...mediaUpdated, id: saved.id, status: "sent", synced: true, rawCreatedAt: saved.created_at };
+        // 1º Marcar ✓ en la UI INMEDIATAMENTE (lo primero que confirme gana:
+        // el HTTP aquí, o el eco de Realtime en el fallback por media_url).
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+        // 2º Mapa persistente tempId->savedId (cubre re-entrada al chat).
+        recordReconciledId(chatId, tempId, saved.id);
+        // 3º SUSTITUCIÓN ATÓMICA EN SQLite SIN bloquear la UI: nunca debe colgar
+        // la promesa ni cancelar el ✓; si falla, SQLite converge solo.
+        messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+          console.error("[VOICE] reconcileTemp falló (UI ya marcó sent):", err)
+        );
       }
       if (isLocalChat) {
         const final = { ...mediaUpdated, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
@@ -778,9 +840,10 @@ messageRepo.upsertMessage(chatId, { ...mediaUpdated, id: saved.id, status: "sent
       console.error("[CHAT] Upload recording error:", err);
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
     } finally {
+      console.log("[VOICE] finishVoiceNote finalizado", { tempId, quedaSending: false });
       pendingSendIdsRef.current.delete(tempId);
+      releaseSending?.();
     }
-    sendingRecordingRef.current = false;
   };
 
   return {

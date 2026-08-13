@@ -26,6 +26,7 @@ import { useGroupManagement } from "../hooks/chat/useGroupManagement";
 import { useChatRealtime, MessageEventPayload } from "../hooks/chat/useChatRealtime";
 import { useMessageActions } from "../hooks/chat/useMessageActions";
 import { messageRepo } from "../services/database/repositories/MessageRepository";
+import { getReconciledSavedId, recordReconciledId } from "../lib/reconciledIds";
 
 interface ChatRoomProps {
   chat: Chat;
@@ -55,7 +56,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     chat.id,
     uid,
     (tempId, savedId) => {
-      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: savedId, status: "sent", synced: true } : m));
+      recordReconciledId(chat.id, tempId, savedId);
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: savedId, status: "sent" as const, synced: true } : m));
     },
     (tempId) => {
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "sending" as const } : m));
@@ -141,26 +143,17 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     return ta < tb ? -1 : ta > tb ? 1 : 0;
   });
 
-  // Safe merge: deduplicates by id, preserves existing references when nothing changed.
-  // Only creates new array/sorted if there are actual changes. NUNCA elimina una
-  // fila legítima: un mensaje optimista (temp) se funde EN EL MISMO ÍNDICE con la
-  // fila confirmada del servidor, nunca se descarta y se pierde.
+  // Safe merge: UNICAMENTE por consistencia atómica de ID (tempId -> savedId),
+  // nunca por contenido/duración (evita colisiones al enviar notas parecidas).
+  // El optimista se convierte en su fila confirmada con el id REAL del servidor
+  // porque SQLite ya lo sustituyó atómicamente (messageRepo.reconcileTemp) y el
+  // mapa de IDs reconciliados lo resuelve también al re-entrar al chat.
   const safeMergeMessages = (prev: Message[], incoming: Message[]): Message[] => {
     if (incoming.length === 0) return prev;
 
     const incomingMap = new Map<string, Message>();
     for (const msg of incoming) {
       incomingMap.set(msg.id, msg);
-    }
-
-    // Cuenta mensajes "me" por contenido para no fusionar dos envíos distintos
-    // que comparten el mismo texto (ej. "hola" enviado dos veces).
-    const meByKeyCount = new Map<string, number>();
-    for (const m of prev) {
-      if (m.sender === "me") {
-        const k = m.text || m.mediaUrl || "";
-        if (k) meByKeyCount.set(k, (meByKeyCount.get(k) || 0) + 1);
-      }
     }
 
     let changed = false;
@@ -179,21 +172,17 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         }
         return msg;
       }
-      // Reconciliación en el mismo lugar: un temp optimista (relojito) cuyo
-      // contenido coincide con la fila confirmada se sustituye por ella en el
-      // mismo índice → UNA sola fila, ni duplicado ni pérdida.
-      if (
-        msg.sender === "me" &&
-        (msg.id?.startsWith("temp_") || msg.id?.startsWith("msg_"))
-      ) {
-        const key = msg.text || msg.mediaUrl || "";
-        if (key && (meByKeyCount.get(key) || 0) <= 1) {
-          for (const [id, srv] of incomingMap) {
-            if (srv.sender === "me" && (srv.text || srv.mediaUrl || "") === key) {
-              incomingMap.delete(id);
-              changed = true;
-              return { ...msg, ...srv, id: srv.id };
-            }
+      // Sustitución por ID reconciliado: si este temp ya fue confirmado antes
+      // (mapa persistente tempId->savedId) y su fila real viene en `incoming`,
+      // se funde en el mismo índice con su id atómico real.
+      if (msg.sender === "me" && (msg.id?.startsWith("temp_") || msg.id?.startsWith("msg_"))) {
+        const savedId = getReconciledSavedId(chat.id, msg.id);
+        if (savedId) {
+          const twin = incomingMap.get(savedId);
+          if (twin) {
+            incomingMap.delete(savedId);
+            changed = true;
+            return { ...msg, ...twin, id: twin.id, status: "sent" as const, synced: true };
           }
         }
       }
@@ -433,40 +422,51 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         });
         markAsRead(chat.id, uid, uname).catch(err => console.error("[ChatRoom] markAsRead on new message failed:", err));
       } else {
+        // Eco de un mensaje propio. Reconciliación INSTANTÁNEA por temp_id:
+        // - El emisor guardó temp_id (su id local msg_*/temp_*) en la fila, y el
+        //   evento INSERT lo trae en payload.new.temp_id (useChatRealtime pasa
+        //   payload.new tal cual). Si existe en el estado, se sustituye EN CALIENTE
+        //   por la fila real sin depender del orden HTTP-vs-WebSocket ni de
+        //   matchear media_url (blob: vs https:), que era la carrera del relojito.
+        // - Si el id real ya está en el estado, se ignora (no retrocede).
+        // - Fallback: match por media_url exacta (notas/parecidos sin temp_id).
         setMessages(prev => {
-          const alreadyInState = prev.some(m => m.id === raw.id);
-          if (alreadyInState) {
-            // Un refetch ya metió la fila del servidor; si aún queda el optimista
-            // colgado, fusionarlo y eliminar la copia repetida. Se empareja POR
-            // CONTENIDO (no por orden) para no tocar un envío distinto.
-            const pendingIndex = prev.findIndex(m =>
-              (m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) &&
-              (m.status === 'sending' || m.status === 'error') &&
-              ((raw?.type ?? 'text') === (m.type ?? 'text')) &&
-              ((raw?.type ?? 'text') !== 'text' || (m.text ?? '') === (raw?.text ?? ''))
-            );
-            if (pendingIndex !== -1) {
-              const reconciled = { ...mapped, id: raw.id, status: "sent" as const, synced: true };
-              messageRepo.upsertMessage(chat.id, { ...reconciled, chatId: chat.id });
-              const updated = [...prev];
-              updated[pendingIndex] = reconciled;
-              return updated.filter((m, i) => m.id !== raw.id || i === pendingIndex);
-            }
+          if (prev.some(m => m.id === raw.id)) {
+            console.log("[EV] eco ignorado (id real ya presente)", { id: raw.id });
             return prev;
           }
-          const pendingIndex = prev.findIndex(m =>
-            (m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) &&
-            (m.status === 'sending' || m.status === 'error') &&
-            ((raw?.type ?? 'text') === (m.type ?? 'text')) &&
-            ((raw?.type ?? 'text') !== 'text' || (m.text ?? '') === (raw?.text ?? ''))
-          );
-          if (pendingIndex !== -1) {
-            const reconciled = { ...mapped, id: raw.id, status: "sent" as const, synced: true };
-            messageRepo.upsertMessage(chat.id, { ...reconciled, chatId: chat.id });
-            const updated = [...prev];
-            updated[pendingIndex] = reconciled;
-            return updated.filter((m, i) => m.id !== raw.id || i === pendingIndex);
+          const rawTempId = raw.temp_id as string | undefined;
+          if (rawTempId && prev.some(m => m.id === rawTempId)) {
+            const replacement = { ...mapped, id: raw.id, status: "sent" as const, synced: true };
+            // Re-escritura atómica en SQLite: sustituye temp_id por la fila real
+            // simultáneamente (mismo ciclo que re-entrar al chat, sin demora).
+            messageRepo.reconcileTemp(chat.id, rawTempId, replacement).catch((err) =>
+              console.error("[EV] reconcileTemp por temp_id falló (UI ya marcó sent):", err)
+            );
+            recordReconciledId(chat.id, rawTempId, raw.id);
+            console.log("[EV] eco reconcilió temp por temp_id", { tempId: rawTempId, savedId: raw.id });
+            return prev.map(m => m.id === rawTempId ? replacement : m);
           }
+          const rawMedia = mapped?.mediaUrl || "";
+          const pendingIdx = prev.findIndex(m =>
+            (m.id?.startsWith("temp_") || m.id?.startsWith("msg_")) &&
+            (m.status === "sending" || m.status === "error") &&
+            m.sender === "me" &&
+            !!rawMedia &&
+            m.mediaUrl === rawMedia
+          );
+          console.log("[EV] eco propio INSERT", { id: raw.id, media: rawMedia, pendingIdx, rawTempId });
+          if (pendingIdx !== -1) {
+            const pendingMsg = prev[pendingIdx];
+            const reconciled = { ...pendingMsg, ...mapped, id: raw.id, status: "sent" as const, synced: true };
+            messageRepo.deleteMessage(chat.id, pendingMsg.id).catch(() => {});
+            recordReconciledId(chat.id, pendingMsg.id, raw.id);
+            const updated = [...prev];
+            updated[pendingIdx] = reconciled;
+            console.log("[EV] eco reconcilió temp por media_url", { tempId: pendingMsg.id, savedId: raw.id });
+            return updated;
+          }
+          console.log("[EV] eco propio SIN temp match → anexando fila real", { id: raw.id });
           return [...prev, { ...mapped, synced: true }];
         });
       }
@@ -523,7 +523,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     }
   };
 
-  // Watchdog: mark temp messages stuck in "sending" as "error" after 30s (no eternal clock)
+  // Watchdog mínimo: red de seguridad final. La reconciliación ahora es
+// instantánea por temp_id (payload.new.temp_id) en el eco INSERT de Realtime,
+// sin timers. Este watchdog SOLO marca "error" envíos que quedaron muertos por
+// caminos irreparables (>60s en sending) — no hace refetch ni cura.
   useEffect(() => {
     const interval = setInterval(() => {
       setMessages(prev => {
@@ -532,8 +535,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         const next = prev.map(m => {
           if ((m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) && m.status === 'sending') {
             const ts = Number(m.id.split('_')[1]);
-            if (!isNaN(ts) && now - ts > 30000) {
+            if (!isNaN(ts) && now - ts > 60000) {
               changed = true;
+              console.warn("[WATCHDOG] temp marcado error (envío muerto)", { id: m.id, secs: Math.round((now - ts) / 1000) });
               return { ...m, status: "error" as const };
             }
           }
@@ -541,7 +545,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         });
         return changed ? next : prev;
       });
-    }, 10000);
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -698,6 +702,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           }
           recorder.ondataavailable = (e) => {
             if (e.data.size > 0) chunksRef.current.push(e.data);
+          };
+          recorder.onerror = (e: any) => {
+            console.error("[CHAT] MediaRecorder error:", e?.error || e);
+            setRecordingType(null);
           };
           recorder.start(1000);
           mediaRecorderRef.current = recorder;

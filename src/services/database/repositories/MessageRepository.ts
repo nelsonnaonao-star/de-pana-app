@@ -180,6 +180,56 @@ export class MessageRepository {
     }
   }
 
+  /**
+   * SUSTITUCIÓN ATÓMICA DE ID: reemplaza en el MISMO STATEMENT el tempId por el
+   * savedId de Supabase (estado sent, synced = 1). Cualquier re-lectura de SQLite
+   * a partir de entonces devuelve el id REAL y sent, sin ventana donde el registro
+   * "retroceda" a tempId/synced=false. Se elimina además cualquier fila gemela
+   * (un eco previo pudo insertar el savedId mientras el temp aún existía).
+   */
+  async reconcileTemp(chatId: string, tempId: string, saved: Message): Promise<void> {
+    // NUNCA debe rechazar ni bloquear al llamador (si el UPDATE falla, la UI ya se
+    // marcó sent vía React; SQLite converge con la siguiente escritura/lectura).
+    if (db.ready) {
+      try {
+        const row = toRow(saved, chatId);
+        const cols = INSERT_COLS.filter((c) => c !== "id").map((c) => `${c} = ?`);
+        const values = INSERT_COLS.filter((c) => c !== "id").map((c) => row[c]);
+        await db.run(
+          `UPDATE messages SET id = ?, ${cols.join(", ")} WHERE chat_id = ? AND id = ?`,
+          [saved.id, ...values, chatId, tempId]
+        );
+      } catch (e) {
+        logger.warn("[MessageRepo] reconcileTemp UPDATE error", { error: e });
+      }
+      // Dedupe de filas gemelas: si Realtime ya insertó el savedId mientras el
+      // temp existía, se conserva UNA sola fila. Si el UPDATE no afectó filas
+      // (temp ya favorecido), solo nos aseguramos de no dejar duplicados.
+      try {
+        await db.run(
+          `DELETE FROM messages WHERE id = ? AND chat_id = ? AND rowid NOT IN (SELECT MIN(rowid) FROM messages WHERE id = ? AND chat_id = ?)`,
+          [saved.id, chatId, saved.id, chatId]
+        );
+      } catch (e) {
+        logger.warn("[MessageRepo] reconcileTemp dedupe error", { error: e });
+      }
+    }
+    try {
+      const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+      if (raw && raw.length > 0) {
+        const idx = raw.findIndex((r) => r.id === tempId);
+        if (idx !== -1) {
+          raw[idx] = saved;
+          await setItem(`${CACHE_PREFIX}${chatId}`, raw);
+        } else {
+          await setItem(`${CACHE_PREFIX}${chatId}`, raw.filter((r) => r.id !== tempId));
+        }
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] reconcileTemp cache error", { error: e });
+    }
+  }
+
   async deleteMessage(chatId: string, msgId: string): Promise<void> {
     if (db.ready) {
       try {

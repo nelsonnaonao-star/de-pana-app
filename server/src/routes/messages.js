@@ -124,6 +124,24 @@ router.post('/send', sendLimiter, async (req, res) => {
 
     const sanitizedText = sanitizeText(msg.text);
 
+    // Idempotencia: si el cliente envía client_id (UUID), un reintento del mismo
+    // envío (p. ej. tras caer la red en mitad del POST) reutiliza la fila ya creada
+    // en lugar de insertar un duplicado. Solo aplica a ids UUID válidos, porque la
+    // columna `id` es uuid; los ids temporales con prefijo (temp_*/msg_*) no aplican.
+    let messageId = undefined;
+    if (msg.client_id && typeof msg.client_id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(msg.client_id)) {
+      const { data: existing } = await supabaseAdmin
+        .from('messages')
+        .select('*')
+        .eq('id', msg.client_id)
+        .eq('chat_id', msg.chat_id)
+        .maybeSingle();
+      if (existing) {
+        return res.json(existing);
+      }
+      messageId = msg.client_id;
+    }
+
     // Disappearing messages:
     // - explicit ephemeral_expires_at wins
     // - else an ephemeral_timer (seconds) sent by the client
@@ -150,9 +168,11 @@ router.post('/send', sendLimiter, async (req, res) => {
     const { data: message, error } = await supabaseAdmin
       .from('messages')
       .insert({
+        id: messageId,
         chat_id: msg.chat_id,
         sender_id: msg.sender_id,
         receiver_id: msg.receiver_id || null,
+        temp_id: msg.temp_id || null,
         text: sanitizedText || '',
         type: msgType,
         status: 'sent',
