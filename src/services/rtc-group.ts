@@ -1,7 +1,8 @@
 import { supabase } from "../lib/supabase";
+import { VIDEO_FILTERS } from "./webrtc";
 
 type GroupSignal = {
-  type: "join" | "leave" | "offer" | "answer" | "ice-candidate" | "call-ended" | "mute" | "video";
+  type: "join" | "leave" | "offer" | "answer" | "ice-candidate" | "call-ended" | "mute" | "video" | "reaction";
   from: string;
   to?: string;
   sdp?: string;
@@ -11,6 +12,7 @@ type GroupSignal = {
   muted?: boolean;
   videoEnabled?: boolean;
   participants?: string[];
+  emoji?: string;
 };
 
 const GROUP_CALL_LIMIT = 4;
@@ -36,6 +38,7 @@ export class WebRTCGroupService {
   onCallEnded: (() => void) | null = null;
   onMute: ((userId: string, muted: boolean) => void) | null = null;
   onVideo: ((userId: string, enabled: boolean) => void) | null = null;
+  onReaction: ((userId: string, emoji: string) => void) | null = null;
   onReady: (() => void) | null = null;
 
   constructor(roomId: string, userId: string) {
@@ -116,6 +119,9 @@ export class WebRTCGroupService {
           break;
         case "video":
           this.onVideo?.(signal.from, signal.videoEnabled ?? true);
+          break;
+        case "reaction":
+          this.onReaction?.(signal.from, signal.emoji || "");
           break;
       }
     });
@@ -341,6 +347,104 @@ export class WebRTCGroupService {
     void this.sendSignal({ type: "video", from: this.userId, videoEnabled: enabled });
   }
 
+  // Reacción en vivo: se difunde a todo el grupo por el canal broadcast.
+  async sendReaction(emoji: string) {
+    await this.sendSignal({ type: "reaction", from: this.userId, emoji });
+  }
+
+  // Filtros de video al outgoing para TODOS los peers del mesh (igual que 1:1).
+  private activeFilterCss = "";
+  private rawVideoTrack: MediaStreamTrack | null = null;
+  private filterVideoEl: HTMLVideoElement | null = null;
+  private filterCanvas: HTMLCanvasElement | null = null;
+  private filterCtx: CanvasRenderingContext2D | null = null;
+  private filterStream: MediaStream | null = null;
+  private filterRaf: number | null = null;
+
+  async setVideoFilter(filterId: string) {
+    if (this.peerConns.size === 0 || !this.localStream) return;
+    const css = VIDEO_FILTERS[filterId] || "";
+    if (css === this.activeFilterCss) return;
+    const wasFiltering = !!this.activeFilterCss;
+    this.activeFilterCss = css;
+
+    const rawTrack = this.localStream.getVideoTracks()[0];
+    if (!rawTrack) return;
+    this.stopFilterPipeline();
+    if (!wasFiltering) this.rawVideoTrack = rawTrack;
+
+    const senders = Array.from(this.peerConns.values())
+      .map((pc) => pc.getSenders().find((s) => s.track?.kind === "video"))
+      .filter(Boolean);
+
+    if (!css) {
+      for (const sender of senders) await sender!.replaceTrack(this.rawVideoTrack!);
+      return;
+    }
+
+    const settings = rawTrack.getSettings();
+    const w = settings.width || 360;
+    const h = settings.height || 270;
+
+    const videoEl = document.createElement("video");
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+    videoEl.autoplay = true;
+    videoEl.srcObject = new MediaStream([rawTrack]);
+    videoEl.play().catch(() => {});
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    this.filterVideoEl = videoEl;
+    this.filterCanvas = canvas;
+    this.filterCtx = ctx;
+    this.filterStream = canvas.captureStream(15);
+
+    const draw = () => {
+      if (this.filterCtx && this.filterVideoEl && this.filterVideoEl.readyState >= 2) {
+        this.filterCtx.filter = this.activeFilterCss;
+        this.filterCtx.drawImage(this.filterVideoEl, 0, 0, w, h);
+      }
+      this.filterRaf = requestAnimationFrame(draw);
+    };
+    this.filterRaf = requestAnimationFrame(draw);
+
+    for (const sender of senders) {
+      try {
+        await sender!.replaceTrack(this.filterStream!.getVideoTracks()[0]);
+      } catch (err) {
+        console.error("[RTCGroup] replaceTrack filtered failed", err);
+      }
+    }
+  }
+
+  private stopFilterPipeline() {
+    if (this.filterRaf != null) cancelAnimationFrame(this.filterRaf);
+    this.filterRaf = null;
+    this.filterStream?.getTracks().forEach((t) => t.stop());
+    this.filterStream = null;
+    if (this.filterVideoEl) {
+      try { this.filterVideoEl.srcObject = null; } catch {}
+      this.filterVideoEl = null;
+    }
+    this.filterCanvas = null;
+    this.filterCtx = null;
+  }
+
+  rebindFilterSource() {
+    if (!this.activeFilterCss || !this.filterVideoEl) return;
+    const rawTrack = this.localStream?.getVideoTracks()[0];
+    if (!rawTrack) return;
+    try {
+      this.filterVideoEl.srcObject = new MediaStream([rawTrack]);
+      this.filterVideoEl.play().catch(() => {});
+    } catch {}
+  }
+
   async switchCamera(): Promise<MediaStream | null> {
     if (!this.localStream) return null;
     const oldTrack = this.localStream.getVideoTracks()[0];
@@ -367,13 +471,18 @@ export class WebRTCGroupService {
 
       this.localStream.getTracks().forEach((t) => { if (t !== newTrack) t.stop(); });
       this.localStream = rebuilt;
+      this.rawVideoTrack = newTrack;
 
-      await Promise.all(
-        Array.from(this.peerConns.values()).map((pc) => {
-          const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-          return sender ? sender.replaceTrack(newTrack) : Promise.resolve();
-        })
-      );
+      if (this.activeFilterCss) {
+        this.rebindFilterSource();
+      } else {
+        await Promise.all(
+          Array.from(this.peerConns.values()).map((pc) => {
+            const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+            return sender ? sender.replaceTrack(newTrack) : Promise.resolve();
+          })
+        );
+      }
       this.currentFacingMode = next;
       return this.localStream;
     } catch (err) {
@@ -393,6 +502,9 @@ export class WebRTCGroupService {
   }
 
   cleanup() {
+    this.stopFilterPipeline();
+    this.rawVideoTrack = null;
+    this.activeFilterCss = "";
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.peerConns.forEach((pc, peerId) => {
       pc.close();

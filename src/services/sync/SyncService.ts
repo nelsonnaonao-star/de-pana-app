@@ -30,6 +30,11 @@ class SyncService {
   private processingQueue = false;
   private readonly MAX_RETRIES = 5;
   private readonly BASE_DELAY = 2000; // 2s base
+  private retryTimer: ReturnType<typeof setInterval> | null = null;
+  // Evita martillar el servidor en redes muertas: por mensaje solo se reintenta
+  // una vez cada 60s (en memoria; se resetea al reiniciar la app).
+  private lastAttemptAt = new Map<string, number>();
+  private readonly RETRY_GAP_MS = 60000;
 
   onSynced(cb: SyncedCallback): void {
     this.listeners.push(cb);
@@ -67,6 +72,16 @@ class SyncService {
     }
 
     window.addEventListener("online", this.onBrowserOnline);
+
+    // Drenaje periódico: reintenta mensajes sin sincronizar aunque no llegue
+    // el evento "online" (red 3G inestable donde el socket va y viene).
+    if (!this.retryTimer) {
+      this.retryTimer = setInterval(() => {
+        if (navigator.onLine && !this.processing) {
+          this.processQueue();
+        }
+      }, 15000);
+    }
   }
 
   stop(): void {
@@ -79,6 +94,10 @@ class SyncService {
       this.networkHandler = null;
     }
     window.removeEventListener("online", this.onBrowserOnline);
+    if (this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
+    }
   }
 
   private onBrowserOnline = (): void => {
@@ -175,6 +194,14 @@ class SyncService {
         logger.info(`[SyncService] processing ${pending.length} legacy pending messages`);
         for (const item of pending) {
           try {
+            // Saltar media blob: no existe fuera de la sesión y su reintento
+            // corrompería el mensaje (envío sin audio/imagen).
+            const blobField = item.message.mediaUrl || item.message.localVideoUrl || item.message.posterUrl;
+            if (typeof blobField === "string" && blobField.startsWith("blob:")) continue;
+            // Throttle: no reintentar el mismo mensaje más de una vez por minuto.
+            const prev = this.lastAttemptAt.get(item.message.id) ?? 0;
+            if (Date.now() - prev < this.RETRY_GAP_MS) continue;
+            this.lastAttemptAt.set(item.message.id, Date.now());
             await this.sendSingle(item.chatId, item.message);
           } catch (err) {
             logger.warn("[SyncService] failed for legacy message", { messageId: item.message.id, error: err });
@@ -251,6 +278,10 @@ class SyncService {
           sticker_url: stickerUrl,
           gif_url: gifUrl,
           forwarded: (msg.forwarded as boolean) || undefined,
+          // Idempotencia: si el mensaje ya llegó al servidor en un intento
+          // anterior, reenviar con el MISMO client_id devuelve el mismo id
+          // (no duplica). Enviar sin client_id crearía una fila nueva en cada retry.
+          client_id: (msg.clientId as string) || (msg.client_id as string) || undefined,
           temp_id: (msg.id as string) || undefined,
           latitude: (msg.latitude as number) ?? undefined,
           longitude: (msg.longitude as number) ?? undefined,
@@ -259,6 +290,13 @@ class SyncService {
           reply_to_id: replyToId,
           reply_to_text: replyToText,
           reply_to_sender: replyToSender,
+          poll_question: (msg.pollQuestion as string) || (msg.poll_question as string) || undefined,
+          poll_options:
+            (Array.isArray(msg.pollOptions)
+              ? msg.pollOptions
+              : typeof msg.poll_options === "string"
+                ? JSON.parse(msg.poll_options)
+                : undefined) as any,
         });
         if (saved?.id) break;
       } catch (err) {

@@ -27,6 +27,7 @@ import { useChatRealtime, MessageEventPayload } from "../hooks/chat/useChatRealt
 import { useMessageActions } from "../hooks/chat/useMessageActions";
 import { messageRepo } from "../services/database/repositories/MessageRepository";
 import { getReconciledSavedId, recordReconciledId } from "../lib/reconciledIds";
+import { syncService } from "../services/sync/SyncService";
 
 interface ChatRoomProps {
   chat: Chat;
@@ -268,6 +269,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         });
       });
     }
+  }, [chat.id]);
+
+  // Reintentos en segundo plano (cola SyncService): cuando un mensaje que quedó
+  // en "sending" se envía al recuperar la señal, marcar ✓ en este chat aunque
+  // el eco de Realtime no llegue (red 3G con WebSocket caído).
+  useEffect(() => {
+    if (!chat.id) return;
+    const onSynced = (tempId: string, savedId: string) => {
+      recordReconciledId(chat.id, tempId, savedId);
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: savedId, status: "sent" as const, synced: true } : m));
+    };
+    syncService.onSynced(onSynced);
+    return () => syncService.offSynced(onSynced);
   }, [chat.id]);
 
   // Refetch only newer messages when refetchTrigger changes (FCM push received)
@@ -525,8 +539,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
   // Watchdog mínimo: red de seguridad final. La reconciliación ahora es
 // instantánea por temp_id (payload.new.temp_id) en el eco INSERT de Realtime,
-// sin timers. Este watchdog SOLO marca "error" envíos que quedaron muertos por
-// caminos irreparables (>60s en sending) — no hace refetch ni cura.
+// sin timers. El reintento automático de SyncService drena la cola mientras
+// tanto (idempotente por client_id), por eso el umbral es 5 min: solo se marca
+// "error" un envío muerto tras darle tiempo a los reintentos — no hace refetch.
   useEffect(() => {
     const interval = setInterval(() => {
       setMessages(prev => {
@@ -535,7 +550,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         const next = prev.map(m => {
           if ((m.id?.startsWith('temp_') || m.id?.startsWith('msg_')) && m.status === 'sending') {
             const ts = Number(m.id.split('_')[1]);
-            if (!isNaN(ts) && now - ts > 60000) {
+            if (!isNaN(ts) && now - ts > 300000) {
               changed = true;
               console.warn("[WATCHDOG] temp marcado error (envío muerto)", { id: m.id, secs: Math.round((now - ts) / 1000) });
               return { ...m, status: "error" as const };

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
+import { Network } from "@capacitor/network";
 
 declare global {
   interface Window {
@@ -22,6 +23,11 @@ import { logger } from "../lib/logger";
 
 const CACHE_PREFIX = "redon_cache_";
 const cacheKey = (uid: string, name: string) => `${CACHE_PREFIX}${name}_${uid}`;
+
+// Última lista de contactos conocida (no vacía), por usuario. Si un fetch falla,
+// timeoutea o devuelve vacío (red caída/lenta o caché local perdida), se usa esto
+// para que la lista JAMÁS quede en cero durante la sesión.
+const lastKnownContacts = new Map<string, Contact[]>();
 
 function loadCache<T>(key: string, fallback: T): T {
   try {
@@ -228,52 +234,72 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      logger.info("[SUPABASE] Session on mount", { hasSession: !!session, error });
-      if (session?.user) {
-        // Coming from a password-recovery email link: don't enter the app,
-        // show the "set new password" screen instead.
-        if (isPasswordRecoveryUrl()) {
-          logger.info("[SUPABASE] Recovery token detected — showing password reset screen");
-          setPasswordRecovery(true);
-          setUser(session.user);
-          setLoading(false);
-          return;
-        }
-        saveLastUser(session.user.id);
-        if (loadedUserId.current && loadedUserId.current !== session.user.id) {
-          // Account switched while the app was closed: drop the eager cached
-          // state so the correct user loads below.
-          logger.info("[SUPABASE] Session is a different user — reloading for", { userId: session.user.id.slice(0, 8) });
-          loadedUserId.current = null;
-          setProfile(null);
-          setChats([]);
-          setContacts([]);
-          setCalls([]);
-        }
-        setUser(session.user);
+    // Restauración de sesión con timeout + catch: con el teléfono sin señal y un
+    // token vencido, getSession() puede no resolver (validación contra la red).
+    // Si no resuelve en 4s, se cae al modo offline para que la app NUNCA quede
+    // en una pantalla en blanco durante el arranque.
+    const restoreWithoutSession = () => {
+      const lastUser = loadLastUser();
+      if (lastUser?.id) {
+        logger.info("[SUPABASE] No session — restoring offline mode for last user", { userId: lastUser.id.slice(0, 8) });
+        setUser({ id: lastUser.id });
         if (!loadedUserId.current) {
-          loadUserData(session.user.id);
+          loadUserData(lastUser.id);
         } else {
           setLoading(false);
         }
       } else {
-        // No session (offline or expired). If we know a last user, enter in
-        // offline mode with cached data instead of forcing the login screen.
-        const lastUser = loadLastUser();
-        if (lastUser?.id) {
-          logger.info("[SUPABASE] No session — restoring offline mode for last user", { userId: lastUser.id.slice(0, 8) });
-          setUser({ id: lastUser.id });
+        setLoading(false); // First-time / real sign-out: show login
+      }
+    };
+
+    const sessionTimeout = new Promise<{ timeout: true }>((resolve) =>
+      setTimeout(() => resolve({ timeout: true }), 4000)
+    );
+
+    Promise.race([supabase.auth.getSession(), sessionTimeout])
+      .then((result: any) => {
+        const timedOut = !!result?.timeout;
+        const session = timedOut ? null : result?.data?.session;
+        const error = timedOut ? new Error("session restore timeout") : result?.error;
+        logger.info("[SUPABASE] Session on mount", { hasSession: !!session, error, timedOut });
+        if (session?.user) {
+          // Coming from a password-recovery email link: don't enter the app,
+          // show the "set new password" screen instead.
+          if (isPasswordRecoveryUrl()) {
+            logger.info("[SUPABASE] Recovery token detected — showing password reset screen");
+            setPasswordRecovery(true);
+            setUser(session.user);
+            setLoading(false);
+            return;
+          }
+          saveLastUser(session.user.id);
+          if (loadedUserId.current && loadedUserId.current !== session.user.id) {
+            // Account switched while the app was closed: drop the eager cached
+            // state so the correct user loads below.
+            logger.info("[SUPABASE] Session is a different user — reloading for", { userId: session.user.id.slice(0, 8) });
+            loadedUserId.current = null;
+            setProfile(null);
+            setChats([]);
+            setContacts([]);
+            setCalls([]);
+          }
+          setUser(session.user);
           if (!loadedUserId.current) {
-            loadUserData(lastUser.id);
+            loadUserData(session.user.id);
           } else {
             setLoading(false);
           }
         } else {
-          setLoading(false); // First-time / real sign-out: show login
+          // No session (offline, timeout or expired). If we know a last user,
+          // enter in offline mode with cached data instead of the login screen.
+          restoreWithoutSession();
         }
-      }
-    });
+      })
+      .catch((err) => {
+        logger.warn("[SUPABASE] getSession failed — offline fallback", { error: err });
+        restoreWithoutSession();
+      });
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       const userId = session?.user?.id;
@@ -348,7 +374,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       }
     });
 
+    // Watchdog de arranque: pase lo que pase (getSession colgado, caché lenta,
+    // excepción no capturada), la app sale de "loading" en ≤4.5s en vez de
+    // quedarse en una pantalla en blanco. setLoading(false) es idempotente: si
+    // la sesión/caché ya pintó antes, este disparo no tiene efecto.
+    const bootWatchdog = setTimeout(() => setLoading(false), 4500);
+
     return () => {
+      clearTimeout(bootWatchdog);
       listener?.subscription?.unsubscribe();
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
       if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
@@ -399,8 +432,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     // Load cached data immediately for instant UI (scoped to userId)
     const cachedProfile = loadCache<Profile | null>(cacheKey(userId, "profile"), null);
     const [cachedChats, cachedContacts] = await Promise.all([
-      chatRepo.getChats(userId),
-      contactRepo.getContacts(userId),
+      chatRepo.getChats(userId).catch((e) => {
+        logger.warn("[SUPABASE] chat cache read failed", { error: e });
+        return [] as Chat[];
+      }),
+      contactRepo.getContacts(userId).catch((e) => {
+        logger.warn("[SUPABASE] contact cache read failed", { error: e });
+        return [] as Contact[];
+      }),
     ]);
     const cachedCalls = loadCache<Call[]>(cacheKey(userId, "calls"), []);
     
@@ -455,8 +494,17 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       }
       const newProfile = profilesResult.status === "fulfilled" && profilesResult.value?.data ? (profilesResult.value.data as Profile) : cachedProfile;
       const newChats = chatsResult.status === "fulfilled" ? chatsResult.value || [] : cachedChats;
-      const newContacts = contactsResult.status === "fulfilled" ? contactsResult.value || [] : cachedContacts;
+      let newContacts = contactsResult.status === "fulfilled" ? contactsResult.value || [] : cachedContacts;
       const newCalls = callsResult.status === "fulfilled" ? callsResult.value || [] : cachedCalls;
+
+      // Contactos: si el fetch devolvió vacío (red caída/lenta o caché local
+      // perdida tras reinstalar el APK), se conserva la última lista buena para
+      // que no "desaparezcan" los contactos ni se persista un vacío como caché.
+      if (newContacts.length === 0) {
+        const lastGood = lastKnownContacts.get(userId);
+        if (lastGood && lastGood.length > 0) newContacts = lastGood;
+      }
+      if (newContacts.length > 0) lastKnownContacts.set(userId, newContacts);
 
       debugLog("setting fresh data", {
         profile: !!newProfile,
@@ -690,11 +738,45 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
             return Array.from(merged.values());
           });
         });
+        // Refresh contacts too: resuelve avatar/nombre desde profiles, así una
+        // foto de perfil que el contacto actualizó se refleja al volver a la app.
+        refreshContacts().catch(() => {});
       }
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
     window.addEventListener("visibilitychange", handleVisibility);
+
+    // Auto-refresh al volver el internet: sin salir de la app, perfil/chats/
+    // contactos se actualizan solos. Debounce corto para no martillar el
+    // servidor si la señal "flapa" online/offline seguido.
+    let onlineRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    const handleOnline = () => {
+      if (!userId) return;
+      if (onlineRefreshTimer) clearTimeout(onlineRefreshTimer);
+      onlineRefreshTimer = setTimeout(() => {
+        logger.info("[SUPABASE] Online — refreshing profile/chats/contacts");
+        refreshProfile();
+        refreshChats();
+        refreshContacts();
+      }, 800);
+    };
+    window.addEventListener("online", handleOnline);
+
+    // En Android el evento `window.online` del WebView no siempre se dispara al
+    // recuperar la red. El plugin de Capacitor sí detecta el cambio de forma
+    // fiable: al reconectar, hacemos el mismo refresco (fotos/nombres de los
+    // chats se re-resuelven desde profiles).
+    let capNetworkHandler: { remove: () => Promise<void> } | null = null;
+    Network.addListener("networkStatusChange", (status) => {
+      if (status.connected) handleOnline();
+    })
+      .then((handle) => {
+        capNetworkHandler = handle;
+      })
+      .catch((e) => {
+        logger.warn("[SUPABASE] Network.addListener failed", { error: e });
+      });
 
     // Fallback: poll for new chats every 6s (catches anything Realtime misses)
     if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
@@ -720,8 +802,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     // Store cleanup for use in logout/unmount
     if (cleanupListenersRef.current) cleanupListenersRef.current();
     cleanupListenersRef.current = () => {
+      if (onlineRefreshTimer) clearTimeout(onlineRefreshTimer);
       window.removeEventListener("beforeunload", handleBeforeUnload);
       window.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("online", handleOnline);
+      if (capNetworkHandler) {
+        capNetworkHandler.remove();
+        capNetworkHandler = null;
+      }
     };
   }
 
@@ -763,13 +851,19 @@ const refreshChats = async () => {
 
   const refreshContacts = async () => {
     if (!user) return;
-    const cont = await getContacts(user.id);
+    let cont = await getContacts(user.id);
+    // ante un fetch vacío puntual (red inestable) se conserva la última lista buena
+    if (cont.length === 0) {
+      const lastGood = lastKnownContacts.get(user.id);
+      if (lastGood && lastGood.length > 0) cont = lastGood;
+    }
     const wipeGuard = cont.length === 0 && contactsRef.current.length > 0;
     if (wipeGuard) {
       logger.warn("[SUPABASE] refreshContacts returned empty — keeping cached contacts");
       return;
     }
     setContacts(cont);
+    if (cont.length > 0) lastKnownContacts.set(user.id, cont);
     contactRepo.saveContacts(user.id, cont);
   };
 

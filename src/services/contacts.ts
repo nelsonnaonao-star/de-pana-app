@@ -58,7 +58,15 @@ export async function getContacts(userId: string): Promise<Contact[]> {
 
   if (error) throw error;
 
-  const contacts = (data || []) as Contact[];
+  // Normaliza valores por defecto por si el servidor aún no tiene las columnas
+  // type/color_theme/is_group/is_favorite (ver addContact).
+  const contacts = ((data || []) as Record<string, unknown>[]).map((c) => ({
+    ...(c as Contact),
+    type: (c.type as Contact["type"]) || "human",
+    is_group: !!c.is_group,
+    is_favorite: !!c.is_favorite,
+    color_theme: (c.color_theme as string) || "from-indigo-500 to-violet-600",
+  })) as Contact[];
 
   // Resolve current avatar from profiles for linked contacts
   const linkedIds = contacts
@@ -97,34 +105,59 @@ export async function addContact(
   avatar?: string,
   phone?: string
 ): Promise<Contact> {
-  const payload: any = {
+  const basePayload: Record<string, unknown> = {
     user_id: userId,
     name,
     avatar: avatar || "",
     bio: phone ? `Contacto externo: ${phone}` : "",
-    type: "human",
-    color_theme: "from-indigo-500 to-violet-600",
-    is_group: false,
-    is_favorite: false,
     created_at: new Date().toISOString(),
   };
 
   if (contactUserId) {
-    payload.contact_user_id = contactUserId;
+    basePayload.contact_user_id = contactUserId;
   }
 
   if (phone) {
-    payload.phone = digitsOnly(phone);
+    basePayload.phone = digitsOnly(phone);
   }
 
-  const { data, error } = await supabase
-    .from("contacts")
-    .insert(payload)
-    .select()
-    .single();
+  const fullPayload: Record<string, unknown> = {
+    ...basePayload,
+    type: "human",
+    color_theme: "from-indigo-500 to-violet-600",
+    is_group: false,
+    is_favorite: false,
+  };
 
-  if (error) throw error;
-  return data as Contact;
+  // La tabla `contacts` del servidor puede no tener aún las columnas
+  // type/color_theme/is_group/is_favorite. Si el INSERT falla por una columna
+  // inexistente, reintentamos con solo las columnas base para que el contacto
+  // igual quede persistido server-side y sobreviva a la reinstalación.
+  for (const payload of [fullPayload, basePayload]) {
+    const { data, error } = await supabase
+      .from("contacts")
+      .insert(payload)
+      .select()
+      .single();
+
+    if (!error) {
+      const row = data as Record<string, unknown> | null;
+      return {
+        ...(data as Contact),
+        type: (row?.type as Contact["type"]) || "human",
+        is_group: !!row?.is_group,
+        is_favorite: !!row?.is_favorite,
+        color_theme: (row?.color_theme as string) || "from-indigo-500 to-violet-600",
+      };
+    }
+
+    const missingColumn =
+      (error as any)?.code === "PGRST204" ||
+      (error.message || "").toLowerCase().includes("column");
+    if (!missingColumn) throw error;
+  }
+
+  throw new Error("No se pudo guardar el contacto en el servidor");
 }
 
 export async function deleteContact(contactId: string) {

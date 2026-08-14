@@ -8,6 +8,7 @@ const config: CapacitorConfig = {
     androidScheme: 'https',
     allowNavigation: ['*'],
   },
+  loggingBehavior: 'production',
   plugins: {
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],

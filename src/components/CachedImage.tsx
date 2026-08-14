@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { Filesystem, Directory } from "@capacitor/filesystem";
+import { Network } from "@capacitor/network";
 import { Capacitor } from "@capacitor/core";
 import { logger } from "../lib/logger";
 
@@ -122,6 +123,7 @@ export default function CachedImage({
     () => memoryCache.get(src) ?? null
   );
   const [hasError, setHasError] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
   const isCapacitor = Capacitor.isNativePlatform();
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -157,7 +159,36 @@ export default function CachedImage({
     })();
 
     return () => { cancelled = true; };
-  }, [src, isCapacitor]);
+  }, [src, isCapacitor, retryTick]);
+
+  // Si la imagen falló (p. ej. sin internet), reintentar automáticamente cuando
+  // vuelva la red — el evento `online` de window es poco fiable en el WebView de
+  // Android, así que también escuchamos el plugin de Capacitor.
+  useEffect(() => {
+    if (!hasError) return;
+    const tryAgain = () => {
+      setHasError(false);
+      setRetryTick((t) => t + 1);
+    };
+    window.addEventListener("online", tryAgain);
+    let netHandler: { remove: () => Promise<void> } | null = null;
+    if (isCapacitor) {
+      Network.addListener("networkStatusChange", (status) => {
+        if (status.connected) tryAgain();
+      })
+        .then((handle) => {
+          netHandler = handle;
+        })
+        .catch(() => {});
+    }
+    return () => {
+      window.removeEventListener("online", tryAgain);
+      if (netHandler) {
+        netHandler.remove();
+        netHandler = null;
+      }
+    };
+  }, [hasError, isCapacitor]);
 
   const handleError = () => {
     setHasError(true);

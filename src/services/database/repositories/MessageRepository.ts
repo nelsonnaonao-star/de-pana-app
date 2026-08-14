@@ -1,5 +1,5 @@
 import { db } from "../DatabaseService";
-import { getItem, setItem, removeItem } from "../../storageService";
+import { getItem, setItem, removeItem, getKeys } from "../../storageService";
 import type { Message } from "../../../types";
 import { logger } from "../../../lib/logger";
 
@@ -134,7 +134,24 @@ export class MessageRepository {
         logger.warn("[MessageRepo] SQLite error, fallback", { error: e });
       }
     }
-    await setItem(`${CACHE_PREFIX}${chatId}`, batch);
+    // Mezclar con los pendientes ya guardados (temp/msg) que el nuevo lote NO
+    // incluye (ej. refresco del servidor): un envío en cola jamás se borra de
+    // la caché local por sobrescritura.
+    try {
+      const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+      const existing = Array.isArray(raw)
+        ? raw.filter((r) => !batch.some((b) => b.id === r.id))
+        : [];
+      const merged = [...existing, ...batch];
+      merged.sort((a, b) => {
+        const ta = a.rawCreatedAt || a.timestamp || "";
+        const tb = b.rawCreatedAt || b.timestamp || "";
+        return ta < tb ? -1 : ta > tb ? 1 : 0;
+      });
+      await setItem(`${CACHE_PREFIX}${chatId}`, merged.slice(-MAX_CACHED));
+    } catch (e) {
+      logger.warn("[MessageRepo] saveMessages cache error", { error: e });
+    }
   }
 
   async upsertMessage(chatId: string, message: Message): Promise<void> {
@@ -149,6 +166,28 @@ export class MessageRepository {
       } catch (e) {
         logger.warn("[MessageRepo] upsert SQLite error, fallback", { error: e });
       }
+    }
+    // Fallback local (idb): aunque SQLite no esté listo o la app se cierre
+    // justo después de enviar, el mensaje no confirmado queda persistido y
+    // visible al reabrir (envío en cola estilo WhatsApp).
+    await this.upsertLocal(chatId, message);
+  }
+
+  private async upsertLocal(chatId: string, message: Message): Promise<void> {
+    try {
+      const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+      const list = Array.isArray(raw) ? raw : [];
+      const idx = list.findIndex((r) => r.id === message.id);
+      if (idx !== -1) list[idx] = message;
+      else list.push(message);
+      list.sort((a, b) => {
+        const ta = a.rawCreatedAt || a.timestamp || "";
+        const tb = b.rawCreatedAt || b.timestamp || "";
+        return ta < tb ? -1 : ta > tb ? 1 : 0;
+      });
+      await setItem(`${CACHE_PREFIX}${chatId}`, list.slice(-MAX_CACHED));
+    } catch (e) {
+      logger.warn("[MessageRepo] upsert cache error", { error: e });
     }
   }
 
@@ -166,7 +205,24 @@ export class MessageRepository {
         logger.warn("[MessageRepo] getAllUnsynced SQLite error", { error: e });
       }
     }
-    return [];
+    // Fallback sin SQLite: barrer los cachés locales (idb) buscando synced = false.
+    const unsynced: { chatId: string; message: Message }[] = [];
+    try {
+      const cacheKeys = await getKeys();
+      for (const key of cacheKeys) {
+        if (typeof key !== "string" || !key.startsWith(CACHE_PREFIX)) continue;
+        const raw = await getItem<Message[]>(key);
+        if (!Array.isArray(raw)) continue;
+        for (const m of raw) {
+          if (m && m.synced === false) {
+            unsynced.push({ chatId: key.slice(CACHE_PREFIX.length), message: m });
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] getAllUnsynced fallback error", { error: e });
+    }
+    return unsynced;
   }
 
   async markSynced(msgId: string): Promise<void> {
@@ -237,6 +293,17 @@ export class MessageRepository {
       } catch (e) {
         logger.warn("[MessageRepo] deleteMessage error", { error: e });
       }
+    }
+    try {
+      const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+      if (raw && raw.length > 0) {
+        const next = raw.filter((r) => r.id !== msgId);
+        if (next.length !== raw.length) {
+          await setItem(`${CACHE_PREFIX}${chatId}`, next);
+        }
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] deleteMessage cache error", { error: e });
     }
   }
 

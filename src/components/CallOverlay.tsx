@@ -18,6 +18,9 @@ interface CallOverlayProps {
   onSwitchCamera: () => void;
   onEndCall: () => void;
   onAddMember: () => void;
+  onSendReaction?: (emoji: string) => void;
+  pendingReaction?: { id: number; emoji: string } | null;
+  onFilterChange?: (filterId: string) => void;
 }
 
 const EMOJIS = ["👍", "❤️", "🔥", "😮", "😂", "🎉"];
@@ -34,7 +37,10 @@ export default function CallOverlay({
   onToggleVideo,
   onSwitchCamera,
   onEndCall,
-  onAddMember
+  onAddMember,
+  onSendReaction,
+  pendingReaction,
+  onFilterChange
 }: CallOverlayProps) {
   const [activeFilter, setActiveFilter] = useState<string>("none");
   const [showEffects, setShowEffects] = useState(false);
@@ -70,6 +76,32 @@ export default function CallOverlay({
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const emojiContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const [reactions, setReactions] = useState<{ id: number; emoji: string; left: number }[]>([]);
+  const reactionIdRef = useRef(0);
+  const lastPendingIdRef = useRef(0);
+
+  // Muestra un emoji flotante localmente y lo elimina a los 3s.
+  const showReaction = useCallback((emoji: string) => {
+    const id = ++reactionIdRef.current;
+    const left = Math.random() * 80 + 10;
+    setReactions((prev) => [...prev, { id, emoji, left }]);
+    setTimeout(() => setReactions((prev) => prev.filter((r) => r.id !== id)), 3000);
+  }, []);
+
+  // Reacción del propio usuario: anima en pantalla Y avisa al otro extremo.
+  const triggerReaction = useCallback((emoji: string) => {
+    showReaction(emoji);
+    onSendReaction?.(emoji);
+  }, [onSendReaction, showReaction]);
+
+  // Reacción que llega del otro participante (via señalización WebRTC).
+  useEffect(() => {
+    if (pendingReaction && pendingReaction.id !== lastPendingIdRef.current) {
+      lastPendingIdRef.current = pendingReaction.id;
+      showReaction(pendingReaction.emoji);
+    }
+  }, [pendingReaction, showReaction]);
 
   useEffect(() => {
     if (localVideoRef.current && localStream) {
@@ -138,18 +170,6 @@ export default function CallOverlay({
       case "retro": return "sepia-[.85] saturate-[1.25] contrast-90 brightness-105 hue-rotate-[-5deg]";
       default: return "";
     }
-  };
-
-  const triggerReaction = (emoji: string) => {
-    const container = emojiContainerRef.current;
-    if (!container) return;
-    const el = document.createElement("span");
-    el.className = "absolute text-3xl pointer-events-none z-40 drop-shadow-md animate-float-emoji";
-    el.style.left = `${Math.random() * 80 + 10}%`;
-    el.style.bottom = "80px";
-    el.textContent = emoji;
-    container.appendChild(el);
-    setTimeout(() => el.remove(), 3000);
   };
 
   if (call.status === "incoming") {
@@ -236,7 +256,17 @@ export default function CallOverlay({
   return (
     <div className="absolute inset-0 bg-black text-white z-[9999] flex flex-col justify-between overflow-hidden select-none">
 
-      <div ref={emojiContainerRef} className="absolute inset-0 pointer-events-none z-30 overflow-hidden" />
+      <div ref={emojiContainerRef} className="absolute inset-0 pointer-events-none z-30 overflow-hidden">
+        {reactions.map((r) => (
+          <span
+            key={r.id}
+            className="absolute text-3xl drop-shadow-md animate-float-emoji"
+            style={{ left: `${r.left}%`, bottom: "80px" }}
+          >
+            {r.emoji}
+          </span>
+        ))}
+      </div>
 
       {isGroupVideo ? (
         <GroupVideoContent />
@@ -360,9 +390,9 @@ export default function CallOverlay({
                       { id: "noche", name: "Noche" },
                       { id: "retro", name: "Retro" }
                     ].map((filt) => (
-                      <button
-                        key={filt.id}
-                        onClick={() => setActiveFilter(filt.id)}
+<button
+                key={filt.id}
+                onClick={() => { setActiveFilter(filt.id); onFilterChange?.(filt.id); }}
                         className={`text-[9px] px-2.5 py-1 rounded-full whitespace-nowrap border font-medium cursor-pointer transition-all ${activeFilter === filt.id
                             ? "bg-teal-500 border-teal-400 text-white shadow-md shadow-teal-500/20"
                             : "border-slate-800 text-slate-300 bg-slate-900/50 hover:bg-slate-900"

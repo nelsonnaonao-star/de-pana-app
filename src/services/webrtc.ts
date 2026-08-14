@@ -1,12 +1,13 @@
 import { supabase } from "../lib/supabase";
 
 type SignalPayload = {
-  type: "offer" | "answer" | "ice-candidate" | "call-ended" | "callee-ready";
+  type: "offer" | "answer" | "ice-candidate" | "call-ended" | "callee-ready" | "reaction";
   sdp?: string;
   candidate?: string;
   sdpMid?: string;
   sdpMLineIndex?: number;
   from: string;
+  emoji?: string;
 };
 
 let cachedIceServers: RTCConfiguration["iceServers"] | null = null;
@@ -68,6 +69,7 @@ export class WebRTCService {
   onCallEnded: (() => void) | null = null;
   onConnectionStateChange: ((state: string) => void) | null = null;
   onCalleeReady: (() => void) | null = null;
+  onReaction: ((emoji: string) => void) | null = null;
 
   constructor(callId: string, userId: string) {
     this.callId = callId;
@@ -352,6 +354,9 @@ export class WebRTCService {
           case "callee-ready":
             this.onCalleeReady?.();
             break;
+          case "reaction":
+            this.onReaction?.(signal.emoji || "");
+            break;
         }
       });
 
@@ -393,6 +398,117 @@ export class WebRTCService {
       type: "callee-ready",
       from: this.userId,
     });
+  }
+
+  // Reacción en vivo: viaja por el canal de señalización (Supabase broadcast)
+  // y el receptor la muestra animándola en su overlay. `self:false` evita eco.
+  async sendReaction(emoji: string) {
+    await this.sendSignal({ type: "reaction", from: this.userId, emoji });
+  }
+
+  // Filtros de video aplicados AL OUTGOING: se pinta la cámara en un <canvas>
+  // con ctx.filter y se envía ese stream (canvas.captureStream) por
+  // replaceTrack, para que el OTRO usuario vea el filtro (los filtros solo del
+  // lado local no modificarían lo que se envía).
+  private activeFilterCss = "";
+  private rawVideoTrack: MediaStreamTrack | null = null;
+  private filterVideoEl: HTMLVideoElement | null = null;
+  private filterCanvas: HTMLCanvasElement | null = null;
+  private filterCtx: CanvasRenderingContext2D | null = null;
+  private filterStream: MediaStream | null = null;
+  private filterRaf: number | null = null;
+  private filterWidth = 640;
+  private filterHeight = 480;
+
+  async setVideoFilter(filterId: string) {
+    if (!this.pc || !this.localStream) return;
+    const css = VIDEO_FILTERS[filterId] || "";
+    if (css === this.activeFilterCss) return;
+
+    const wasFiltering = !!this.activeFilterCss;
+    this.activeFilterCss = css;
+
+    const rawTrack = this.localStream.getVideoTracks()[0];
+    if (!rawTrack) return;
+
+    // Si ya había un pipeline de filtro corriendo, detener el anterior.
+    this.stopFilterPipeline();
+
+    if (!wasFiltering) {
+      // Primera vez que se activa un filtro: guardar la pista cruda.
+      this.rawVideoTrack = rawTrack;
+    }
+
+    const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
+    if (!css) {
+      // Volver a Normal: reenviar la cámara cruda.
+      if (sender && this.rawVideoTrack) await sender.replaceTrack(this.rawVideoTrack);
+      return;
+    }
+
+    const settings = rawTrack.getSettings();
+    this.filterWidth = settings.width || 640;
+    this.filterHeight = settings.height || 480;
+
+    const videoEl = document.createElement("video");
+    videoEl.muted = true;
+    videoEl.playsInline = true;
+    videoEl.autoplay = true;
+    videoEl.srcObject = new MediaStream([rawTrack]);
+    videoEl.play().catch(() => {});
+
+    const canvas = document.createElement("canvas");
+    canvas.width = this.filterWidth;
+    canvas.height = this.filterHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    this.filterVideoEl = videoEl;
+    this.filterCanvas = canvas;
+    this.filterCtx = ctx;
+    this.filterStream = canvas.captureStream(30);
+
+    const draw = () => {
+      if (this.filterCtx && this.filterVideoEl && this.filterVideoEl.readyState >= 2) {
+        this.filterCtx.filter = this.activeFilterCss;
+        this.filterCtx.drawImage(this.filterVideoEl, 0, 0, this.filterWidth, this.filterHeight);
+      }
+      this.filterRaf = requestAnimationFrame(draw);
+    };
+    this.filterRaf = requestAnimationFrame(draw);
+
+    if (sender) {
+      try {
+        await sender.replaceTrack(this.filterStream.getVideoTracks()[0]);
+      } catch (err) {
+        console.error("[WebRTC] replaceTrack with filtered track failed", err);
+      }
+    }
+  }
+
+  private stopFilterPipeline() {
+    if (this.filterRaf != null) cancelAnimationFrame(this.filterRaf);
+    this.filterRaf = null;
+    this.filterStream?.getTracks().forEach((t) => t.stop());
+    this.filterStream = null;
+    if (this.filterVideoEl) {
+      try { this.filterVideoEl.srcObject = null; } catch {}
+      this.filterVideoEl = null;
+    }
+    this.filterCanvas = null;
+    this.filterCtx = null;
+  }
+
+  // Al cambiar de cámara se reemplaza la pista cruda: si hay un filtro activo,
+  // re-apuntar la fuente del pipeline al track nuevo sin tocar lo que se envía.
+  rebindFilterSource() {
+    if (!this.activeFilterCss || !this.filterVideoEl) return;
+    const rawTrack = this.localStream?.getVideoTracks()[0];
+    if (!rawTrack) return;
+    try {
+      this.filterVideoEl.srcObject = new MediaStream([rawTrack]);
+      this.filterVideoEl.play().catch(() => {});
+    } catch {}
   }
 
   private currentFacingMode: "user" | "environment" = "user";
@@ -455,10 +571,17 @@ export class WebRTCService {
       for (const t of this.localStream.getAudioTracks()) rebuilt.addTrack(t);
       rebuilt.addTrack(newVideoTrack);
       this.localStream = rebuilt;
+      this.rawVideoTrack = newVideoTrack;
 
       const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
       if (sender) {
-        await sender.replaceTrack(newVideoTrack);
+        if (this.activeFilterCss) {
+          // Un filtro está activo: el sender lleva el track del canvas; solo
+          // re-apuntamos la fuente del pipeline a la cámara nueva.
+          this.rebindFilterSource();
+        } else {
+          await sender.replaceTrack(newVideoTrack);
+        }
       }
 
       this.currentFacingMode = this.currentFacingMode === "user" ? "environment" : "user";
@@ -478,8 +601,15 @@ export class WebRTCService {
           for (const t of this.localStream.getAudioTracks()) rebuilt.addTrack(t);
           rebuilt.addTrack(restored);
           this.localStream = rebuilt;
+          this.rawVideoTrack = restored;
           const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
-          if (sender) await sender.replaceTrack(restored);
+          if (sender) {
+            if (this.activeFilterCss) {
+              this.rebindFilterSource();
+            } else {
+              await sender.replaceTrack(restored);
+            }
+          }
           this.currentFacingMode = "user";
         }
       } catch {
@@ -496,6 +626,9 @@ export class WebRTCService {
 
   cleanup() {
     this.clearDisconnectedTimer();
+    this.stopFilterPipeline();
+    this.rawVideoTrack = null;
+    this.activeFilterCss = "";
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.pc?.close();
     this.channel?.unsubscribe();
@@ -520,3 +653,13 @@ export class WebRTCService {
 export async function getTurnIceServers(): Promise<RTCConfiguration["iceServers"]> {
   return fetchTurnCredentials();
 }
+
+// Filtros de video en formato CSS (canvas ctx.filter). El mismo id que usa
+// CallOverlay; se aplica sobre el video que se ENVÍA al otro participante.
+export const VIDEO_FILTERS: Record<string, string> = {
+  atardecer: "sepia(0.45) saturate(1.9) hue-rotate(-12deg) brightness(1.05) contrast(1.1)",
+  cielo: "saturate(1.7) brightness(1.05) contrast(1.1) hue-rotate(6deg)",
+  bosque: "hue-rotate(85deg) saturate(1.5) brightness(1.0) contrast(1.1)",
+  noche: "hue-rotate(205deg) saturate(1.4) brightness(1.0) contrast(1.25)",
+  retro: "sepia(0.85) saturate(1.25) contrast(0.9) brightness(1.05) hue-rotate(-5deg)",
+};

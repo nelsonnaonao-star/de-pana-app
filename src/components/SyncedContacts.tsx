@@ -4,21 +4,26 @@ import {
   ChevronRight, Loader2, Search, X
 } from "lucide-react";
 import { syncDeviceContacts, searchByPhone, MatchedProfile } from "../services/device-contacts";
+import { getContacts, addContact } from "../services/contacts";
+import { digitsOnly } from "../utils/phone";
 
 interface SyncedContactsProps {
   currentUserId: string;
   onBack: () => void;
   onStartChat: (profile: MatchedProfile) => void;
+  onContactsChanged?: () => void;
 }
 
 function getInitials(name: string): string {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
-export default function SyncedContacts({ currentUserId, onBack, onStartChat }: SyncedContactsProps) {
+export default function SyncedContacts({ currentUserId, onBack, onStartChat, onContactsChanged }: SyncedContactsProps) {
   const [contacts, setContacts] = useState<MatchedProfile[]>([]);
   const [loading, setLoading] = useState(false);
   const [synced, setSynced] = useState(false);
+  const [addedCount, setAddedCount] = useState(0);
+  const [syncError, setSyncError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MatchedProfile[]>([]);
   const [searching, setSearching] = useState(false);
@@ -39,10 +44,58 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat }: S
 
   async function handleSync() {
     setLoading(true);
-    const matched = await syncDeviceContacts();
-    setContacts(matched);
-    setSynced(true);
-    setLoading(false);
+    setSyncError("");
+    setAddedCount(0);
+    try {
+      const matched = await syncDeviceContacts();
+      setContacts(matched);
+      setSynced(true);
+
+      // Agrega a la lista de contactos los que ya usan Red On (persistido
+      // server-side para que sobrevivan a la reinstalación). Los que ya existen
+      // no se duplican.
+      try {
+        const existing = await getContacts(currentUserId);
+        const existingIds = new Set<string>();
+        const existingPhones = new Set<string>();
+        for (const c of existing) {
+          if (c.contact_user_id) existingIds.add(c.contact_user_id);
+          if (c.phone) existingPhones.add(digitsOnly(c.phone));
+        }
+
+        let added = 0;
+        for (const profile of matched) {
+          if (profile.id === currentUserId) continue;
+          if (existingIds.has(profile.id)) continue;
+          const phoneDigits = digitsOnly(profile.phone_number);
+          if (existingPhones.has(phoneDigits)) continue;
+          try {
+            await addContact(
+              currentUserId,
+              profile.id,
+              profile.contactName || profile.name,
+              profile.avatar_url,
+              profile.phone_number
+            );
+            added++;
+            existingIds.add(profile.id);
+            existingPhones.add(phoneDigits);
+          } catch (e) {
+            console.warn("[SYNC-CONTACTS] addContact failed", { error: e, id: profile.id });
+          }
+        }
+        setAddedCount(added);
+        if (added > 0) onContactsChanged?.();
+      } catch (e) {
+        console.warn("[SYNC-CONTACTS] auto-add error", { error: e });
+        setSyncError("No se pudieron agregar los contactos a tu lista");
+      }
+    } catch (e) {
+      console.warn("[SYNC-CONTACTS] sync error", { error: e });
+      setSyncError("No se pudo sincronizar la agenda");
+    } finally {
+      setLoading(false);
+    }
   }
 
   const displayList = searchQuery.length >= 4 ? searchResults : contacts;
@@ -102,6 +155,16 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat }: S
               <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
               Actualizar
             </button>
+          </div>
+        )}
+        {addedCount > 0 && (
+          <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-[12px] text-emerald-800 font-semibold">
+            {addedCount === 1 ? "1 contacto" : `${addedCount} contactos`} agregado{addedCount !== 1 ? "s" : ""} a tu lista
+          </div>
+        )}
+        {syncError && (
+          <div className="mt-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-[12px] text-red-700 font-semibold">
+            {syncError}
           </div>
         )}
       </div>

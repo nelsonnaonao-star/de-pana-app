@@ -251,6 +251,8 @@ export default function PhoneSimulator({
 
   // Active Call Screen Overlay
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+  // Reacción en vivo recibida del otro participante (via WebRTC signal).
+  const [pendingReaction, setPendingReaction] = useState<{ id: number; emoji: string } | null>(null);
   const [isInitiatingCall, setIsInitiatingCall] = useState(false);
 
   // WebRTC streams for real calls
@@ -372,6 +374,47 @@ export default function PhoneSimulator({
       await LocalNotifications.cancel({ notifications: [{ id: javaHashCode("call-" + source) }] });
     } catch (e) {
       logger.warn('[CALL] Failed to cancel incoming call notification', { error: e });
+    }
+  }, []);
+
+  // Memoria de llamadas entrantes ya vistas: evita que un push FCM duplicado o
+  // atrasado vuelva a sonar para la misma llamada.
+  const seenIncomingCallsRef = useRef<Map<string, number>>(new Map());
+  const RING_TTL_MS = 60000;
+
+  // Una "llamada entrante" solo es válida si sigue con status 'ringing' y fue
+  // creada recientemente. Si falla la verificación (red caída) o no cumple las
+  // condiciones se descarta (fail-closed): así un push antiguo, un registro
+  // 'ringing' colgado o los "extras" de un intent viejo nunca producen una
+  // llamada fantasma al recuperar la conexión.
+  const incomingCallStillValid = useCallback(async (callId?: string, startedAt?: string): Promise<boolean> => {
+    if (!callId || callId.startsWith('call_')) return false;
+    const now = Date.now();
+    if (startedAt) {
+      const t = new Date(startedAt).getTime();
+      if (!isNaN(t) && now - t > RING_TTL_MS) return false;
+    }
+    const seenAt = seenIncomingCallsRef.current.get(callId);
+    if (seenAt && now - seenAt < 5 * 60 * 1000) return false;
+    try {
+      const { data } = await supabase
+        .from("calls")
+        .select("status, started_at")
+        .eq("id", callId)
+        .single();
+      if (!data || data.status !== 'ringing') return false;
+      const t = new Date(data.started_at).getTime();
+      if (!isNaN(t) && now - t > RING_TTL_MS) {
+        // Registro 'ringing' colgado: nadie lo va a contestar ya. Se limpia para
+        // la base y se descarta para que no dé vueltas como llamada fantasma.
+        updateCallStatus(callId, 'missed').catch(() => {});
+        return false;
+      }
+      seenIncomingCallsRef.current.set(callId, now);
+      return true;
+    } catch (e) {
+      logger.warn('[WEBRTC SIGNALING] Incoming call validation failed (skipping to avoid phantom)', { error: e, callId });
+      return false;
     }
   }, []);
 
@@ -1083,20 +1126,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         } catch (e) {
           logger.warn('[WEBRTC SIGNALING] Failed to fetch caller profile', { error: e, callerId: call.caller_id });
         }
-        if (activeCallRef.current) return;
-        // Safety: verify call is still ringing in DB (may have been cancelled)
-        try {
-          const { data: freshCall } = await supabase
-            .from("calls")
-            .select("status")
-            .eq("id", call.id)
-            .single();
-          if (freshCall && freshCall.status !== "ringing") {
-            logger.info('[WEBRTC SIGNALING] Call already ended, skipping incoming UI', { status: freshCall.status });
-            return;
-          }
-        } catch (e) {
-          logger.warn('[WEBRTC SIGNALING] Fresh call check failed', { error: e, callId: call.id });
+        // Safety: solo suena si la llamada sigue válida (status 'ringing' + reciente).
+        // Un INSERT realtime siempre es fresco, pero un registro colgado o un push
+        // duplicado no deben volver a sonar para el mismo callId.
+        const isValidIncoming = await incomingCallStillValid(call.id, call.started_at);
+        if (!isValidIncoming) {
+          logger.info('[WEBRTC SIGNALING] Realtime incoming call rejected (stale/duplicate)', { callId: call.id });
+          return;
         }
         if (activeCallRef.current) return;
         logger.info('[WEBRTC SIGNALING] Setting activeCall from Realtime', { callerName, status: 'incoming' });
@@ -1170,21 +1206,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       }
 
       if (chatId && d?.callerId && !activeCallRef.current) {
-        // Safety: verify call is still ringing in DB
-        if (incomingCallId && !incomingCallId.startsWith('call_')) {
-          try {
-            const { data: freshCall } = await supabase
-              .from("calls")
-              .select("status")
-              .eq("id", incomingCallId)
-              .single();
-            if (freshCall && freshCall.status !== "ringing") {
-              logger.info('[WEBRTC SIGNALING] FCM call already ended, skipping UI', { status: freshCall.status });
-              return;
-            }
-          } catch (e) {
-            logger.warn('[WEBRTC SIGNALING] FCM call status check failed', { error: e });
-          }
+        // Válida la llamada (status 'ringing' + reciente). Si FCM entrega un push
+        // atrasado/antiguo (típico al recuperar la conexión) se descarta y la app
+        // no "enloquece" con llamadas fantasma.
+        const isValidIncoming = await incomingCallStillValid(incomingCallId);
+        if (!isValidIncoming) {
+          logger.info('[WEBRTC SIGNALING] FCM incoming call rejected (stale/duplicate)', { callId: incomingCallId });
+          return;
         }
         logger.info('[WEBRTC SIGNALING] Setting activeCall from FCM', { callerName: d.callerName, callId: incomingCallId });
         answeredCallRef.current = false;
@@ -1390,6 +1418,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     try {
       const webrtc = new WebRTCService(callId, user.id);
       webrtcRef.current = webrtc;
+      webrtc.onReaction = (emoji) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
       webrtc.onRemoteStream = (stream) => {
         logger.info('[WEBRTC SIGNALING] Remote stream received (answer-call) — CONNECTED');
         setRemoteStream(stream);
@@ -1483,6 +1512,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     try {
       const webrtc = new WebRTCGroupService(activeChat.id, user.id);
       groupCallRef.current = webrtc;
+
+      webrtc.onReaction = (peerId: string, emoji: string) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
 
       setGroupParticipantCount(webrtc.getParticipantsCount());
 
@@ -1686,6 +1717,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     try {
       const webrtc = new WebRTCService(callId, user.id);
       webrtcRef.current = webrtc;
+
+      webrtc.onReaction = (emoji) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
 
       webrtc.onRemoteStream = (stream) => {
         logger.info('[WEBRTC SIGNALING] Remote stream received — CALL CONNECTED');
@@ -2058,6 +2091,21 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           remoteStreamsMap={activeCall.isGroup ? groupRemoteStreams : undefined}
           participantCount={activeCall.isGroup ? groupParticipantCount : 0}
           onAddMember={() => openAddMember()}
+          pendingReaction={pendingReaction}
+          onSendReaction={(emoji) => {
+            if (activeCall.isGroup) {
+              groupCallRef.current?.sendReaction(emoji).catch(() => {});
+            } else {
+              webrtcRef.current?.sendReaction(emoji).catch(() => {});
+            }
+          }}
+          onFilterChange={(filterId) => {
+            if (activeCall.isGroup) {
+              groupCallRef.current?.setVideoFilter(filterId).catch(() => {});
+            } else {
+              webrtcRef.current?.setVideoFilter(filterId).catch(() => {});
+            }
+          }}
           onAccept={async () => {
             if (!user) return;
             if (activeCall.isGroup) {
@@ -2067,6 +2115,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
               try {
                 const webrtc = new WebRTCGroupService(roomId, user.id);
                 groupCallRef.current = webrtc;
+                webrtc.onReaction = (peerId: string, emoji: string) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
                 await webrtc.startLocalStream(true, activeCall.type === "video");
                 setGroupLocalStream(webrtc.getLocalStream());
                 webrtc.onRemoteStream = (peerId: string, stream: MediaStream) => {
@@ -2105,6 +2154,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
 try {
               const webrtc = new WebRTCService(callId, user.id);
               webrtcRef.current = webrtc;
+              webrtc.onReaction = (emoji) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
 
               webrtc.onRemoteStream = (stream) => {
                 logger.info('[WEBRTC SIGNALING] Remote stream received on callee side — call CONNECTED');
@@ -2398,6 +2448,7 @@ try {
                 currentUserId={user?.id || ""}
                 onBack={() => setCurrentScreen("chats")}
                 onStartChat={handleStartChatFromSynced}
+                onContactsChanged={refreshContacts}
               />
               </LazyPanel>
             </div>

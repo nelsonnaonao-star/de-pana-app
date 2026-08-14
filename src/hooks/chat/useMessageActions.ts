@@ -163,7 +163,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
         };
         setMessages(prev => [...prev, newMsg]);
         onSendMessage(newMsg);
-        messageRepo.upsertMessage(chatId, newMsg);
+        await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
         pendingSendIdsRef.current.add(tempId);
 
         try {
@@ -243,7 +243,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       clearTimeout(typingTimerRef.current);
     }
 
-    messageRepo.upsertMessage(chatId, newMsg);
+    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
     pendingSendIdsRef.current.add(tempId);
 
     try {
@@ -301,7 +301,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       onSendMessage(newMsg);
       setShowGifPicker(false);
       setShowAttachments(false);
-      messageRepo.upsertMessage(chatId, newMsg);
+      await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
       pendingSendIdsRef.current.add(tempId);
       try {
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -354,7 +354,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     onSendMessage(newMsg);
     setShowGifPicker(false);
     setShowAttachments(false);
-    messageRepo.upsertMessage(chatId, newMsg);
+    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
     pendingSendIdsRef.current.add(tempId);
 
     try {
@@ -429,7 +429,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
 
           const url = await uploadChatMedia(fileBlob, "image");
           const mediaUpdated = { ...sendingMsg, mediaUrl: url };
-          messageRepo.upsertMessage(chatId, mediaUpdated);
+          await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdCamera, sender_id: uid });
           setMessages(prev => {
             if (!prev.some(m => m.id === tempId)) return prev;
             return prev.map(m => m.id === tempId ? mediaUpdated : m);
@@ -516,7 +516,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
         const blob = new Blob([fileToUpload], { type: fileToUpload.type });
         const url = await uploadChatMedia(blob, type === "video" ? "video" : "files");
         const mediaUpdated = { ...sendingMsg, mediaUrl: url, posterUrl };
-        messageRepo.upsertMessage(chatId, mediaUpdated);
+        await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdFile, sender_id: uid });
         setMessages(prev => {
           if (!prev.some(m => m.id === tempId)) return prev;
           return prev.map(m => m.id === tempId ? mediaUpdated : m);
@@ -587,6 +587,8 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
     setPollOption1("");
     setPollOption2("");
     setShowAttachments(false);
+    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId: clientIdPoll, sender_id: uid });
+    pendingSendIdsRef.current.add(tempId);
 
     try {
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -601,10 +603,22 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
           poll_question: pollQuestion,
           poll_options: pollOpts,
         });
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: saved.id } : m));
+        const savedRow = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+        recordReconciledId(chatId, tempId, saved.id);
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+        messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+          console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+        );
+      } else {
+        const final = { ...newMsg, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
+        messageRepo.upsertMessage(chatId, final);
+        messageRepo.deleteMessage(chatId, tempId);
+        setMessages(prev => prev.map(m => m.id === tempId ? final : m));
       }
     } catch (e) {
       console.error("[CHAT] Error saving poll:", e);
+    } finally {
+      pendingSendIdsRef.current.delete(tempId);
     }
   };
 
@@ -757,7 +771,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
     };
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);
-    messageRepo.upsertMessage(chatId, newMsg);
+    await messageRepo.upsertMessage(chatId, newMsg);
     pendingSendIdsRef.current.add(tempId);
 
     if (mediaStreamRef.current) {
@@ -784,7 +798,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
       const url = await Promise.race([uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video"), uploadTimeout]);
       console.log("[VOICE] upload OK", { url });
       const mediaUpdated = { ...newMsg, mediaUrl: url };
-      messageRepo.upsertMessage(chatId, mediaUpdated).catch(() => {});
+      await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId, sender_id: uid }).catch(() => {});
       setMessages(prev => {
         if (!prev.some(m => m.id === tempId)) return prev;
         return prev.map(m => m.id === tempId ? mediaUpdated : m);

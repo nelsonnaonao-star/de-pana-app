@@ -112,25 +112,14 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         } else if ("android.intent.action.MAIN".equals(action) && chatId != null) {
-            // Fallback: FCM data extras might be attached to the launcher intent
-            if ("call".equals(type) && callerId != null) {
-                String callerName = intent.getStringExtra("callerName");
-                String callType = intent.getStringExtra("callType");
-                try {
-                    String json = "{\"callerId\":\"" + callerId +
-                        "\",\"callerName\":\"" + (callerName != null ? callerName : "") +
-                        "\",\"callType\":\"" + (callType != null ? callType : "audio") +
-                        "\",\"chatId\":\"" + chatId + "\"}";
-                    bridge.triggerWindowJSEvent("incoming-call", json);
-                } catch (Exception e) {
-                    Log.e(TAG, "Failed to trigger JS event", e);
-                }
-            } else {
-                try {
-                    bridge.triggerWindowJSEvent("open-chat", chatId);
-                } catch (Exception e) {
-                    Log.e(TAG, "Failed to trigger open-chat JS event", e);
-                }
+            // El intent del launcher puede conservar "extras" colgados de un push
+            // anterior; NUNCA convertir eso en una llamada entrante, porque al abrir
+            // la app desde el icono produciría una llamada fantasma. Las llamadas
+            // reales ya entran por Realtime (primer plano) o por CallFcmService (fondo).
+            try {
+                bridge.triggerWindowJSEvent("open-chat", chatId);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to trigger open-chat JS event", e);
             }
         }
     }
