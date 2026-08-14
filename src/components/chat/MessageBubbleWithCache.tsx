@@ -1,7 +1,7 @@
-import { useEffect, useState, memo } from "react";
+import { useRef, memo } from "react";
 import { Message } from "../../types";
 import MessageBubble from "./MessageBubble";
-import { getCachedMedia, getCachedMediaSync } from "../../services/mediaCache";
+import { getCachedMediaSync } from "../../services/mediaCache";
 
 interface MessageBubbleWithCacheProps {
   msg: Message;
@@ -21,49 +21,78 @@ interface MessageBubbleWithCacheProps {
   onUpdatePrice: (msgId: string, price: string) => void;
 }
 
+// Sin estado local ni efectos: este componente lee y renderiza `msg` (status,
+// id, mediaUrl) directamente desde las props. El memo comparador es la única
+// barrera de re-render, y compara POR VALOR status/id para que el paso
+// temp->sent SIEMPRE repinte la burbuja (elimina el relojito pegado).
 function MessageBubbleWithCache(props: MessageBubbleWithCacheProps) {
   const { msg } = props;
-  const hasMedia = !!msg.mediaUrl && !msg.mediaUrl.startsWith("blob:");
-  const hasPoster = !!msg.posterUrl && !msg.posterUrl.startsWith("blob:");
 
-  const syncMediaUrl = hasMedia ? getCachedMediaSync(msg.mediaUrl!) : msg.mediaUrl;
-  const syncPosterUrl = hasPoster ? getCachedMediaSync(msg.posterUrl!) : msg.posterUrl;
+  // Preservación del blob: local: al confirmarse la fila (temp->saved) el
+  // mediaUrl pasa a https (Supabase), pero el player de voz/video debe seguir
+  // reproduciendo el blob local sin recargar ni parpadear.
+  const blobMediaRef = useRef<string | null>(null);
+  const blobPosterRef = useRef<string | null>(null);
 
-  const [cachedMsg, setCachedMsg] = useState<Message>(() => {
-    if (syncMediaUrl && syncMediaUrl !== msg.mediaUrl) {
-      return { ...msg, mediaUrl: syncMediaUrl, posterUrl: syncPosterUrl || msg.posterUrl };
-    }
-    if (syncPosterUrl && syncPosterUrl !== msg.posterUrl) {
-      return { ...msg, posterUrl: syncPosterUrl };
-    }
-    return msg;
-  });
+  const isLocalMedia = !!msg.mediaUrl && msg.mediaUrl.startsWith("blob:");
+  const isLocalPoster = !!msg.posterUrl && msg.posterUrl.startsWith("blob:");
 
-  useEffect(() => {
-    setCachedMsg(prev => ({
-      ...msg,
-      mediaUrl: prev.mediaUrl?.startsWith("blob:") ? prev.mediaUrl : msg.mediaUrl,
-      posterUrl: prev.posterUrl?.startsWith("blob:") ? prev.posterUrl : msg.posterUrl,
-    }));
-  }, [msg.id, msg.status, msg.text, msg.reactions, msg.edited, msg.forwarded, msg.pollQuestion, msg.pollOptions, msg.price, msg.isEphemeral, msg.ephemeralExpiresAt]);
+  if (isLocalMedia) blobMediaRef.current = msg.mediaUrl!;
+  if (isLocalPoster) blobPosterRef.current = msg.posterUrl!;
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      let newMediaUrl = msg.mediaUrl;
-      let newPosterUrl = msg.posterUrl;
+  const syncMediaUrl = !isLocalMedia ? (getCachedMediaSync(msg.mediaUrl!) ?? msg.mediaUrl) : undefined;
+  const syncPosterUrl = !isLocalPoster ? (getCachedMediaSync(msg.posterUrl!) ?? msg.posterUrl) : undefined;
 
-      if (hasMedia) newMediaUrl = await getCachedMedia(msg.mediaUrl!);
-      if (hasPoster) newPosterUrl = await getCachedMedia(msg.posterUrl!);
+  const mediaUrl = isLocalMedia ? msg.mediaUrl : blobMediaRef.current || syncMediaUrl || msg.mediaUrl;
+  const posterUrl = isLocalPoster ? msg.posterUrl : blobPosterRef.current || syncPosterUrl || msg.posterUrl;
 
-      if (!cancelled && (newMediaUrl !== msg.mediaUrl || newPosterUrl !== msg.posterUrl)) {
-        setCachedMsg({ ...msg, mediaUrl: newMediaUrl, posterUrl: newPosterUrl });
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [msg.mediaUrl, msg.posterUrl]);
+  const renderMsg =
+    mediaUrl === msg.mediaUrl && posterUrl === msg.posterUrl
+      ? msg
+      : { ...msg, mediaUrl, posterUrl };
 
-  return <MessageBubble {...props} msg={cachedMsg} />;
+  return <MessageBubble {...props} msg={renderMsg} />;
 }
 
-export default memo(MessageBubbleWithCache);
+function arePropsEqual(prev: MessageBubbleWithCacheProps, next: MessageBubbleWithCacheProps): boolean {
+  const p = prev.msg;
+  const n = next.msg;
+  return (
+    p.id === n.id &&
+    p.sender === n.sender &&
+    p.status === n.status &&
+    p.synced === n.synced &&
+    p.type === n.type &&
+    p.text === n.text &&
+    p.timestamp === n.timestamp &&
+    p.rawCreatedAt === n.rawCreatedAt &&
+    p.mediaUrl === n.mediaUrl &&
+    p.posterUrl === n.posterUrl &&
+    p.localVideoUrl === n.localVideoUrl &&
+    p.fileName === n.fileName &&
+    p.fileSize === n.fileSize &&
+    p.mimeType === n.mimeType &&
+    p.duration === n.duration &&
+    p.pollQuestion === n.pollQuestion &&
+    p.latitude === n.latitude &&
+    p.longitude === n.longitude &&
+    p.locationName === n.locationName &&
+    p.forwarded === n.forwarded &&
+    p.edited === n.edited &&
+    p.replyToId === n.replyToId &&
+    p.replyToText === n.replyToText &&
+    p.replyToSender === n.replyToSender &&
+    p.price === n.price &&
+    p.chatId === n.chatId &&
+    p.isEphemeral === n.isEphemeral &&
+    p.ephemeralExpiresAt === n.ephemeralExpiresAt &&
+    JSON.stringify(p.reactions) === JSON.stringify(n.reactions) &&
+    JSON.stringify(p.pollOptions) === JSON.stringify(n.pollOptions) &&
+    prev.isMe === next.isMe &&
+    prev.activeReactionMenu === next.activeReactionMenu &&
+    prev.bubbleColorMeId === next.bubbleColorMeId &&
+    prev.bubbleColorThemId === next.bubbleColorThemId
+  );
+}
+
+export default memo(MessageBubbleWithCache, arePropsEqual);
