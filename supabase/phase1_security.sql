@@ -105,6 +105,11 @@ $$;
 -- get_user_messages: elimina TODOS los overloads previos y crea la firma
 -- EXACTA que usa el cliente (chat_uuid, user_uuid, p_limit, p_before, p_after)
 -- con paginación real, validando contra auth.uid().
+-- Paginación profesional por llave (keyset): la ventana inicial devuelve los
+-- p_limit MÁS RECIENTES (DESC+limit, re-ordenados ASC), y los cursores
+-- before/after recorren la historia hacia arriba o hacen catch-up tras una
+-- reconexión. Esto evita que los mensajes nuevos queden invisibles en chats
+-- con más de p_limit mensajes (bug previo: ASC LIMIT devolvía los más antiguos).
 DO $$
 DECLARE
   r record;
@@ -132,25 +137,28 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT m.* FROM public.messages m
-  WHERE m.chat_id = chat_uuid
-  AND EXISTS (
-    SELECT 1 FROM public.chats c
-    WHERE c.id = chat_uuid
-    AND c.deleted_at IS NULL
-    AND (
-      c.profile_id = auth.uid()
-      OR c.admin_id = auth.uid()
-      OR EXISTS (
-        SELECT 1 FROM public.chat_participants cp
-        WHERE cp.chat_id = c.id AND cp.profile_id = auth.uid()
+  SELECT * FROM (
+    SELECT m.* FROM public.messages m
+    WHERE m.chat_id = chat_uuid
+    AND EXISTS (
+      SELECT 1 FROM public.chats c
+      WHERE c.id = chat_uuid
+      AND c.deleted_at IS NULL
+      AND (
+        c.profile_id = auth.uid()
+        OR c.admin_id = auth.uid()
+        OR EXISTS (
+          SELECT 1 FROM public.chat_participants cp
+          WHERE cp.chat_id = c.id AND cp.profile_id = auth.uid()
+        )
       )
     )
-  )
-  AND (p_after  IS NULL OR m.created_at > p_after)
-  AND (p_before IS NULL OR m.created_at < p_before)
-  ORDER BY m.created_at ASC
-  LIMIT p_limit;
+    AND (p_after  IS NULL OR m.created_at > p_after)
+    AND (p_before IS NULL OR m.created_at < p_before)
+    ORDER BY m.created_at DESC, m.id DESC
+    LIMIT p_limit
+  ) t
+  ORDER BY t.created_at ASC, t.id ASC;
 $$;
 
 -- ============================================================
