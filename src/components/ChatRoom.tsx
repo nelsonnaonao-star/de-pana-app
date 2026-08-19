@@ -644,6 +644,27 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     setSaving(false);
   };
 
+  const handleBlockUser = async () => {
+    if (!uid || !partnerUserId) return;
+    try {
+      const { data: existing } = await supabase
+        .from("blocks")
+        .select("id")
+        .eq("blocker_id", uid)
+        .eq("blocked_id", partnerUserId)
+        .maybeSingle();
+      if (!existing) {
+        await supabase.from("blocks").insert({ blocker_id: uid, blocked_id: partnerUserId });
+      }
+      toast.success("Usuario bloqueado");
+      setShowDropdown(false);
+      onBack();
+    } catch (e) {
+      console.error("[CHAT] block error:", e);
+      toast.error("No se pudo bloquear al usuario");
+    }
+  };
+
   const handleRejectAndBlock = async () => {
     if (!uid || !partnerUserId) return;
     setSaving(true);
@@ -968,6 +989,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         onOpenGroupInfo={() => { setShowGroupInfo(true); setShowDropdown(false); }}
         onOpenDeleteConfirm={() => { setShowDeleteConfirm(true); setShowDropdown(false); }}
         onOpenProfile={onOpenProfile}
+        onBlockUser={handleBlockUser}
         ephemeralTimer={ephemeralTimer}
         onSetEphemeralTimer={handleSetEphemeralTimer}
       />

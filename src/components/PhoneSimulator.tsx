@@ -2065,6 +2065,27 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     setContextMenuPos({ x: clientX, y: clientY });
   };
 
+  const handleBlockUser = async (chat: Chat) => {
+    setContextMenuChat(null);
+    setContextMenuPos(null);
+    if (!user?.id || !chat.partnerUserId) return;
+    try {
+      const { data: existing } = await supabase
+        .from("blocks")
+        .select("id")
+        .eq("blocker_id", user.id)
+        .eq("blocked_id", chat.partnerUserId)
+        .maybeSingle();
+      if (!existing) {
+        await supabase.from("blocks").insert({ blocker_id: user.id, blocked_id: chat.partnerUserId });
+      }
+      showToast("Usuario bloqueado");
+    } catch (e) {
+      logger.warn("[CHAT] block error", { error: e });
+      showToast("Error al bloquear usuario");
+    }
+  };
+
   const startLongPressTimer = (chat: Chat, clientX: number, clientY: number) => {
     longPressTimer.current = setTimeout(() => {
       handleLongPress(chat, clientX, clientY);
@@ -2803,6 +2824,18 @@ try {
                         </svg>
                         Borrar mensajes
                       </button>
+                      {!contextMenuChat.isGroup && contextMenuChat.partnerUserId && (
+                        <button
+                          onClick={() => handleBlockUser(contextMenuChat)}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                          </svg>
+                          Bloquear usuario
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDeleteChat(contextMenuChat.id)}
                         className="w-full flex items-center gap-3 px-3 py-2.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"

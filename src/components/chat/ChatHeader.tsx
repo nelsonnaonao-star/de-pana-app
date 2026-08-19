@@ -18,6 +18,7 @@ interface ChatHeaderProps {
   onOpenGroupInfo: () => void;
   onOpenDeleteConfirm: () => void;
   onOpenProfile?: () => void;
+  onBlockUser?: () => void;
   ephemeralTimer?: number | null;
   onSetEphemeralTimer?: (timer: number) => void;
 }
@@ -33,7 +34,7 @@ export default function ChatHeader({
   chat, onBack, partnerTyping, onTriggerCall, callInProgress,
   showSearch, onToggleSearch, showDropdown, setShowDropdown,
   onClearChat, onOpenCustomizer, onOpenGroupInfo, onOpenDeleteConfirm,
-  onOpenProfile, ephemeralTimer, onSetEphemeralTimer,
+  onOpenProfile, ephemeralTimer, onSetEphemeralTimer, onBlockUser,
 }: ChatHeaderProps) {
   const isGroup = chat.isGroup ?? false;
   const [showEphemeral, setShowEphemeral] = useState(false);
@@ -222,6 +223,18 @@ export default function ChatHeader({
                         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                       </svg>
                       Info del grupo
+                    </button>
+                  )}
+                  {!isGroup && onBlockUser && (
+                    <button
+                      onClick={onBlockUser}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                      </svg>
+                      Bloquear usuario
                     </button>
                   )}
                   <div className="border-t border-slate-100 my-1"></div>
