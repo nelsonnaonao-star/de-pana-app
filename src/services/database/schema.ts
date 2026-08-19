@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS messages (
   poster_url TEXT,
   local_video_url TEXT,
   chat_id TEXT NOT NULL,
+  sender_id TEXT,
+  client_id TEXT,
   synced INTEGER DEFAULT 1,
   payload TEXT,
   created_at TEXT DEFAULT (datetime('now')),

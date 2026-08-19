@@ -7,7 +7,8 @@ import { uploadChatMedia } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
 import { revokeCachedMedia } from "../../services/mediaCache";
 import { supabase } from "../../lib/supabase";
-import { recordReconciledId } from "../../lib/reconciledIds";
+import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
+import { inFlightMessageIds } from "../../services/sync/SyncService";
 import toast from "react-hot-toast";
 
 function formatFileSize(bytes: number): string {
@@ -154,6 +155,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
           id: tempId,
           sender: "me",
           timestamp,
+          rawCreatedAt: new Date().toISOString(),
           type: "location",
           latitude,
           longitude,
@@ -163,8 +165,9 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
         };
         setMessages(prev => [...prev, newMsg]);
         onSendMessage(newMsg);
-        await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
         pendingSendIdsRef.current.add(tempId);
+        inFlightMessageIds.add(tempId);
+        await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
 
         try {
           const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -197,8 +200,9 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
           }
         } catch (e) {
           console.error("[CHAT] Error sending location:", e);
-        } finally {
+} finally {
           pendingSendIdsRef.current.delete(tempId);
+          inFlightMessageIds.delete(tempId);
           isSendingRef.current = false;
         }
       },
@@ -223,6 +227,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       sender: "me",
       text,
       timestamp,
+      rawCreatedAt: new Date().toISOString(),
       type: "text",
       status: "sending",
       synced: false,
@@ -243,8 +248,9 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       clearTimeout(typingTimerRef.current);
     }
 
-    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
     pendingSendIdsRef.current.add(tempId);
+    inFlightMessageIds.add(tempId);
+    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
 
     try {
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -276,6 +282,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       console.error("[CHAT] Error al enviar mensaje:", e);
     } finally {
       pendingSendIdsRef.current.delete(tempId);
+      inFlightMessageIds.delete(tempId);
       isSendingRef.current = false;
     }
   };
@@ -291,18 +298,20 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
         id: tempId,
         sender: "me",
         timestamp,
+        rawCreatedAt: new Date().toISOString(),
         type: "sticker",
         mediaUrl: value,
         fileName: "Emoji.png",
         status: "sending",
         synced: false,
       };
-      setMessages(prev => [...prev, newMsg]);
+setMessages(prev => [...prev, newMsg]);
       onSendMessage(newMsg);
       setShowGifPicker(false);
       setShowAttachments(false);
-      await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
       pendingSendIdsRef.current.add(tempId);
+      inFlightMessageIds.add(tempId);
+      await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
       try {
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
         if (!isLocalChat) {
@@ -331,6 +340,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
         console.error("[CHAT] Error al enviar emoji:", e);
       } finally {
         pendingSendIdsRef.current.delete(tempId);
+        inFlightMessageIds.delete(tempId);
         isSendingRef.current = false;
       }
       return;
@@ -343,6 +353,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       id: tempId,
       sender: "me",
       timestamp,
+      rawCreatedAt: new Date().toISOString(),
       type: type === "sticker" ? "sticker" : "image",
       mediaUrl: url,
       fileName: type === "gif" ? "GIF.gif" : "Sticker.png",
@@ -354,8 +365,9 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
     onSendMessage(newMsg);
     setShowGifPicker(false);
     setShowAttachments(false);
-    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
     pendingSendIdsRef.current.add(tempId);
+    inFlightMessageIds.add(tempId);
+    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
 
     try {
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -384,11 +396,12 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
        }
      } catch (e) {
        console.error("[CHAT] Error al enviar sticker:", e);
-     } finally {
-       pendingSendIdsRef.current.delete(tempId);
-       isSendingRef.current = false;
-     }
-   };
+} finally {
+        pendingSendIdsRef.current.delete(tempId);
+        inFlightMessageIds.delete(tempId);
+        isSendingRef.current = false;
+      }
+    };
 
    const triggerFilePick = async (accept: string, type: Message["type"]) => {
      if (isSendingRef.current) { console.warn('[CHAT] send blocked — already sending'); return; }
@@ -406,7 +419,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
             source: CameraSource.Photos,
             resultType: CameraResultType.DataUrl,
           });
-          if (!photo.dataUrl) return;
+          if (!photo.dataUrl) { isSendingRef.current = false; return; }
 
           const resp = await fetch(photo.dataUrl);
           const blob = await resp.blob();
@@ -418,14 +431,15 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
           const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           const localUrl = URL.createObjectURL(fileBlob);
           const sendingMsg: Message = {
-            id: tempId, sender: "me", timestamp, type, mediaUrl: localUrl,
+            id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type, mediaUrl: localUrl,
             fileName: `${type}_${Date.now()}.${ext}`, fileSize: `${(fileBlob.size / 1024).toFixed(0)}KB`,
             status: "sending", synced: false,
           };
           setMessages(prev => [...prev, sendingMsg]);
           onSendMessage(sendingMsg);
           messageRepo.upsertMessage(chatId, sendingMsg);
-          pendingSendIdsRef.current.add(tempId);
+pendingSendIdsRef.current.add(tempId);
+    inFlightMessageIds.add(tempId);
 
           const url = await uploadChatMedia(fileBlob, "image");
           const mediaUpdated = { ...sendingMsg, mediaUrl: url };
@@ -452,6 +466,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
             setMessages(prev => prev.map(m => m.id === tempId ? final : m));
           }
           pendingSendIdsRef.current.delete(tempId);
+        inFlightMessageIds.delete(tempId);
           isSendingRef.current = false;
           return;
         } catch (e: any) {
@@ -460,6 +475,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
           setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" } : m));
           toast.error(`Error al enviar imagen: ${e?.message || "Error desconocido"}`);
           pendingSendIdsRef.current.delete(tempId);
+          inFlightMessageIds.delete(tempId);
           isSendingRef.current = false;
           return;
         }
@@ -485,7 +501,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
       const shouldCompress = type === "video" && file.size > 5 * 1024 * 1024;
       const blobUrl = URL.createObjectURL(new Blob([await file.arrayBuffer()], { type: file.type }));
       const sendingMsg: Message = {
-        id: tempId, sender: "me", timestamp, type,
+        id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type,
         mediaUrl: blobUrl,
         fileName: file.name,
         fileSize: shouldCompress ? "Comprimiendo…" : formatFileSize(file.size),
@@ -497,6 +513,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
       onSendMessage(sendingMsg);
       messageRepo.upsertMessage(chatId, sendingMsg);
       pendingSendIdsRef.current.add(tempId);
+      inFlightMessageIds.add(tempId);
 
       let fileToUpload = file;
       try {
@@ -553,6 +570,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
         toast.error(`Error al enviar archivo: ${err?.message || "Error desconocido"}`);
       } finally {
         pendingSendIdsRef.current.delete(tempId);
+        inFlightMessageIds.delete(tempId);
         isSendingRef.current = false;
       }
     };
@@ -574,6 +592,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
       id: tempId,
       sender: "me",
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      rawCreatedAt: new Date().toISOString(),
       type: "poll",
       pollQuestion: pollQuestion,
       pollOptions: pollOpts,
@@ -587,8 +606,9 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
     setPollOption1("");
     setPollOption2("");
     setShowAttachments(false);
-    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId: clientIdPoll, sender_id: uid });
     pendingSendIdsRef.current.add(tempId);
+    inFlightMessageIds.add(tempId);
+    await messageRepo.upsertMessage(chatId, { ...newMsg, clientId: clientIdPoll, sender_id: uid });
 
     try {
       const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -619,6 +639,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
       console.error("[CHAT] Error saving poll:", e);
     } finally {
       pendingSendIdsRef.current.delete(tempId);
+      inFlightMessageIds.delete(tempId);
     }
   };
 
@@ -716,9 +737,44 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
   const handleEditMessage = async (messageId: string, newText: string) => {
     setActiveReactionMenu(null);
     setEditingMessage(null);
+
+    const existing = messages.find(m => m.id === messageId);
+    const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
+    const isTemp = messageId.startsWith("temp_") || messageId.startsWith("msg_");
+
+    // 1) UI optimista + persistencia local durable: la edición sobrevive al
+    // reload aunque el eco de Realtime no llegue (red caída/3G), que era el
+    // bug "edito pero no se guarda".
+    setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: newText, edited: true } : m));
+    if (existing) {
+      messageRepo.upsertMessage(chatId, { ...existing, text: newText, edited: true }).catch((err) =>
+        console.error("[CHAT] Edit persist local falló:", err)
+      );
+    }
+
+    if (isLocalChat || !existing) return;
+
     try {
-      await apiEditMessage(messageId, newText);
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, text: newText, edited: true } : m));
+      let serverId = messageId;
+      if (isTemp) {
+        // Si el mensaje recién enviado aún no se reconcilió con su id real,
+        // el servidor rechaza (404) un edit con temp_id. Resolver primero.
+        serverId = getReconciledSavedId(chatId, messageId) || "";
+        if (!serverId) {
+          // Envío aún en curso: encolar el edit para que se aplique en cuanto
+          // el temp se confirme con su id real (ver MessageRepository.reconcileTemp).
+          messageRepo.registerPendingEdit(chatId, messageId, newText).catch(() => {});
+          console.log("[CHAT] Edit encolado para temp pendiente", { tempId: messageId });
+          return;
+        }
+      }
+      await apiEditMessage(serverId, newText);
+      if (serverId !== messageId) {
+        // El temp se reconcilió entre tanto: re-aplicar sobre la fila confirmada
+        // para que ni la UI ni la BD local retrocedan al texto viejo.
+        setMessages(prev => prev.map(m => m.id === serverId ? { ...m, text: newText, edited: true } : m));
+        messageRepo.upsertMessage(chatId, { ...existing, id: serverId, text: newText, edited: true }).catch(() => {});
+      }
     } catch (e) {
       console.error("[CHAT] Edit error:", e);
     }
@@ -762,6 +818,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
       id: tempId,
       sender: "me",
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      rawCreatedAt: new Date().toISOString(),
       type: currentRecordingType === "voice" ? "voice_note" : "video_note",
       duration: durStr,
       mediaUrl: localUrl,
@@ -771,8 +828,9 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
     };
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);
-    await messageRepo.upsertMessage(chatId, newMsg);
     pendingSendIdsRef.current.add(tempId);
+    inFlightMessageIds.add(tempId);
+    await messageRepo.upsertMessage(chatId, newMsg);
 
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(t => t.stop());
@@ -856,6 +914,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
     } finally {
       console.log("[VOICE] finishVoiceNote finalizado", { tempId, quedaSending: false });
       pendingSendIdsRef.current.delete(tempId);
+      inFlightMessageIds.delete(tempId);
       releaseSending?.();
     }
   };

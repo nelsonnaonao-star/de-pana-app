@@ -8,7 +8,7 @@ import {
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
   Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy, User, Wifi,
-  X, Loader2, UserPlus
+  X, Loader2, UserPlus, Phone, Video, MessageCircle
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Chat, Message, ActiveCall } from "../types";
@@ -270,6 +270,7 @@ export default function PhoneSimulator({
   const [addMemberContacts, setAddMemberContacts] = useState<Contact[]>([]);
   const [addMemberLoading, setAddMemberLoading] = useState(false);
   const [invitingContactId, setInvitingContactId] = useState<string | null>(null);
+  const [contactActions, setContactActions] = useState<Contact | null>(null);
 
   // Ringback tone for outgoing calls (synthesized via Web Audio API)
   const ringbackCtxRef = useRef<AudioContext | null>(null);
@@ -1662,23 +1663,12 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     }
   }, [user, groupParticipantCount, showToast]);
 
-  const handleTriggerCallFromChat = async (type: "audio" | "video") => {
-    if (!activeChat || !user || isInitiatingCall) return;
-    const isGroup = Boolean(activeChat.isGroup) || activeChat.id === "grupo_redon";
-    if (isGroup) {
-      if (isGroupCallAtLimit(groupParticipantCount)) {
-        toast.error("Límite de 4 usuarios alcanzado");
-        return;
-      }
-      try { await Haptics.impact({ style: ImpactStyle.Light }); } catch {}
-      await startGroupCall(type);
-      return;
-    }
+  const startOutgoingCall = async (opts: { partnerId: string; name: string; avatar: string; chatId: string; type: "audio" | "video" }) => {
+    const { partnerId, name: contactName, avatar: contactAvatar, chatId, type } = opts;
+    if (!user || isInitiatingCall) return;
     setIsInitiatingCall(true);
     try { await Haptics.impact({ style: ImpactStyle.Light }); } catch {}
-    logger.info('[WEBRTC SIGNALING] Starting outgoing call', { contactName: activeChat.name, type });
-
-    const partnerId = activeChat.partnerUserId || "";
+    logger.info('[WEBRTC SIGNALING] Starting outgoing call', { contactName, type });
 
     // Persist call in DB first to get a stable callId for WebRTC signaling
     let callId = "call_" + Date.now();
@@ -1689,7 +1679,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           caller_id: user.id,
           callee_id: partnerId,
           type,
-          chat_id: activeChat.id,
+          chat_id: chatId,
         });
         if (dbCall?.id) callId = dbCall.id;
         logger.info('[WEBRTC SIGNALING] Call inserted', { callId });
@@ -1701,16 +1691,16 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     // Show call overlay IMMEDIATELY so the caller always sees "Llamando..."
     setActiveCall({
       id: callId,
-      contactName: activeChat.name,
-      contactAvatar: activeChat.avatar,
+      contactName,
+      contactAvatar,
       type: type,
       status: "outgoing",
       durationSeconds: 0,
       isMuted: false,
       isVideoOff: false,
-      isGroup: activeChat.id === "grupo_redon",
+      isGroup: false,
       targetUserId: partnerId,
-      roomId: activeChat.id,
+      roomId: chatId,
       participantsLimit: 4,
     });
 
@@ -1808,6 +1798,36 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     setIsInitiatingCall(false);
   };
 
+  const handleTriggerCallFromChat = async (type: "audio" | "video") => {
+    if (!activeChat || !user || isInitiatingCall) return;
+    const isGroup = Boolean(activeChat.isGroup) || activeChat.id === "grupo_redon";
+    if (isGroup) {
+      if (isGroupCallAtLimit(groupParticipantCount)) {
+        toast.error("Límite de 4 usuarios alcanzado");
+        return;
+      }
+      try { await Haptics.impact({ style: ImpactStyle.Light }); } catch {}
+      await startGroupCall(type);
+      return;
+    }
+    await startOutgoingCall({ partnerId: activeChat.partnerUserId || "", name: activeChat.name, avatar: activeChat.avatar, chatId: activeChat.id, type });
+  };
+
+  const handleContactCall = async (contact: Contact, type: "audio" | "video") => {
+    if (!user || isInitiatingCall) return;
+    const partnerId = contact.contact_user_id;
+    if (!partnerId) return;
+    setContactActions(null);
+    const chatId = await handleStartChatFromSynced({
+      id: partnerId,
+      name: contact.name,
+      contactName: contact.name,
+      avatar_url: contact.avatar || "",
+      phone_number: contact.phone || "",
+    });
+    await startOutgoingCall({ partnerId, name: contact.name, avatar: contact.avatar || "", chatId: chatId || "", type });
+  };
+
   const handleContactAddedByQr = async (name: string, avatar: string) => {
     if (user) {
       try {
@@ -1824,45 +1844,49 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   const getChatByPartnerId = useCallback((partnerId: string) => {
     return chats.find(c => {
       const otherId = (c as any).partnerUserId;
-      return otherId ? otherId === partnerId : false;
+      return otherId ? otherId === partnerId && !c.isGroup : false;
     });
   }, [chats]);
 
-  const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }) => {
+  const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }): Promise<string | null> => {
     const displayName = profile.contactName || profile.name;
     const existing = getChatByPartnerId(profile.id);
     if (existing) {
       setSelectedChatId(existing.id);
       setCurrentScreen("chat_room");
-    } else {
-      try {
-        const chat = await createChatInSupabase({
-          name: displayName,
-          avatar: profile.avatar_url || "",
-          profile_id: profile.id,
-          admin_id: user?.id || "",
+      return existing.id;
+    }
+    try {
+      const chat = await createChatInSupabase({
+        name: displayName,
+        avatar: profile.avatar_url || "",
+        profile_id: profile.id,
+        admin_id: user?.id || "",
+      });
+      if (chat?.id) {
+        setChats(prev => {
+          if (prev.some(c => c.id === chat.id)) return prev;
+          return [{
+            id: chat.id,
+            name: displayName,
+            avatar: profile.avatar_url || "",
+            status: "online" as const,
+            lastMessage: "",
+            lastMessageTime: "",
+            unreadCount: 0,
+            partnerUserId: profile.id,
+            messages: [],
+          }, ...prev];
         });
-        if (chat?.id) {
-          setChats(prev => {
-            if (prev.some(c => c.id === chat.id)) return prev;
-            return [{
-              id: chat.id,
-              name: displayName,
-              avatar: profile.avatar_url || "",
-              status: "online" as const,
-              lastMessage: "",
-              lastMessageTime: "",
-              unreadCount: 0,
-              partnerUserId: profile.id,
-              messages: [],
-            }, ...prev];
-          });
-          setSelectedChatId(chat.id);
-          setCurrentScreen("chat_room");
-        }
-      } catch (e) {
-        logger.warn("Error starting chat", { error: e });
+        setSelectedChatId(chat.id);
+        setCurrentScreen("chat_room");
+        return chat.id;
       }
+      return null;
+    } catch (e: any) {
+      const msg = e?.message || e?.code || "Error desconocido";
+      showToast(`No se pudo crear el chat: ${msg}`);
+      return null;
     }
   };
 
@@ -1955,7 +1979,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     if (!user?.id) return;
     try {
       await deleteContact(contactId);
-      await refreshContacts();
+      await refreshContacts(true);
       showToast("Contacto eliminado");
     } catch (e) {
       logger.warn("[CONTACT] Delete error", { error: e });
@@ -2331,6 +2355,70 @@ try {
           }}
           onSkip={() => setCallRating(null)}
         />
+      )}
+
+      {/* CONTACT ACTIONS MODAL */}
+      {contactActions && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-6"
+          onClick={() => setContactActions(null)}
+        >
+          <div
+            className="bg-white rounded-3xl shadow-2xl w-full max-w-xs overflow-hidden animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 pt-5 pb-3 text-center">
+              <div className="w-14 h-14 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 mx-auto flex items-center justify-center shadow-sm">
+                {contactActions.avatar ? (
+                  <CachedImage src={contactActions.avatar} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-white font-black text-sm">{contactActions.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)}</span>
+                )}
+              </div>
+              <p className="text-sm font-bold text-slate-800 mt-2 truncate">{contactActions.name}</p>
+              <p className="text-[10px] text-teal-600 font-bold">En Red On</p>
+            </div>
+            <div className="px-4 pb-4 space-y-2">
+              <button
+                onClick={() => {
+                  const c = contactActions;
+                  setContactActions(null);
+                  handleStartChatFromSynced({
+                    id: c.contact_user_id!,
+                    name: c.name,
+                    contactName: c.name,
+                    avatar_url: c.avatar || "",
+                    phone_number: c.phone || "",
+                  });
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded-2xl text-[12px] font-bold transition-all cursor-pointer"
+              >
+                <MessageCircle className="w-4 h-4" />
+                Chatear con {contactActions.name.split(" ")[0]}
+              </button>
+              <button
+                onClick={() => handleContactCall(contactActions, "video")}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-2xl text-[12px] font-bold transition-all cursor-pointer"
+              >
+                <Video className="w-4 h-4" />
+                Videollamada
+              </button>
+              <button
+                onClick={() => handleContactCall(contactActions, "audio")}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-2xl text-[12px] font-bold transition-all cursor-pointer"
+              >
+                <Phone className="w-4 h-4" />
+                Llamada
+              </button>
+              <button
+                onClick={() => setContactActions(null)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-2xl text-[11px] font-bold transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 1. WELCOME SCREEN / REGISTER WINDOW */}
@@ -2743,22 +2831,11 @@ try {
                     contacts={dedupedContacts}
                     onSelectContact={(contact) => {
                       if (!contact.contact_user_id) return;
-                      const existing = getChatByPartnerId(contact.contact_user_id);
-                      if (existing) {
-                        setSelectedChatId(existing.id);
-                        setCurrentScreen("chat_room");
-                      } else {
-                        handleStartChatFromSynced({
-                          id: contact.contact_user_id,
-                          name: contact.name,
-                          contactName: contact.name,
-                          avatar_url: contact.avatar || "",
-                          phone_number: contact.phone || "",
-                        });
-                      }
+                      setContactActions(contact);
                     }}
                     onAddContact={() => setCurrentScreen("add_contact_manual")}
                     onDeleteContact={handleDeleteContact}
+                    currentUserId={user?.id || ""}
                   />
                   </LazyPanel>
                 </div>

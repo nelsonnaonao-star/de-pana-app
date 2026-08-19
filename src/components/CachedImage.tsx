@@ -19,6 +19,16 @@ interface CachedImageProps {
 // never show a placeholder when the same URL was already resolved this session.
 const memoryCache = new Map<string, string>();
 
+// URLs que fallaron al cargar en esta sesión. Se muestran directamente como
+// fallback de iniciales (verdes) en lugar de intentar una y otra vez, que era
+// lo que producía el parpadeo del avatar cuando el contacto no tiene foto o la
+// URL quedó rota (foto borrada/token expirado).
+const brokenSet = new Set<string>();
+// Timestamp del último error por URL para throttle de reintentos silenciosos.
+const lastErrorAt = new Map<string, number>();
+// Mínima separación entre reintentos de una misma URL rota.
+const RETRY_GAP_MS = 15000;
+
 function getInitials(name: string): string {
   return name
     .split(" ")
@@ -83,29 +93,25 @@ async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<Response
   }
 }
 
-async function saveToCache(fileName: string, url: string): Promise<void> {
+// Descarga la imagen y la devuelve como data URL. Devuelve null si la URL está
+// rota, sin red, o el fetch falla. La clave: NO se renderiza un <img> con la
+// URL remota sin antes verificar que descarga correctamente (eso eliminaba el
+// parpadeo: el <img> fallaba y se alternaba verde ↔ gris en cada reintento).
+async function fetchAsDataUrl(url: string): Promise<string | null> {
   try {
     const resp = await fetchWithTimeout(url);
-    if (!resp.ok) return;
+    if (!resp.ok) return null;
     const blob = await resp.blob();
     const reader = new FileReader();
-    const base64 = await new Promise<string>((resolve) => {
-      reader.onloadend = () => {
-        const result = reader.result as string;
-        resolve(result.split(",")[1] || "");
-      };
+    const dataUrl = await new Promise<string | null>((resolve) => {
+      reader.onloadend = () =>
+        resolve(typeof reader.result === "string" ? reader.result : null);
       reader.readAsDataURL(blob);
     });
-    if (base64) {
-      await Filesystem.writeFile({
-        path: `image_cache/${fileName}`,
-        data: base64,
-        directory: Directory.Data,
-      });
-    }
+    return dataUrl;
   } catch (e) {
-    logger.warn("[CachedImage] saveToCache failed", { error: e, fileName });
-    // Silently fail — next load will try again
+    logger.warn("[CachedImage] fetch failed", { error: e, url });
+    return null;
   }
 }
 
@@ -119,9 +125,10 @@ export default function CachedImage({
   onError,
   onClick,
 }: CachedImageProps) {
-  const [displaySrc, setDisplaySrc] = useState<string | null>(
-    () => memoryCache.get(src) ?? null
-  );
+  const [displaySrc, setDisplaySrc] = useState<string | null>(() => {
+    if (!src || brokenSet.has(src)) return null;
+    return memoryCache.get(src) ?? null;
+  });
   const [hasError, setHasError] = useState(false);
   const [retryTick, setRetryTick] = useState(0);
   const isCapacitor = Capacitor.isNativePlatform();
@@ -129,45 +136,110 @@ export default function CachedImage({
 
   const initials = useMemo(() => alt ? getInitials(alt) : "", [alt]);
 
+  // Cuando cambia `src`, restablece el estado a lo que ya se sabe en esta sesión
+  // (caché o URL rota) para no mostrar la imagen del `src` anterior.
   useEffect(() => {
-    if (!src) return;
-    setHasError(false);
+    setDisplaySrc(brokenSet.has(src) ? null : (memoryCache.get(src) ?? null));
+    setHasError(!src || brokenSet.has(src));
+  }, [src]);
+
+  useEffect(() => {
+    if (!src) {
+      // Sin foto: fallback estable de iniciales. Nunca intentar cargar nada.
+      setHasError(true);
+      setDisplaySrc(null);
+      return;
+    }
+    // URL ya marcada como rota en esta sesión: no volver a intentar (evita el
+    // parpadeo). El retry solo ocurre con cooldown vía network recovery.
+    if (brokenSet.has(src)) {
+      setHasError(true);
+      setDisplaySrc(null);
+      return;
+    }
+
+    const sessionValue = memoryCache.get(src);
+    if (sessionValue) {
+      setHasError(false);
+      setDisplaySrc(sessionValue);
+      return;
+    }
 
     if (!isCapacitor) {
+      // Web: el <img> carga directamente; un error cae en handleError.
       memoryCache.set(src, src);
       setDisplaySrc(src);
+      setHasError(false);
       return;
     }
 
     const ext = getExtension(src);
     const fileName = `${hashUrl(src)}.${ext}`;
-
     let cancelled = false;
 
     (async () => {
       const cached = await getCachedFile(fileName);
       if (cancelled) return;
-
       if (cached) {
         memoryCache.set(src, cached);
         setDisplaySrc(cached);
+        setHasError(false);
+        return;
+      }
+      // Verificar la URL ANTES de renderizarla: si está rota, el fallback verde
+      // se mantiene y no se llega a montar un <img> que falle.
+      const dataUrl = await fetchAsDataUrl(src);
+      if (cancelled) return;
+      if (dataUrl) {
+        const base64 = dataUrl.split(",")[1] || "";
+        if (base64) {
+          await Filesystem.writeFile({
+            path: `image_cache/${fileName}`,
+            data: base64,
+            directory: Directory.Data,
+          }).catch(() => {});
+        }
+        memoryCache.set(src, dataUrl);
+        setDisplaySrc(dataUrl);
+        setHasError(false);
       } else {
-        memoryCache.set(src, src);
-        setDisplaySrc(src);
-        saveToCache(fileName, src);
+        brokenSet.add(src);
+        lastErrorAt.set(src, Date.now());
+        memoryCache.delete(src);
+        setDisplaySrc(null);
+        setHasError(true);
       }
     })();
 
     return () => { cancelled = true; };
   }, [src, isCapacitor, retryTick]);
 
-  // Si la imagen falló (p. ej. sin internet), reintentar automáticamente cuando
-  // vuelva la red — el evento `online` de window es poco fiable en el WebView de
-  // Android, así que también escuchamos el plugin de Capacitor.
+  const handleError = () => {
+    const current = memoryCache.get(src);
+    if (current?.startsWith("data:")) {
+      // Un dato cacheado que por alguna razón falló: olvidarlo y reintentar.
+      memoryCache.delete(src);
+    } else {
+      brokenSet.add(src);
+      lastErrorAt.set(src, Date.now());
+      memoryCache.delete(src);
+    }
+    setHasError(true);
+    setDisplaySrc(null);
+    onError?.();
+  };
+
+  // Reintento SILENCIOSO al recuperar red, con cooldown por URL: no se apaga el
+  // fallback ni se monta un <img> de inmediato. Simplemente se limpia la marca
+  // de rota y el efecto principal vuelve a verificar; si sigue rota, el verde
+  // se mantiene sin parpadear, y si ya responde, se muestra la foto.
   useEffect(() => {
-    if (!hasError) return;
+    if (!hasError || !src || !brokenSet.has(src)) return;
     const tryAgain = () => {
-      setHasError(false);
+      const last = lastErrorAt.get(src) ?? 0;
+      if (Date.now() - last < RETRY_GAP_MS) return;
+      brokenSet.delete(src);
+      memoryCache.delete(src);
       setRetryTick((t) => t + 1);
     };
     window.addEventListener("online", tryAgain);
@@ -188,16 +260,12 @@ export default function CachedImage({
         netHandler = null;
       }
     };
-  }, [hasError, isCapacitor]);
-
-  const handleError = () => {
-    setHasError(true);
-    setDisplaySrc(null);
-    onError?.();
-  };
+  }, [hasError, isCapacitor, src, retryTick]);
 
   if (!displaySrc) {
-    if (hasError && initials) {
+    if (initials) {
+      // Fallback de iniciales SIEMPRE visible (sin foto, URL rota o en carga):
+      // no alternar a gris/pulse evita el parpadeo del avatar.
       return (
         <div
           className={`${className} bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center`}

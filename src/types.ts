@@ -4,7 +4,7 @@ export interface Message {
   text?: string;
   timestamp: string;
   rawCreatedAt?: string;
-  type: "text" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
+  type: "text" | "system" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   mediaUrl?: string;
   fileName?: string;
   fileSize?: string;
@@ -27,6 +27,10 @@ export interface Message {
   localVideoUrl?: string;
   synced?: boolean;
   chatId?: string;
+  sender_id?: string;
+  senderId?: string;
+  client_id?: string;
+  clientId?: string;
   isEphemeral?: boolean;
   ephemeralExpiresAt?: string;
 }

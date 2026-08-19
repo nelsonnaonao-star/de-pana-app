@@ -124,7 +124,7 @@ interface SupabaseContextType {
   completePasswordReset: (newPassword: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
   refreshChats: () => Promise<void>;
-  refreshContacts: () => Promise<void>;
+  refreshContacts: (allowEmpty?: boolean) => Promise<void>;
   refreshCalls: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -849,15 +849,15 @@ const refreshChats = async () => {
     chatRepo.saveChats(user.id, withMessages);
   };
 
-  const refreshContacts = async () => {
+  const refreshContacts = async (allowEmpty = false) => {
     if (!user) return;
     let cont = await getContacts(user.id);
     // ante un fetch vacío puntual (red inestable) se conserva la última lista buena
-    if (cont.length === 0) {
+    if (cont.length === 0 && !allowEmpty) {
       const lastGood = lastKnownContacts.get(user.id);
       if (lastGood && lastGood.length > 0) cont = lastGood;
     }
-    const wipeGuard = cont.length === 0 && contactsRef.current.length > 0;
+    const wipeGuard = !allowEmpty && cont.length === 0 && contactsRef.current.length > 0;
     if (wipeGuard) {
       logger.warn("[SUPABASE] refreshContacts returned empty — keeping cached contacts");
       return;

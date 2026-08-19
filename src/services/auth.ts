@@ -32,32 +32,24 @@ async function trySignIn(email: string, password: string) {
 
 export async function login(identifier: string, password: string) {
   const input = identifier.toLowerCase().trim().replace(/^@/, "");
-  const cleanDigits = input.replace(/\D/g, "");
 
   logger.debug("[LOGIN] Buscando perfil para", { input });
 
   let profile = null;
 
-  if (cleanDigits.length >= 4) {
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("id, username, phone_number, name, avatar_url, bio")
-      .or(`username.eq.${input},phone_digits.eq.${cleanDigits}`)
-      .limit(1);
-
-    if (profiles && profiles.length > 0) {
-      profile = profiles[0];
+  try {
+    const res = await authFetch(apiUrl("/api/auth/lookup-profile"), {
+      method: "POST",
+      body: JSON.stringify({ identifier: input }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      profile = data?.profile || null;
+    } else {
+      logger.debug("[LOGIN] lookup-profile respondió", { status: res.status });
     }
-
-    if (!profile) {
-      const last7 = cleanDigits.slice(-7);
-      const { data: fallback } = await supabase
-        .from("profiles")
-        .select("id, username, phone_number, name, avatar_url, bio")
-        .like("phone_digits", `%${last7}`)
-        .limit(1);
-      if (fallback && fallback.length > 0) profile = fallback[0];
-    }
+  } catch (e) {
+    logger.debug("[LOGIN] lookup-profile falló", { error: e });
   }
 
   if (!profile) {

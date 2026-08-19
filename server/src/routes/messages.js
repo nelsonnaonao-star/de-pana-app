@@ -22,7 +22,7 @@ const reactLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const VALID_MESSAGE_TYPES = ['text', 'image', 'sticker', 'video', 'audio', 'file', 'voice_note', 'video_note', 'poll', 'location'];
+const VALID_MESSAGE_TYPES = ['text', 'system', 'image', 'sticker', 'video', 'audio', 'file', 'voice_note', 'video_note', 'poll', 'location'];
 const MAX_TEXT_LENGTH = 5000;
 const MAX_EMOJI_LENGTH = 10;
 

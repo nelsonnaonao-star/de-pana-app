@@ -130,11 +130,17 @@ router.post('/add-participants', async (req, res) => {
 
     const { data: chat } = await supabaseAdmin
       .from('chats')
-      .select('id, is_group')
+      .select('id, is_group, admin_id')
       .eq('id', chat_id)
       .single();
     if (!chat) {
       return res.status(404).json({ ok: false, error: 'Chat not found' });
+    }
+    if (!chat.is_group) {
+      return res.status(400).json({ ok: false, error: 'Solo se pueden agregar participantes a chats grupales' });
+    }
+    if (chat.admin_id !== req.userId && req.userRole !== 'service_role') {
+      return res.status(403).json({ ok: false, error: 'Solo el admin del grupo puede agregar participantes' });
     }
 
     const rows = member_ids.map(profile_id => ({ chat_id, profile_id }));

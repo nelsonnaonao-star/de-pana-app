@@ -2,9 +2,30 @@ import { db } from "../DatabaseService";
 import { getItem, setItem, removeItem, getKeys } from "../../storageService";
 import type { Message } from "../../../types";
 import { logger } from "../../../lib/logger";
+import { editMessage as apiEditMessage } from "../../messages";
 
 const CACHE_PREFIX = "redon_cache_msgs_";
 const MAX_CACHED = 200;
+
+// Edits encolados para mensajes cuyo temp aún no se reconcilió (se aplican en
+// reconcileTemp). Caché en memoria (fuente de verdad del proceso) + respaldo en
+// idb para sobrevivir a un reload entre medias. La caché elimina la carrera:
+// registerPendingEdit agrega de forma síncrona antes de persistir, así un
+// reconcileTemp concurrente SIEMPRE ve el edit.
+const PENDING_EDIT_KEY = "redon_pending_edits_v1";
+type PendingEdit = { chatId: string; tempId: string; newText: string };
+let pendingEditsCache: PendingEdit[] | null = null;
+
+async function getPendingEdits(): Promise<PendingEdit[]> {
+  if (pendingEditsCache) return pendingEditsCache;
+  try {
+    const raw = await getItem<PendingEdit[]>(PENDING_EDIT_KEY);
+    pendingEditsCache = Array.isArray(raw) ? raw : [];
+  } catch {
+    pendingEditsCache = [];
+  }
+  return pendingEditsCache;
+}
 
 function toRow(msg: Message, chatId: string): Record<string, unknown> {
   return {
@@ -35,14 +56,26 @@ function toRow(msg: Message, chatId: string): Record<string, unknown> {
     poster_url: msg.posterUrl || null,
     local_video_url: msg.localVideoUrl || null,
     chat_id: chatId,
+    sender_id: msg.sender_id || msg.senderId || null,
+    client_id: msg.client_id || msg.clientId || null,
     payload: JSON.stringify(msg),
   };
 }
 
 function fromRow(row: Record<string, unknown>): Message {
+  const rowSenderId = (row.sender_id as string) || undefined;
+  const rowClientId = (row.client_id as string) || undefined;
   if (row.payload && typeof row.payload === "string") {
     try {
       const parsed = JSON.parse(row.payload) as Message;
+      // Hidratar desde las columnas (fuente de verdad del DTO): si el payload
+      // quedó desactualizado (p. ej. un saveMessages sin sender_id), las
+      // columnas garantizan que el envío no pierda datos críticos.
+      if (rowSenderId) parsed.sender_id = rowSenderId;
+      if (rowClientId) {
+        parsed.client_id = rowClientId;
+        parsed.clientId = rowClientId;
+      }
       return parsed;
     } catch (e) {
       logger.warn("[MessageRepo] Failed to parse payload", { error: e });
@@ -88,7 +121,7 @@ const INSERT_COLS = [
   "media_url","file_name","file_size","duration","reactions",
   "poll_question","poll_options","latitude","longitude","location_name",
   "status","forwarded","edited","synced","reply_to_id","reply_to_text",
-  "reply_to_sender","price","poster_url","local_video_url","chat_id","payload",
+  "reply_to_sender","price","poster_url","local_video_url","chat_id","sender_id","client_id","payload",
 ];
 
 const INSERT_PLACEHOLDERS = INSERT_COLS.map(() => "?").join(",");
@@ -101,19 +134,42 @@ function rowValues(msg: Message, chatId: string): unknown[] {
 
 export class MessageRepository {
   async getMessages(chatId: string): Promise<Message[]> {
+    let sqliteRows: Message[] | null = null;
     if (db.ready) {
       try {
         const rows = await db.query(
           "SELECT * FROM messages WHERE chat_id = ? ORDER BY raw_created_at ASC",
           [chatId]
         );
-        return rows.map(fromRow);
+        sqliteRows = rows.map(fromRow);
       } catch (e) {
         logger.warn("[MessageRepo] SQLite error, fallback", { error: e });
       }
     }
+    // Caché local (idb): fuente secundaria SIEMPRE escrita por upsertMessage.
+    // SQLite puede no tener los pendientes si no estaba listo al enviar (o si
+    // executeSet falló de forma transitoria). Fusionar garantiza que un mensaje
+    // local/pendiente jamás desaparezca al reabrir la app.
     const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
-    return raw || [];
+    const cache = Array.isArray(raw) ? raw : [];
+    if (sqliteRows !== null) {
+      const seen = new Set(sqliteRows.map((m) => m.id));
+      const pendientes = cache.filter(
+        (m) =>
+          !seen.has(m.id) &&
+          (m.synced === false ||
+            m.status === "sending" ||
+            m.status === "error")
+      );
+      const merged = [...sqliteRows, ...pendientes];
+      merged.sort((a, b) => {
+        const ta = a.rawCreatedAt || a.timestamp || "";
+        const tb = b.rawCreatedAt || b.timestamp || "";
+        return ta < tb ? -1 : ta > tb ? 1 : 0;
+      });
+      return merged;
+    }
+    return cache;
   }
 
   async saveMessages(chatId: string, messages: Message[]): Promise<void> {
@@ -124,6 +180,10 @@ export class MessageRepository {
 
     if (db.ready) {
       try {
+        // Preservar sender_id/client_id de filas pendientes ya guardadas: el
+        // estado React que llega aquí NO incluye sender_id, y un INSERT OR
+        // REPLACE lo reemplazaría por NULL → el flush perdería el DTO.
+        await this.mergePendingMetadata(chatId, batch);
         await db.executeSet(
           batch.map((msg) => ({
             statement: INSERT_SQL,
@@ -134,6 +194,10 @@ export class MessageRepository {
         logger.warn("[MessageRepo] SQLite error, fallback", { error: e });
       }
     }
+    // Restaurar metadatos desde la caché idb también en plataformas sin SQLite
+    // (web): sin esto el estado React (sin clientId) pisaba la fila y el envío
+    // perdía su client_id → el reintento iba sin idempotencia → duplicados.
+    await this.restoreMetadataFromCache(chatId, batch);
     // Mezclar con los pendientes ya guardados (temp/msg) que el nuevo lote NO
     // incluye (ej. refresco del servidor): un envío en cola jamás se borra de
     // la caché local por sobrescritura.
@@ -191,13 +255,74 @@ export class MessageRepository {
     }
   }
 
+  /**
+   * Re-inyecta sender_id/client_id a los mensajes del lote que los hayan perdido
+   * (el estado React no los incluye), leyendo las filas pendientes ya guardadas
+   * en SQLite. Evita que un INSERT OR REPLACE borre el DTO de un envío en cola.
+   */
+  private async mergePendingMetadata(chatId: string, batch: Message[]): Promise<void> {
+    const tempIds = batch
+      .filter((m) => m.id && (!m.sender_id || !m.clientId))
+      .map((m) => m.id as string);
+    if (tempIds.length === 0) return;
+    try {
+      const rows = await db.query(
+        `SELECT id, sender_id, client_id FROM messages WHERE chat_id = ? AND id IN (${tempIds.map(() => "?").join(",")})`,
+        [chatId, ...tempIds]
+      );
+      const meta = new Map(rows.map((r) => [r.id, r]));
+      for (const m of batch) {
+        if (!m.id) continue;
+        const row = meta.get(m.id);
+        if (!row) continue;
+        if (!m.sender_id && row.sender_id) m.sender_id = row.sender_id as string;
+        if (!m.clientId && row.client_id) {
+          m.clientId = row.client_id as string;
+          m.client_id = row.client_id as string;
+        }
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] mergePendingMetadata error", { error: e });
+    }
+  }
+
+  /**
+   * Restaura client_id/sender_id en el lote leyendo la caché idb (última fuente
+   * con metadatos, independiente de SQLite). Sin esto, saveMessages sobreescribía
+   * la fila de un envío en cola con una copia del estado React SIN client_id.
+   */
+  private async restoreMetadataFromCache(chatId: string, batch: Message[]): Promise<void> {
+    const missing = batch.filter((m) => m.id && (!m.clientId || !m.sender_id));
+    if (missing.length === 0) return;
+    try {
+      const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+      if (!Array.isArray(raw)) return;
+      const byId = new Map<string, Message>();
+      for (const c of raw) {
+        if (c && c.id) byId.set(c.id, c);
+      }
+      for (const m of missing) {
+        const cached = m.id ? byId.get(m.id) : undefined;
+        if (!cached) continue;
+        if (!m.sender_id && cached.sender_id) m.sender_id = cached.sender_id;
+        if (!m.clientId && cached.clientId) {
+          m.clientId = cached.clientId;
+          m.client_id = cached.client_id;
+        }
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] restoreMetadataFromCache error", { error: e });
+    }
+  }
+
   async getAllUnsynced(): Promise<{ chatId: string; message: Message }[]> {
+    let fromSqlite: { chatId: string; message: Message }[] | null = null;
     if (db.ready) {
       try {
         const rows = await db.query(
           "SELECT * FROM messages WHERE synced = 0 ORDER BY raw_created_at ASC"
         );
-        return rows.map((r) => ({
+        fromSqlite = rows.map((r) => ({
           chatId: (r.chat_id as string) || "",
           message: fromRow(r),
         }));
@@ -205,8 +330,10 @@ export class MessageRepository {
         logger.warn("[MessageRepo] getAllUnsynced SQLite error", { error: e });
       }
     }
-    // Fallback sin SQLite: barrer los cachés locales (idb) buscando synced = false.
-    const unsynced: { chatId: string; message: Message }[] = [];
+    // Barrer los cachés locales (idb) buscando synced = false. Es la red de
+    // seguridad: si el temp solo llegó a idb (SQLite no listo al enviar), el
+    // flush igual lo sube al recuperar la señal. Dedupe por id contra SQLite.
+    const fromIdb: { chatId: string; message: Message }[] = [];
     try {
       const cacheKeys = await getKeys();
       for (const key of cacheKeys) {
@@ -215,14 +342,24 @@ export class MessageRepository {
         if (!Array.isArray(raw)) continue;
         for (const m of raw) {
           if (m && m.synced === false) {
-            unsynced.push({ chatId: key.slice(CACHE_PREFIX.length), message: m });
+            fromIdb.push({ chatId: key.slice(CACHE_PREFIX.length), message: m });
           }
         }
       }
     } catch (e) {
       logger.warn("[MessageRepo] getAllUnsynced fallback error", { error: e });
     }
-    return unsynced;
+
+    if (fromSqlite !== null) {
+      const seen = new Set(fromSqlite.map((r) => r.message.id));
+      for (const item of fromIdb) {
+        if (!seen.has(item.message.id)) {
+          fromSqlite.push(item);
+        }
+      }
+      return fromSqlite;
+    }
+    return fromIdb;
   }
 
   async markSynced(msgId: string): Promise<void> {
@@ -283,6 +420,54 @@ export class MessageRepository {
       }
     } catch (e) {
       logger.warn("[MessageRepo] reconcileTemp cache error", { error: e });
+    }
+    // Si el usuario editó el mensaje mientras su envío seguía en curso (temp sin
+    // reconciliar), aplicar el edit pendiente sobre la fila ya confirmada.
+    await this.consumePendingEdit(chatId, tempId, saved);
+  }
+
+  /**
+   * Encola un edit de texto para un mensaje que aún no tiene id real (temp en
+   * cola de envío). Se aplica automáticamente en reconcileTemp cuando el temp
+   * se confirma, tanto localmente como en el servidor.
+   */
+  async registerPendingEdit(chatId: string, tempId: string, newText: string): Promise<void> {
+    try {
+      const list = await getPendingEdits();
+      if (!list.some((e) => e.chatId === chatId && e.tempId === tempId)) {
+        list.push({ chatId, tempId, newText });
+        await setItem(PENDING_EDIT_KEY, list);
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] registerPendingEdit error", { error: e });
+    }
+  }
+
+  /**
+   * Aplica (y descarta) el edit pendiente de un temp recién reconciliado:
+   * reescribe text/edited en la fila confirmada (SQLite + idb) y dispara el
+   * edit en el servidor para que el destinatario también vea el texto corregido.
+   */
+  private async consumePendingEdit(chatId: string, tempId: string, saved: Message): Promise<void> {
+    let newText: string | undefined;
+    try {
+      const list = await getPendingEdits();
+      const idx = list.findIndex((e) => e.chatId === chatId && e.tempId === tempId);
+      if (idx === -1) return;
+      newText = list[idx].newText;
+      list.splice(idx, 1);
+      await setItem(PENDING_EDIT_KEY, list);
+    } catch (e) {
+      logger.warn("[MessageRepo] consumePendingEdit read error", { error: e });
+      return;
+    }
+    if (!newText || !saved?.id) return;
+    const edited: Message = { ...saved, text: newText, edited: true };
+    await this.upsertMessage(chatId, edited);
+    try {
+      await apiEditMessage(saved.id, newText);
+    } catch (e) {
+      logger.warn("[MessageRepo] consumePendingEdit server error", { error: e });
     }
   }
 

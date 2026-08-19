@@ -200,14 +200,14 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
         </div>
       )}
 
-      {editorTab === "text" && isStateMode && (
+      {editorTab === "text" && (
         <div className="space-y-3 animate-fade-in text-left">
           <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">Texto Libre</span>
           <div className="space-y-2 bg-black/20 p-2.5 rounded-xl border border-white/5">
             <div className="space-y-1">
               <span className="text-[7px] text-slate-400 font-bold uppercase">Escribe lo que quieras</span>
               <textarea value={bannerTitle} onChange={(e) => setBannerTitle(e.target.value)} maxLength={120} rows={3}
-                placeholder="Escribe tu mensaje libre aquí..."
+                placeholder="Escribe tu texto aquí..."
                 className="w-full bg-slate-950 border border-white/10 text-[10px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-bold resize-none" />
             </div>
             <div className="space-y-1 pt-1">
@@ -222,66 +222,6 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
           </div>
 
           <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider block pt-1">Animación del Texto</span>
-          <div className="grid grid-cols-2 gap-1.5">
-            {ANIMATION_PRESETS.map((anim) => {
-              const isSelected = textAnimation === anim.id;
-              return (
-                <button key={anim.id} type="button" onClick={() => setTextAnimation(anim.id)}
-                  className={`py-2 px-2.5 rounded-xl text-left border text-[8.5px] font-bold transition-all cursor-pointer ${
-                    isSelected ? "bg-teal-950/60 border-teal-400 text-white" : "bg-black/20 border-white/5 text-slate-400 hover:bg-black/35"
-                  }`}>
-                  {anim.name}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {editorTab === "text" && !isStateMode && (
-        <div className="space-y-3 animate-fade-in text-left">
-          <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider">Contenido de Textos</span>
-          <div className="space-y-2 bg-black/20 p-2.5 rounded-xl border border-white/5">
-            <div className="space-y-1">
-              <span className="text-[7px] text-slate-400 font-bold uppercase">Título Slogan</span>
-              <input type="text" value={bannerTitle} onChange={(e) => setBannerTitle(e.target.value)} maxLength={18}
-                className="w-full bg-slate-950 border border-white/10 text-[9px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-bold" />
-            </div>
-            <div className="space-y-1">
-              <span className="text-[7px] text-slate-400 font-bold uppercase">Producto / Detalle Comercial</span>
-              <input type="text" value={bannerProduct} onChange={(e) => setBannerProduct(e.target.value)} maxLength={32}
-                className="w-full bg-slate-950 border border-white/10 text-[9px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-medium" />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <span className="text-[7px] text-slate-400 font-bold uppercase">Precio Oficial</span>
-                <input type="text" value={bannerPrice} onChange={(e) => setBannerPrice(e.target.value)} maxLength={10}
-                  className="w-full bg-slate-950 border border-white/10 text-[9px] px-2 py-1.5 rounded-lg outline-none focus:border-teal-500 font-mono text-emerald-400 font-bold" />
-              </div>
-              <div className="space-y-1">
-                <div className="flex justify-between items-center text-[7px] text-slate-400 font-bold uppercase">
-                  <span>Escala Texto</span>
-                  <span className="font-mono text-teal-400">{textSizePercent}%</span>
-                </div>
-                <input type="range" min="80" max="300" step="5" value={textSizePercent}
-                  onChange={(e) => setTextSizePercent(Number(e.target.value))} className="w-full accent-teal-500 cursor-pointer mt-1" />
-              </div>
-            </div>
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                onClick={() => setShowWhatsApp(!showWhatsApp)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[8px] font-bold transition-all cursor-pointer ${
-                  showWhatsApp ? "bg-teal-950/60 border-teal-400 text-teal-300" : "bg-black/20 border-white/5 text-slate-400 hover:bg-black/35"
-                }`}
-              >
-                <span>{showWhatsApp ? "✓" : "+"}</span>
-                <span>Badge WhatsApp</span>
-              </button>
-              <span className="text-[6.5px] text-slate-500">Arrastra los textos en la vista previa para moverlos</span>
-            </div>
-          </div>
-
-          <span className="text-[8px] font-black uppercase text-teal-400 tracking-wider block pt-1">Animación del Título Comercial</span>
           <div className="grid grid-cols-2 gap-1.5">
             {ANIMATION_PRESETS.map((anim) => {
               const isSelected = textAnimation === anim.id;

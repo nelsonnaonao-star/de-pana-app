@@ -24,7 +24,7 @@ function cleanPhone(phone: string): string {
 // Suffix of the last N digits, used for country-code-agnostic matching. Both
 // "573001234567" (+57) and "3001234567" (local) share the same last-10 digits,
 // so contacts match regardless of how the number was stored.
-function lastDigits(n: string, count: number): string {
+export function lastDigits(n: string, count: number): string {
   return n.length > count ? n.slice(-count) : n;
 }
 

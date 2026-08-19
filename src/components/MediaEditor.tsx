@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Sparkles, ImageIcon, Video, Music, Volume2, 
-  Check, Play, Pause, Phone, X, Award, Zap,
+  Check, Play, Pause, X, Award, Zap,
   Compass, Sliders, Type, Tag, Upload, Download
 } from "lucide-react";
 import { BusinessFlyer } from "./BusinessPanel";
@@ -510,28 +510,9 @@ export default function MediaEditor({
           ) : (
             <>
           {bannerTitle && (
-            <span className={`inline-block text-[7px] font-black bg-rose-600 text-white px-2 py-0.5 rounded uppercase tracking-wider shadow-md ${getSelectedAnimClass()}`}>
+            <span className={`inline-block text-[14px] font-black text-white tracking-tight leading-tight uppercase drop-shadow-lg text-left ${getSelectedAnimClass()}`}>
               {bannerTitle}
             </span>
-          )}
-          {bannerProduct && (
-            <h4 className="text-[10px] font-black text-white tracking-tight leading-tight uppercase drop-shadow-md">
-              {bannerProduct}
-            </h4>
-          )}
-          {(bannerPrice || showWhatsApp) && (
-            <div className="flex justify-between items-center pt-1 border-t border-white/15">
-              {bannerPrice && (
-                <span className="text-[11px] font-black text-emerald-400 font-mono tracking-tight leading-none">
-                  {bannerPrice}
-                </span>
-              )}
-              {showWhatsApp && (
-                <span className="text-[6px] text-teal-300 font-bold bg-teal-950/80 border border-teal-500/30 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
-                  <Phone className="w-2 h-2 text-teal-400 fill-teal-400" /> WhatsApp
-                </span>
-              )}
-            </div>
           )}
             </>
           )}

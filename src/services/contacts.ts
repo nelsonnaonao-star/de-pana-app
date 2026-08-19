@@ -161,7 +161,25 @@ export async function addContact(
 }
 
 export async function deleteContact(contactId: string) {
-  const { error } = await supabase.from("contacts").delete().eq("id", contactId);
+  const { data: existing } = await supabase
+    .from("contacts")
+    .select("id, user_id, contact_user_id, name, phone")
+    .eq("id", contactId)
+    .single();
+  if (!existing) return;
+
+  // Borra TODAS las filas de la misma persona (dedup por contact_user_id
+  // o por name+phone) para que el contacto no "siga apareciendo" cuando
+  // estaba duplicado en la lista.
+  let query = supabase.from("contacts").delete().eq("user_id", existing.user_id);
+  if (existing.contact_user_id) {
+    query = query.eq("contact_user_id", existing.contact_user_id);
+  } else if (existing.phone) {
+    query = query.eq("name", existing.name).eq("phone", existing.phone);
+  } else {
+    query = query.eq("name", existing.name);
+  }
+  const { error } = await query;
   if (error) throw error;
 }
 

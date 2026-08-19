@@ -96,14 +96,22 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
     try {
       await addGroupMember(chatId, profileId);
 
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("name, avatar_url")
+        .eq("id", profileId)
+        .single();
+
+      const memberName = profile?.name || "Nuevo participante";
+
       // Insert system message so the chat appears in the new member's list and triggers push
-      const systemText = `Nuevo miembro agregado`;
+      const systemText = `👤 ${memberName} se unió al grupo`;
       try {
         await supabase.from("messages").insert({
           chat_id: chatId,
           sender_id: uid,
           text: systemText,
-          type: "text",
+          type: "system",
           status: "sent",
           created_at: new Date().toISOString(),
           edited: false,
@@ -129,11 +137,6 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
         logger.error("[CHAT] Failed to insert system message", { error: e });
       }
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("name, avatar_url")
-        .eq("id", profileId)
-        .single();
       if (profile) {
         setGroupMembers(prev => [...prev, { profile_id: profileId, name: profile.name, avatar: profile.avatar_url }]);
       }

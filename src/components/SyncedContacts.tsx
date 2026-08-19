@@ -3,7 +3,7 @@ import {
   ArrowLeft, Users, RefreshCw, Smartphone, UserPlus,
   ChevronRight, Loader2, Search, X
 } from "lucide-react";
-import { syncDeviceContacts, searchByPhone, MatchedProfile } from "../services/device-contacts";
+import { readDeviceContacts, matchContactsWithSupabase, searchByPhone, MatchedProfile } from "../services/device-contacts";
 import { getContacts, addContact } from "../services/contacts";
 import { digitsOnly } from "../utils/phone";
 
@@ -47,7 +47,8 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
     setSyncError("");
     setAddedCount(0);
     try {
-      const matched = await syncDeviceContacts();
+      const deviceList = await readDeviceContacts();
+      const matched = await matchContactsWithSupabase(deviceList);
       setContacts(matched);
       setSynced(true);
 
@@ -84,6 +85,7 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
             console.warn("[SYNC-CONTACTS] addContact failed", { error: e, id: profile.id });
           }
         }
+
         setAddedCount(added);
         if (added > 0) onContactsChanged?.();
       } catch (e) {

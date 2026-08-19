@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft, Trash2 } from "lucide-react";
+import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft, Trash2, ExternalLink, MessageCircle } from "lucide-react";
+import { AppLauncher } from "@capacitor/app-launcher";
 import { Contact } from "../services/contacts";
 import CachedImage from "./CachedImage";
 
@@ -9,16 +10,18 @@ interface ContactsListProps {
   onAddContact: () => void;
   onDeleteContact: (contactId: string) => void;
   onBack?: () => void;
+  currentUserId: string;
 }
 
 function getInitials(name: string): string {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
-export default function ContactsList({ contacts, onSelectContact, onAddContact, onDeleteContact, onBack }: ContactsListProps) {
+export default function ContactsList({ contacts, onSelectContact, onAddContact, onDeleteContact, onBack, currentUserId }: ContactsListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [menuContact, setMenuContact] = useState<Contact | null>(null);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const [inviteContact, setInviteContact] = useState<Contact | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -38,9 +41,13 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
     setMenuPos({ x: e.clientX, y: e.clientY });
   };
 
-  const handleTouchStart = (contact: Contact) => {
+  const handleTouchStart = (contact: Contact, e: React.TouchEvent) => {
+    const t = e.touches[0];
+    const x = Math.min(t.clientX, window.innerWidth - 190);
+    const y = Math.min(t.clientY, window.innerHeight - 90);
     longPressTimer.current = setTimeout(() => {
       setMenuContact(contact);
+      setMenuPos({ x: Math.max(0, x), y: Math.max(0, y) });
       longPressTimer.current = null;
     }, 500);
   };
@@ -52,12 +59,34 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
     }
   };
 
+  const handleInvite = async () => {
+    if (!inviteContact) return;
+    const clean = (inviteContact.phone || "").replace(/\D/g, "");
+    const text = encodeURIComponent(`¡Únete a RED ON! Descarga la app y chatea conmigo de forma segura. Mi código: ${currentUserId.slice(0, 8)}`);
+    if (!clean) return;
+    const whatsappUrl = `whatsapp://send?phone=${clean}&text=${text}`;
+    try {
+      const canOpen = await AppLauncher.canOpenUrl({ url: whatsappUrl });
+      if (canOpen.value) {
+        await AppLauncher.openUrl({ url: whatsappUrl });
+      } else {
+        window.location.href = `sms:${clean}?body=${text}`;
+      }
+    } catch {
+      window.location.href = `sms:${clean}?body=${text}`;
+    }
+    setInviteContact(null);
+  };
+
   const filtered = contacts.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const favorites = filtered.filter((c) => c.is_favorite);
-  const others = filtered.filter((c) => !c.is_favorite);
+  const redOnContacts = filtered.filter((c) => c.contact_user_id);
+  const nonRedOn = filtered.filter((c) => !c.contact_user_id);
+
+  const favorites = redOnContacts.filter((c) => c.is_favorite);
+  const others = redOnContacts.filter((c) => !c.is_favorite);
 
   return (
     <div className="flex-1 bg-[#f1f5f9] flex flex-col h-full overflow-hidden">
@@ -126,7 +155,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
                   contact={contact}
                   onClick={onSelectContact}
                   onContextMenu={(e) => handleContextMenu(contact, e)}
-                  onTouchStart={() => handleTouchStart(contact)}
+                  onTouchStart={(e) => handleTouchStart(contact, e)}
                   onTouchEnd={handleTouchEnd}
                 />
               ))}
@@ -137,7 +166,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
         {others.length > 0 && (
           <div>
             {favorites.length > 0 && (
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">Todos</h4>
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">En Red On</h4>
             )}
             <div className="space-y-0.5">
               {others.map((contact) => (
@@ -146,7 +175,25 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
                   contact={contact}
                   onClick={onSelectContact}
                   onContextMenu={(e) => handleContextMenu(contact, e)}
-                  onTouchStart={() => handleTouchStart(contact)}
+                  onTouchStart={(e) => handleTouchStart(contact, e)}
+                  onTouchEnd={handleTouchEnd}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {nonRedOn.length > 0 && (
+          <div>
+            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">Contactos sin Red On</h4>
+            <div className="space-y-0.5">
+              {nonRedOn.map((contact) => (
+                <ContactRow
+                  key={contact.id}
+                  contact={contact}
+                  onClick={() => setInviteContact(contact)}
+                  onContextMenu={(e) => handleContextMenu(contact, e)}
+                  onTouchStart={(e) => handleTouchStart(contact, e)}
                   onTouchEnd={handleTouchEnd}
                 />
               ))}
@@ -173,6 +220,41 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
           </button>
         </div>
       )}
+
+      {inviteContact && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-6"
+          onClick={() => setInviteContact(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-6 text-center space-y-3 animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 rounded-full bg-amber-50 flex items-center justify-center mx-auto">
+              <MessageCircle className="w-6 h-6 text-amber-500" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-slate-800">Este contacto no usa Red On</p>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Envíale un mensaje de texto e invítalo a descargar la aplicación o a usarla para poder chatear con él aquí.
+              </p>
+            </div>
+            <button
+              onClick={handleInvite}
+              className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[11px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Invitar por WhatsApp
+            </button>
+            <button
+              onClick={() => setInviteContact(null)}
+              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-[11px] font-bold transition-all cursor-pointer"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -181,7 +263,7 @@ interface ContactRowProps {
   contact: Contact;
   onClick: (c: Contact) => void;
   onContextMenu: (e: React.MouseEvent) => void;
-  onTouchStart: () => void;
+  onTouchStart: (e: React.TouchEvent) => void;
   onTouchEnd: () => void;
 }
 

@@ -7,7 +7,7 @@ export type Message = {
   sender_id: string;
   receiver_id?: string;
   text?: string;
-  type: "text" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
+  type: "text" | "system" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   status: "sent" | "delivered" | "read";
   created_at: string;
   read_at?: string;
@@ -120,9 +120,10 @@ export async function getMessages(chatId: string, options?: { limit?: number; be
   return (data || []).map(toMessage);
 }
 
-export async function sendMessage(message: Partial<Message> & { client_id?: string; temp_id?: string }): Promise<Message> {
+export async function sendMessage(message: Partial<Message> & { client_id?: string; temp_id?: string }, signal?: AbortSignal): Promise<Message> {
   const res = await authFetch(apiUrl("/api/messages/send"), {
     method: "POST",
+    signal,
     body: JSON.stringify({
       chat_id: message.chat_id,
       client_id: message.client_id,
@@ -157,12 +158,22 @@ export async function sendMessage(message: Partial<Message> & { client_id?: stri
       poll_options: message.poll_options ? JSON.stringify(message.poll_options) : undefined,
     }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || "Error al enviar mensaje");
+  try {
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      // Adjuntar el código HTTP para que el emisor (SyncService) distinga
+      // errores permanentes (403/404/400) de los transitorios (red/5xx).
+      const e = new Error(err.error || "Error al enviar mensaje");
+      (e as any).status = res.status;
+      throw e;
+    }
+    const data = await res.json();
+    console.log("[SYNC-DBG] apiSendMessage OK chat=", message.chat_id, "client=", message.client_id, "savedId=", data?.id);
+    return toMessage(data);
+  } catch (e) {
+    console.log("[SYNC-DBG] apiSendMessage FAILED chat=", message.chat_id, "client=", message.client_id, "err=", (e as Error)?.message || e, "aborted=", signal?.aborted);
+    throw e;
   }
-  const data = await res.json();
-  return toMessage(data);
 }
 
 export async function markAsRead(chatId: string, userId: string, userName: string) {

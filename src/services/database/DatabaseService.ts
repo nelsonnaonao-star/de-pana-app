@@ -66,6 +66,8 @@ class DatabaseService {
   private async migrate(): Promise<void> {
     const migrations = [
       `ALTER TABLE messages ADD COLUMN payload TEXT`,
+      `ALTER TABLE messages ADD COLUMN sender_id TEXT`,
+      `ALTER TABLE messages ADD COLUMN client_id TEXT`,
       `ALTER TABLE chats ADD COLUMN user_id TEXT`,
       `ALTER TABLE chats ADD COLUMN is_group INTEGER DEFAULT 0`,
       `ALTER TABLE chats ADD COLUMN avatar_color TEXT`,

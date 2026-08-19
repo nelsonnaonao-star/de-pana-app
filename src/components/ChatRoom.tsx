@@ -276,7 +276,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   // el eco de Realtime no llegue (red 3G con WebSocket caído).
   useEffect(() => {
     if (!chat.id) return;
-    const onSynced = (tempId: string, savedId: string) => {
+    const onSynced = (tempId: string, chatId: string, savedId: string) => {
+      if (chatId !== chat.id) return;
       recordReconciledId(chat.id, tempId, savedId);
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: savedId, status: "sent" as const, synced: true } : m));
     };
@@ -414,6 +415,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const sendingRecordingRef = useRef(false);
   const pendingSendIdsRef = useRef<Set<string>>(new Set());
   const isSendingRef = useRef(false);
+  const pickerLastSelectRef = useRef(0);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
@@ -481,6 +483,17 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             return updated;
           }
           console.log("[EV] eco propio SIN temp match → anexando fila real", { id: raw.id });
+          // Última red anti-duplicado: si este media (gif/sticker/imagen) ya está
+          // visible en un mensaje propio (optimista sin reconciliar O ya confirmado),
+          // el eco es un gemelo huérfano de un envío ya representado: NO anexar,
+          // o el mismo GIF/sticker aparecería dos veces.
+          const existingTwin = prev.some(m =>
+            m.sender === "me" && !!rawMedia && m.mediaUrl === rawMedia
+          );
+          if (existingTwin) {
+            console.log("[EV] eco huérfano descartado (gemelo ya visible)", { id: raw.id, media: rawMedia });
+            return prev;
+          }
           return [...prev, { ...mapped, synced: true }];
         });
       }
@@ -1177,10 +1190,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             const isHighlighted = showSearch && searchQuery.trim() && index === searchIndex;
             return (
               <div className={`px-4 pb-3.5 ${isHighlighted ? "ring-2 ring-teal-400 rounded-xl transition-all duration-300" : ""}`}>
-              {msg.type === "text" && msg.id.startsWith("sys_ephemeral_") ? (
+              {msg.type === "system" || (msg.type === "text" && msg.id.startsWith("sys_ephemeral_")) ? (
                 <div className="flex justify-center">
                   <div className="bg-black/40 backdrop-blur-md border border-white/10 rounded-full px-4 py-2 text-[11px] text-white/90 font-semibold text-center">
-                    ⏳ {msg.text}
+                    {msg.type === "system" ? msg.text : `⏳ ${msg.text}`}
                   </div>
                 </div>
               ) : (
@@ -1233,14 +1246,20 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       {/* GIF / STICKER PICKER OVERLAY */}
       {showGifPicker && (
         <GifPicker
-          onSelect={(url, type) => {
-            if (type === "emoji") {
-              actions.handleSendText(url);
-              setShowGifPicker(false);
-            } else {
-              actions.handleSendSticker(url, type);
-            }
-          }}
+onSelect={(url, type) => {
+              const now = Date.now();
+              if (now - pickerLastSelectRef.current < 500) {
+                console.warn("[GIF] onSelect ignorado (doble disparo)", { url, type });
+                return;
+              }
+              pickerLastSelectRef.current = now;
+              if (type === "emoji") {
+                actions.handleSendText(url);
+                setShowGifPicker(false);
+              } else {
+                actions.handleSendSticker(url, type);
+              }
+            }}
           onClose={() => setShowGifPicker(false)}
         />
       )}

@@ -95,6 +95,7 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
     const { data: existing } = await supabase
       .from("chats")
       .select("*")
+      .eq("is_group", false)
       .or(
         `and(profile_id.eq.${chat.profile_id},admin_id.eq.${chat.admin_id}),and(profile_id.eq.${chat.admin_id},admin_id.eq.${chat.profile_id})`
       )
@@ -114,6 +115,7 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
         const { data: existingViaParticipants } = await supabase
           .from("chats")
           .select("*")
+          .eq("is_group", false)
           .in("id", duplicates)
           .limit(1)
           .maybeSingle();
@@ -122,9 +124,9 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
     }
   }
 
-  const { data, error } = await supabase
-    .from("chats")
-    .insert({
+  const res = await authFetch(apiUrl("/api/data/create-chat"), {
+    method: "POST",
+    body: JSON.stringify({
       name: chat.name,
       is_group: chat.is_group || false,
       avatar: chat.avatar || "",
@@ -134,16 +136,13 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
       bio: chat.bio || "",
       profile_id: chat.profile_id,
       admin_id: chat.admin_id,
-      is_online: true,
-      unread_count: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data as Chat;
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al crear chat");
+  }
+  return (await res.json()) as Chat;
 }
 
 export async function deleteChat(chatId: string, userId: string) {
