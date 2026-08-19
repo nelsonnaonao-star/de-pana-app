@@ -117,6 +117,30 @@ router.post('/send', sendLimiter, async (req, res) => {
       return res.status(403).json({ error: 'No eres miembro de este chat' });
     }
 
+    // Verificación de bloqueo: en un chat 1:1, si el receptor bloqueó al
+    // remitente, el envío se rechaza antes de insertar. (Los grupos no
+    // aplican bloqueo individual; igual que fcm.js, se consulta la tabla
+    // `blocks` con blocker_id = receptor y blocked_id = remitente.)
+    const { data: blockChat } = await supabaseAdmin
+      .from('chats')
+      .select('profile_id, admin_id, is_group')
+      .eq('id', msg.chat_id)
+      .maybeSingle();
+    if (blockChat && !blockChat.is_group) {
+      const recipientId = blockChat.profile_id === req.userId ? blockChat.admin_id : blockChat.profile_id;
+      if (recipientId) {
+        const { data: block } = await supabaseAdmin
+          .from('blocks')
+          .select('id')
+          .eq('blocker_id', recipientId)
+          .eq('blocked_id', req.userId)
+          .maybeSingle();
+        if (block) {
+          return res.status(403).json({ error: 'No puedes enviar mensajes a este usuario' });
+        }
+      }
+    }
+
     const msgType = msg.type || 'text';
     if (!VALID_MESSAGE_TYPES.includes(msgType)) {
       return res.status(400).json({ error: 'Tipo de mensaje inválido' });

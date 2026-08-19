@@ -33,11 +33,24 @@ router.post('/mute', async (req, res) => {
 
     const { data: chat } = await supabaseAdmin
       .from('chats')
-      .select('id, is_group')
+      .select('id, is_group, profile_id, admin_id')
       .eq('id', chat_id)
       .single();
     if (!chat) {
       return res.status(404).json({ ok: false, error: 'Chat no encontrado' });
+    }
+
+    // Autorización: solo un participante del chat puede silenciarlo (o un
+    // service_role). Un usuario ajeno no puede mutear un grupo que no es suyo.
+    const isDirectParticipant = chat.profile_id === req.userId || chat.admin_id === req.userId;
+    const { data: participant } = await supabaseAdmin
+      .from('chat_participants')
+      .select('profile_id')
+      .eq('chat_id', chat_id)
+      .eq('profile_id', req.userId)
+      .maybeSingle();
+    if (!isDirectParticipant && !participant && req.userRole !== 'service_role') {
+      return res.status(403).json({ ok: false, error: 'No eres miembro de este grupo' });
     }
 
     const hours = { '8h': 8, '12h': 12, '24h': 24 };

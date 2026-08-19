@@ -2720,7 +2720,7 @@ try {
                             style={isSwiped ? { transform: 'translateX(80px)' } : undefined}
                           >
                             <div className="relative shrink-0">
-                              <div className={`p-[2px] rounded-full border-2 border-dashed ${chat.isGroup ? "border-purple-500/90" : "border-rose-500/90"} transition-transform hover:rotate-12 duration-500`}>
+                              <div className={`p-[2px] rounded-full border-2 transition-transform hover:rotate-12 duration-500 ${chat.isGroup ? "border-purple-500" : chat.status === "online" ? "border-emerald-500" : "border-slate-300"}`}>
                                 {displayAvatar ? (
                                   <CachedImage src={displayAvatar} alt={chat.name} className="w-14 h-14 rounded-full object-cover" loading="lazy" />
                                 ) : chat.isGroup ? (

@@ -233,7 +233,7 @@ router.post('/lookup-profile', profileLimiter, async (req, res) => {
     // Try exact username first
     let { data: profiles, error } = await supabaseAdmin
       .from('profiles')
-      .select('id, username, email, name, phone_number, avatar, avatar_url')
+      .select('id, username, name, avatar, avatar_url')
       .eq('username', cleanId);
 
     if (error) {
@@ -247,7 +247,7 @@ router.post('/lookup-profile', profileLimiter, async (req, res) => {
       if (last7.length >= 4) {
         const { data: phoneProfiles } = await supabaseAdmin
           .from('profiles')
-          .select('id, username, email, name, phone_number, avatar, avatar_url')
+.select('id, username, name, avatar, avatar_url')
           .like('phone_digits', `%${last7}`)
           .limit(5);
         profiles = phoneProfiles;
