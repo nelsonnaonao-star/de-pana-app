@@ -27,6 +27,17 @@ import { deleteContact, getContacts, type Contact } from "../services/contacts";
 import { getBlockedUsers, unblockUser, type BlockedUser } from "../services/blocks";
 import { logger } from "../lib/logger";
 import { syncService } from "../services/sync/SyncService";
+import { 
+  isBiometricEnabled, 
+  setBiometricEnabled as saveBiometricEnabled, 
+  isBiometricFallbackEnabled, 
+  setBiometricFallbackEnabled as saveBiometricFallbackEnabled,
+  authenticateWithBiometric,
+  checkBiometricAvailability,
+  getBiometricErrorMessage,
+  isBiometricAuthInFlight,
+} from "../services/biometricAuth";
+import BiometricLockScreen from "./BiometricLockScreen";
 
 import { WebRTCService } from "../services/webrtc";
 import { WebRTCGroupService, isGroupCallAtLimit } from "../services/rtc-group";
@@ -125,6 +136,11 @@ export default function PhoneSimulator({
   const [showActionMenu, setShowActionMenu] = useState(false);
   const showActionMenuRef = useRef(false);
   const shouldExitRef = useRef(false);
+
+  // Biometric lock states (MUST be before any useEffect that uses them)
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
+  const [biometricFallback, setBiometricFallback] = useState(false);
+  const [appLocked, setAppLocked] = useState(true);
 
   // App User state
   const [registeredUser, setRegisteredUser] = useState<{
@@ -257,6 +273,46 @@ export default function PhoneSimulator({
     };
     loadFontScale();
   }, []);
+
+  // Load biometric lock settings on mount
+  useEffect(() => {
+    const loadBiometricSettings = async () => {
+      try {
+        const [enabled, fallback] = await Promise.all([
+          Preferences.get({ key: 'redon_biometric_enabled' }),
+          Preferences.get({ key: 'redon_biometric_fallback_enabled' }),
+        ]);
+        setBiometricEnabled(enabled.value === "true");
+        setBiometricFallback(fallback.value === "true");
+        if (enabled.value === "true") {
+          setAppLocked(true);
+        }
+      } catch (e) {
+        logger.warn("[PhoneSimulator] Failed to load biometric settings", { error: e });
+      }
+    };
+    loadBiometricSettings();
+  }, []);
+
+  // Lock app on resume if biometric is enabled
+  useEffect(() => {
+    if (!biometricEnabled) return;
+    let listener: { remove: () => void } | null = null;
+    const setupListener = async () => {
+      const { App } = await import('@capacitor/app');
+      listener = await App.addListener('appStateChange', ({ isActive }) => {
+        // Ignorar el resume provocado por la propia actividad nativa de biometría,
+        // si no se crearía un bucle infinito de prompts.
+        if (isActive && biometricEnabled && !isBiometricAuthInFlight()) {
+          setAppLocked(true);
+        }
+      });
+    };
+    setupListener();
+    return () => {
+      listener?.remove();
+    };
+  }, [biometricEnabled]);
 
   // Active Chats & Selected Chat
   const [chats, setChats] = useState<Chat[]>([]);
@@ -499,7 +555,7 @@ export default function PhoneSimulator({
 
   // Modal displays inside profile screen
   const [activeSettingsModal, setActiveSettingsModal] = useState<
-    null | "cuenta" | "seguridad" | "notificaciones" | "datos" | "fuentes" | "ayuda" | "legal"
+    null | "cuenta" | "seguridad" | "notificaciones" | "datos" | "fuentes" | "ayuda" | "legal" | "biometrico"
   >(null);
 
   // Toast notifications for user feedback
@@ -2189,7 +2245,14 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         </div>
       )}
 
-      
+      {/* BIOMETRIC LOCK SCREEN */}
+      {appLocked && biometricEnabled && (
+        <BiometricLockScreen
+          isLocked={appLocked}
+          onUnlock={() => setAppLocked(false)}
+        />
+      )}
+
       {/* ACTIVE CALL OVERLAY */}
       {activeCall && (
         <CallOverlay
@@ -3144,13 +3207,13 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                 <CircleUser className="w-4 h-4" />
                               </div>
                               <div>
-                                <div className="text-[12px] font-black text-slate-800">Cuenta</div>
-                                <div className="text-[10px] text-slate-400">Privacidad de número, cambio de ID</div>
+                                <div className="text-[13.5px] font-black text-slate-800">Cuenta</div>
+                                <div className="text-[11px] text-slate-400">Privacidad de número, cambio de ID</div>
                               </div>
                             </div>
                             <button
                               onClick={() => setActiveSettingsModal("cuenta")}
-                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-[#0a4d52] font-extrabold text-[10px] rounded-lg transition-colors cursor-pointer"
+                              className="px-2.5 py-1 bg-teal-50 hover:bg-teal-100 text-[#0a4d52] font-extrabold text-[11px] rounded-lg transition-colors cursor-pointer"
                             >
                               Cambiar
                             </button>
@@ -3167,11 +3230,31 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <Shield className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[12px] font-black text-slate-800">Privacidad y Seguridad</div>
-                              <div className="text-[10px] text-slate-400">Doble check, bloqueos, verificación en 2 pasos</div>
+                              <div className="text-[13.5px] font-black text-slate-800">Privacidad y Seguridad</div>
+                              <div className="text-[11px] text-slate-400">Doble check, bloqueos, verificación en 2 pasos</div>
                             </div>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                        </button>
+
+                        {/* BLOQUEO BIOMÉTRICO (menú separado) */}
+                        <button
+                          onClick={() => setActiveSettingsModal("biometrico")}
+                          className="w-full text-left bg-white p-3 rounded-2xl border border-slate-100 shadow-sm hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-600">
+                              <Lock className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-[13.5px] font-black text-slate-800">Bloqueo biométrico</div>
+                              <div className="text-[11px] text-slate-400">Huella / Face ID para abrir la app</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            {biometricEnabled && <span className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse"></span>}
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                          </div>
                         </button>
 
                         {/* 3. NOTIFICACIONES */}
@@ -3184,8 +3267,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <Bell className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[12px] font-black text-slate-800">Notificaciones</div>
-                              <div className="text-[10px] text-slate-400">Silenciar chats, globos en icono de app</div>
+                              <div className="text-[13.5px] font-black text-slate-800">Notificaciones</div>
+                              <div className="text-[11px] text-slate-400">Silenciar chats, globos en icono de app</div>
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
@@ -3204,12 +3287,12 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <Database className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[12px] font-black text-slate-800">Datos y Almacenamiento</div>
-                              <div className="text-[10px] text-slate-400">Uso de red móvil, autodescarga de fotos</div>
+                              <div className="text-[13.5px] font-black text-slate-800">Datos y Almacenamiento</div>
+                              <div className="text-[11px] text-slate-400">Uso de red móvil, autodescarga de fotos</div>
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5">
-                            <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{mobileDataUsage}</span>
+                            <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{mobileDataUsage}</span>
                             <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
                           </div>
                         </button>
@@ -3222,18 +3305,18 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                 <Type className="w-4 h-4" />
                               </div>
                               <div>
-                                <div className="text-[12px] font-black text-slate-800">Fuentes</div>
-                                <div className="text-[10px] text-slate-400">Personaliza el estilo de letra de la app</div>
+                                <div className="text-[13.5px] font-black text-slate-800">Fuentes</div>
+                                <div className="text-[11px] text-slate-400">Personaliza el estilo de letra de la app</div>
                               </div>
                             </div>
-                            <span className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 px-1.5 py-0.5 rounded">Desactivado</span>
+                            <span className="text-[10px] font-black text-slate-400 uppercase bg-slate-100 px-1.5 py-0.5 rounded">Desactivado</span>
                           </div>
                           
                           <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-100/50">
                             <span className="text-[11px] font-bold text-slate-600">A</span>
                             <button
                               onClick={() => setActiveSettingsModal("fuentes")}
-                              className="px-2.5 py-1 bg-violet-50 hover:bg-violet-100 text-violet-600 font-black text-[10px] rounded-lg transition-colors cursor-pointer"
+                              className="px-2.5 py-1 bg-violet-50 hover:bg-violet-100 text-violet-600 font-black text-[11px] rounded-lg transition-colors cursor-pointer"
                             >
                               {appFont} (Cambiar)
                             </button>
@@ -3247,8 +3330,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <Cloud className="w-4 h-4" />
                             </div>
                             <div>
-                              <h5 className="text-[12px] font-black text-slate-800">Copia de seguridad</h5>
-                              <p className="text-[9px] text-slate-400 font-mono">Última copia: {backupDate} • {backupChatsCount} chats</p>
+                              <h5 className="text-[13.5px] font-black text-slate-800">Copia de seguridad</h5>
+                              <p className="text-[10.5px] text-slate-400 font-mono">Última copia: {backupDate} • {backupChatsCount} chats</p>
                             </div>
                           </div>
 
@@ -3257,7 +3340,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                             <button
                               disabled={isBackingUp || isRestoring}
                               onClick={handleCloudBackup}
-                              className="w-full py-2.5 px-3 bg-[#0a4d52] hover:bg-[#10646a] text-white font-extrabold text-[10px] rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                              className="w-full py-2.5 px-3 bg-[#0a4d52] hover:bg-[#10646a] text-white font-extrabold text-[11px] rounded-xl shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                             >
                               {isBackingUp ? (
                                 <>
@@ -3272,7 +3355,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                             <button
                               disabled={isBackingUp || isRestoring}
                               onClick={handleCloudRestore}
-                              className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[10px] rounded-xl border border-slate-200/50 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer disabled:opacity-50"
+                              className="w-full py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[11px] rounded-xl border border-slate-200/50 transition-all flex flex-col items-center justify-center gap-0.5 cursor-pointer disabled:opacity-50"
                             >
                               {isRestoring ? (
                                 <span className="flex items-center gap-1">
@@ -3281,7 +3364,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               ) : (
                                 <>
                                   <span className="text-slate-800 font-bold">Restaurar desde copia</span>
-                                  <span className="text-[8.5px] text-slate-400 font-normal">Exporta todos tus datos como JSON</span>
+                                  <span className="text-[10px] text-slate-400 font-normal">Exporta todos tus datos como JSON</span>
                                 </>
                               )}
                             </button>
@@ -3298,8 +3381,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <HelpCircle className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[12px] font-black text-slate-800">Ayuda y Preguntas</div>
-                              <div className="text-[10px] text-slate-400">RED ON FAQ, soporte en directo</div>
+                              <div className="text-[13.5px] font-black text-slate-800">Ayuda y Preguntas</div>
+                              <div className="text-[11px] text-slate-400">RED ON FAQ, soporte en directo</div>
                             </div>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
@@ -3312,25 +3395,25 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <FileText className="w-4 h-4" />
                             </div>
                             <div>
-                              <div className="text-[12px] font-black text-slate-800">Legal</div>
-                              <div className="text-[10px] text-slate-400 font-medium">Condiciones legales oficiales</div>
+                              <div className="text-[13.5px] font-black text-slate-800">Legal</div>
+                              <div className="text-[11px] text-slate-400 font-medium">Condiciones legales oficiales</div>
                             </div>
                           </div>
 
                           <div className="grid grid-cols-2 gap-2 pt-1">
                             <button
                               onClick={() => setActiveSettingsModal("legal")}
-                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[9.5px] rounded-lg text-center transition-all cursor-pointer"
+                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[10.5px] rounded-lg text-center transition-all cursor-pointer"
                             >
                               <div className="font-extrabold">Política de Privacidad</div>
-                              <div className="text-[9px] text-slate-400 font-normal mt-0.5">Cómo manejamos tus datos</div>
+                              <div className="text-[10.5px] text-slate-400 font-normal mt-0.5">Cómo manejamos tus datos</div>
                             </button>
                             <button
                               onClick={() => setActiveSettingsModal("legal")}
-                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[9.5px] rounded-lg text-center transition-all cursor-pointer"
+                              className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[10.5px] rounded-lg text-center transition-all cursor-pointer"
                             >
                               <div className="font-extrabold">Términos de Servicio</div>
-                              <div className="text-[9px] text-slate-400 font-normal mt-0.5">Condiciones de uso de RED ON</div>
+                              <div className="text-[10.5px] text-slate-400 font-normal mt-0.5">Condiciones de uso de RED ON</div>
                             </button>
                           </div>
                         </div>
@@ -3356,7 +3439,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                         <div className="bg-white rounded-t-3xl p-5 space-y-4 max-h-[85%] overflow-y-auto border-t border-slate-100 shadow-lg text-left animate-slide-up">
                           {/* Header of Modal */}
                           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                            <h4 className="text-[11px] font-black text-[#0a4d52] uppercase tracking-wider">
+                            <h4 className="text-[12px] font-black text-[#0a4d52] uppercase tracking-wider">
                               {activeSettingsModal === "cuenta" && "Configuración de Cuenta"}
                               {activeSettingsModal === "seguridad" && "Privacidad y Seguridad"}
                               {activeSettingsModal === "notificaciones" && "Notificaciones"}
@@ -3367,7 +3450,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                             </h4>
                             <button
                               onClick={() => { stopSound(); setActiveSettingsModal(null); }}
-                              className="px-2.5 py-1 bg-teal-500 hover:bg-teal-600 text-white font-extrabold text-[8px] rounded-lg cursor-pointer"
+                              className="px-2.5 py-1 bg-teal-500 hover:bg-teal-600 text-white font-extrabold text-[9.5px] rounded-lg cursor-pointer"
                             >
                               Listo
                             </button>
@@ -3395,7 +3478,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                 </button>
                               </div>
                               <div className="space-y-2">
-                                <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Cambiar ID de RED ON</label>
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Cambiar ID de RED ON</label>
                                 <div className="flex gap-2">
                                   <input
                                     type="text"
@@ -3416,18 +3499,18 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                         showToast("Error al actualizar ID ❌");
                                       }
                                     }}
-                                    className="px-3.5 bg-[#0a4d52] text-white font-black text-[9px] rounded-xl hover:bg-teal-800 transition-colors cursor-pointer"
+                                    className="px-3.5 bg-[#0a4d52] text-white font-black text-[10px] rounded-xl hover:bg-teal-800 transition-colors cursor-pointer"
                                   >
                                     Guardar
                                   </button>
                                 </div>
-                                <p className="text-[9px] text-slate-400 leading-normal">Este ID te identifica de forma única dentro de la red móvil de RED ON sin necesidad de exponer tu número de teléfono real.</p>
+                                <p className="text-[10.5px] text-slate-400 leading-normal">Este ID te identifica de forma única dentro de la red móvil de RED ON sin necesidad de exponer tu número de teléfono real.</p>
                               </div>
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
                                 <div>
-                                  <div className="text-[11.5px] font-black text-slate-800">Privacidad de número</div>
-                                  <div className="text-[9px] text-slate-400">Ocultar número a desconocidos en chats de campaña</div>
+                                  <div className="text-[13px] font-black text-slate-800">Privacidad de número</div>
+                                  <div className="text-[10.5px] text-slate-400">Ocultar número a desconocidos en chats de campaña</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -3450,8 +3533,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                             <div className="space-y-4 animate-fade-in">
                               <div className="flex items-center justify-between">
                                 <div>
-                                  <div className="text-[11.5px] font-black text-slate-800">Doble check de lectura</div>
-                                  <div className="text-[9px] text-slate-400">Ver confirmación azul de lectura de mensajes</div>
+                                  <div className="text-[13px] font-black text-slate-800">Doble check de lectura</div>
+                                  <div className="text-[10.5px] text-slate-400">Ver confirmación azul de lectura de mensajes</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -3470,13 +3553,13 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="border-t border-slate-100 pt-3">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <div className="text-[11.5px] font-black text-slate-800">Bloqueos</div>
-                                    <div className="text-[9px] text-slate-400">Restringir llamadas y mensajes directos</div>
+                                    <div className="text-[13px] font-black text-slate-800">Bloqueos</div>
+                                    <div className="text-[10.5px] text-slate-400">Restringir llamadas y mensajes directos</div>
                                   </div>
                                   <span className="text-[10px] font-mono font-black text-slate-800">{blockedUsers.length}</span>
                                 </div>
                                 {blockedUsers.length === 0 ? (
-                                  <div className="mt-2 text-[9px] text-slate-400 italic">No has bloqueado a nadie</div>
+                                  <div className="mt-2 text-[10.5px] text-slate-400 italic">No has bloqueado a nadie</div>
                                 ) : (
                                   <div className="mt-2 space-y-1.5">
                                     {blockedUsers.map(u => (
@@ -3493,7 +3576,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                         </div>
                                         <button
                                           onClick={() => handleUnblock(u.id, u.name)}
-                                          className="text-[9px] font-bold text-rose-500 hover:text-rose-600 px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 shrink-0"
+                                          className="text-[10px] font-bold text-rose-500 hover:text-rose-600 px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 shrink-0"
                                         >
                                           Desbloquear
                                         </button>
@@ -3506,8 +3589,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="border-t border-slate-100 pt-3 space-y-3">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <div className="text-[11.5px] font-black text-slate-800">Verificación en dos pasos</div>
-                                    <div className="text-[9px] text-slate-400">PIN extra para iniciar sesión en otros teléfonos</div>
+                                    <div className="text-[13px] font-black text-slate-800">Verificación en dos pasos</div>
+                                    <div className="text-[10.5px] text-slate-400">PIN extra para iniciar sesión en otros teléfonos</div>
                                   </div>
                                   <label className="relative inline-flex items-center cursor-pointer">
                                     <input 
@@ -3526,7 +3609,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
 
                                 {twoStepVerification && (
                                   <div className="space-y-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-100 animate-fade-in">
-                                    <label className="text-[8.5px] font-bold text-slate-500">PIN de Seguridad de RED ON (6 dígitos)</label>
+                                    <label className="text-[10px] font-bold text-slate-500">PIN de Seguridad de RED ON (6 dígitos)</label>
                                     <div className="flex gap-1.5">
                                       <input
                                         type="password"
@@ -3548,7 +3631,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                             setActiveSettingsModal(null);
                                           }
                                         }}
-                                        className="px-3 bg-indigo-600 text-white font-extrabold text-[9px] rounded-lg hover:bg-indigo-700 cursor-pointer"
+                                        className="px-3 bg-indigo-600 text-white font-extrabold text-[10px] rounded-lg hover:bg-indigo-700 cursor-pointer"
                                       >
                                         Activar PIN
                                       </button>
@@ -3559,13 +3642,86 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                             </div>
                           )}
 
+                          {/* BLOQUEO BIOMÉTRICO OVERLAY (menú separado) */}
+                          {activeSettingsModal === "biometrico" && (
+                            <div className="space-y-4 animate-fade-in">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="text-[13px] font-black text-slate-800">Bloqueo con huella / Face ID</div>
+                                  <div className="text-[10.5px] text-slate-400">Proteger la app con biometría al abrirla</div>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={biometricEnabled} 
+                                    onChange={async () => {
+                                      if (!biometricEnabled) {
+                                        const avail = await checkBiometricAvailability();
+                                        if (!avail.isAvailable) {
+                                          showToast(avail.deviceIsSecure
+                                            ? "No hay huella registrada. Regístrala en Ajustes de Android → Seguridad"
+                                            : "Este dispositivo no tiene huella ni PIN configurado");
+                                          return;
+                                        }
+                                        const res = await authenticateWithBiometric("Activar bloqueo biométrico");
+                                        if (res.success) {
+                                           await saveBiometricEnabled(true);
+                                           setBiometricEnabled(true);
+                                          setAppLocked(false);
+                                          showToast("Bloqueo biométrico activado 🔒");
+                                        } else {
+                                          showToast(getBiometricErrorMessage(res.errorCode) || "Error al activar");
+                                        }
+                                      } else {
+                                         await saveBiometricEnabled(false);
+                                         setBiometricEnabled(false);
+                                        setAppLocked(false);
+                                        showToast("Bloqueo biométrico desactivado 🔓");
+                                      }
+                                    }} 
+                                    className="sr-only peer" 
+                                  />
+                                  <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                </label>
+                              </div>
+
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="text-[13px] font-black text-slate-800">Permitir PIN del dispositivo</div>
+                                  <div className="text-[10.5px] text-slate-400">Alternativa si la biometría falla</div>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={biometricFallback} 
+                                    onChange={async () => {
+                                      const newVal = !biometricFallback;
+                                       await saveBiometricFallbackEnabled(newVal);
+                                       setBiometricFallback(newVal);
+                                      showToast(newVal ? "PIN del dispositivo permitido ✅" : "Solo biometría 🔒");
+                                    }} 
+                                    className="sr-only peer" 
+                                  />
+                                  <div className="w-8 h-4.5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-teal-500"></div>
+                                </label>
+                              </div>
+
+                              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-1">
+                                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nota:</div>
+                                <p className="text-[10.5px] text-slate-600 leading-relaxed">
+                                  Al activar, la app se bloqueará automáticamente al salir y pedirá tu huella o Face ID al volver a entrar. El PIN del dispositivo sirve como respaldo si la biometría falla.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
                           {/* 3. NOTIFICACIONES OVERLAY */}
                           {activeSettingsModal === "notificaciones" && (
                             <div className="space-y-4 animate-fade-in">
                               <div className="flex items-center justify-between">
                                 <div>
-                                  <div className="text-[11.5px] font-black text-slate-800">Silenciar chats</div>
-                                  <div className="text-[9px] text-slate-400">Desactiva sonidos globales de mensajes</div>
+                                  <div className="text-[13px] font-black text-slate-800">Silenciar chats</div>
+                                  <div className="text-[10.5px] text-slate-400">Desactiva sonidos globales de mensajes</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -3583,8 +3739,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
                                 <div>
-<div className="text-[11.5px] font-black text-slate-800">Globos en icono de app</div>
-                                  <div className="text-[9px] text-slate-400">Mostrar contador rojo de no leídos</div>
+<div className="text-[13px] font-black text-slate-800">Globos en icono de app</div>
+                                  <div className="text-[10.5px] text-slate-400">Mostrar contador rojo de no leídos</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -3603,8 +3759,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="border-t border-slate-100 pt-3">
                                 <div className="flex items-center justify-between mb-2">
                                   <div>
-                                    <div className="text-[11.5px] font-black text-slate-800">Sonido de mensaje</div>
-                                    <div className="text-[9px] text-slate-400">Tono cuando llega una notificación</div>
+                                    <div className="text-[13px] font-black text-slate-800">Sonido de mensaje</div>
+                                    <div className="text-[10.5px] text-slate-400">Tono cuando llega una notificación</div>
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
@@ -3615,7 +3771,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                           setPreviewMsgSound(opt.id);
                                           playSoundOption("message", opt.id, 0.7);
                                         }}
-                                        className={`py-1 text-[9px] font-black rounded-lg transition-all cursor-pointer ${
+                                        className={`py-1 text-[10px] font-black rounded-lg transition-all cursor-pointer ${
                                           previewMsgSound === opt.id
                                             ? "bg-white text-[#0a4d52] shadow-sm"
                                             : "bg-transparent text-slate-500 hover:text-slate-800"
@@ -3633,7 +3789,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                             stopSound();
                                             showToast(`Sonido de mensaje: ${opt.name} ✅`);
                                           }}
-                                          className="py-1 text-[8px] font-bold text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors cursor-pointer"
+                                          className="py-1 text-[9.5px] font-bold text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors cursor-pointer"
                                         >
                                           Guardar
                                         </button>
@@ -3646,8 +3802,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="border-t border-slate-100 pt-3">
                                 <div className="flex items-center justify-between mb-2">
                                   <div>
-                                    <div className="text-[11.5px] font-black text-slate-800">Sonido de llamada</div>
-                                    <div className="text-[9px] text-slate-400">Tono cuando llega una llamada</div>
+                                    <div className="text-[13px] font-black text-slate-800">Sonido de llamada</div>
+                                    <div className="text-[10.5px] text-slate-400">Tono cuando llega una llamada</div>
                                   </div>
                                 </div>
                                 <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
@@ -3676,7 +3832,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                             stopSound();
                                             showToast(`Sonido de llamada: ${opt.name} ✅`);
                                           }}
-                                          className="py-1 text-[8px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
+                                          className="py-1 text-[9.5px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
                                         >
                                           Guardar
                                         </button>
@@ -3692,7 +3848,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                           {activeSettingsModal === "datos" && (
                             <div className="space-y-4 animate-fade-in">
                               <div className="space-y-2">
-                                <label className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Uso de red móvil</label>
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Uso de red móvil</label>
                                 <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
                                   {["Ahorro", "Estándar", "Ilimitado"].map((opt) => (
                                     <button
@@ -3701,7 +3857,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                         setMobileDataUsage(opt);
                                         showToast(`Consumo móvil configurado en ${opt}`);
                                       }}
-                                      className={`py-1 text-[9px] font-black rounded-lg transition-all cursor-pointer ${
+                                      className={`py-1 text-[10px] font-black rounded-lg transition-all cursor-pointer ${
                                         mobileDataUsage === opt 
                                           ? "bg-white text-[#0a4d52] shadow-sm" 
                                           : "text-slate-500 hover:text-slate-800"
@@ -3715,8 +3871,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
                                 <div>
-                                  <div className="text-[11.5px] font-black text-slate-800">Autodescarga de fotos</div>
-                                  <div className="text-[9px] text-slate-400">Guardar multimedia con datos de celular</div>
+                                  <div className="text-[13px] font-black text-slate-800">Autodescarga de fotos</div>
+                                  <div className="text-[10.5px] text-slate-400">Guardar multimedia con datos de celular</div>
                                 </div>
                                 <label className="relative inline-flex items-center cursor-pointer">
                                   <input 
@@ -3737,7 +3893,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                           {/* 5. FUENTES OVERLAY */}
                           {activeSettingsModal === "fuentes" && (
                             <div className="space-y-4 animate-fade-in">
-                              <p className="text-[9px] text-slate-500 leading-normal font-medium">
+                              <p className="text-[10.5px] text-slate-500 leading-normal font-medium">
                                 Personaliza el estilo de letra de toda la interfaz de la app. Selecciona una opción:
                               </p>
                               
@@ -3769,8 +3925,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="space-y-3 pt-2 border-t border-slate-100">
                                 <div className="flex items-center justify-between">
                                   <div>
-                                    <div className="text-[11.5px] font-black text-slate-800">Tamaño de letra</div>
-                                    <div className="text-[9px] text-slate-400">Escala global para chats, menús y botones</div>
+                                    <div className="text-[13px] font-black text-slate-800">Tamaño de letra</div>
+                                    <div className="text-[10.5px] text-slate-400">Escala global para chats, menús y botones</div>
                                   </div>
                                   <span className="text-[11px] font-bold text-teal-600 bg-teal-50 px-2 py-1 rounded-lg">
                                     {Math.round(fontScale * 100)}%
@@ -3807,7 +3963,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                   }}
                                   className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-teal-500"
                                 />
-                                <div className="flex justify-between text-[9px] text-slate-400">
+                                <div className="flex justify-between text-[10.5px] text-slate-400">
                                   <span>Pequeño (85%)</span>
                                   <span>Normal (100%)</span>
                                   <span>Grande (130%)</span>
@@ -3834,11 +3990,11 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="bg-gradient-to-r from-teal-500 to-indigo-600 text-white p-3 rounded-2xl flex items-center justify-between shadow-md">
                                 <div className="text-left">
                                   <div className="text-[10px] font-black">Soporte en directo 24/7</div>
-                                  <div className="text-[9px] text-teal-100">Resuelve dudas sobre tus catálogos</div>
+                                  <div className="text-[10px] text-teal-100">Resuelve dudas sobre tus catálogos</div>
                                 </div>
                                 <button
                                   onClick={handleOpenSupportChat}
-                                  className="px-2.5 py-1.5 bg-white text-[#0a4d52] hover:bg-teal-50 transition-all font-black text-[8px] rounded-lg shadow-sm cursor-pointer"
+                                  className="px-2.5 py-1.5 bg-white text-[#0a4d52] hover:bg-teal-50 transition-all font-black text-[9.5px] rounded-lg shadow-sm cursor-pointer"
                                 >
                                   Chatear ahora
                                 </button>
@@ -3847,7 +4003,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="space-y-2">
                                 <div className="text-[9.5px] font-black text-slate-400 uppercase tracking-wide">RED ON FAQ</div>
                                 
-                                <div className="space-y-1.5 text-[8.5px] text-slate-700 leading-relaxed">
+                                <div className="space-y-1.5 text-[10px] text-slate-700 leading-relaxed">
                                   <details className="bg-slate-50 rounded-xl border border-slate-100 p-2 cursor-pointer group text-left">
                                     <summary className="font-bold text-slate-800 flex justify-between items-center outline-none">
                                       <span>¿Qué es la difusión de flyers?</span>

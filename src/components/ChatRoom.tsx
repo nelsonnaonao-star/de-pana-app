@@ -44,11 +44,12 @@ interface ChatRoomProps {
   currentUserId?: string;
   currentUserName?: string;
   refetchTrigger?: number;
+  readReceipts?: boolean;
   onRegisterBackHandler?: (handler: (() => boolean) | null) => void;
   onOpenProfile?: () => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, onChatMessagesChanged, currentUserId, currentUserName, refetchTrigger, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, onChatMessagesChanged, currentUserId, currentUserName, refetchTrigger, readReceipts = true, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
   const { user, profile, contacts, refreshContacts } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -436,7 +437,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           if (prev.some(m => m.id === mapped.id)) return prev;
           return [...prev, mapped];
         });
-        markAsRead(chat.id, uid, uname).catch(err => console.error("[ChatRoom] markAsRead on new message failed:", err));
+        if (readReceipts) {
+          markAsRead(chat.id, uid, uname).catch(err => console.error("[ChatRoom] markAsRead on new message failed:", err));
+        }
       } else {
         // Eco de un mensaje propio. Reconciliación INSTANTÁNEA por temp_id:
         // - El emisor guardó temp_id (su id local msg_*/temp_*) en la fila, y el
@@ -615,7 +618,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   // la tarjeta con Rechazar / Eliminar / Guardar como contacto.
   const partnerUserId = chat.partnerUserId;
   const hasIncomingMsgFromOther = messages.some(m => m.sender === "other");
-  const isUnknownSender = !chat.isGroup && !!partnerUserId && partnerUserId !== uid &&
+  const isContactLoaded = contacts.length > 0;
+  const isUnknownSender = isContactLoaded && !chat.isGroup && !!partnerUserId && partnerUserId !== uid &&
     !contacts.some(c => c.contact_user_id === partnerUserId) &&
     hasIncomingMsgFromOther;
   const [reqView, setReqView] = useState<"actions" | "save" | "reject-confirm">("actions");
@@ -796,10 +800,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
   // Read receipts on mount and when new messages arrive
   useEffect(() => {
-    if (chat.id && uid && uname) {
+    if (chat.id && uid && uname && readReceipts) {
       markAsRead(chat.id, uid, uname).catch(err => console.error("[ChatRoom] markAsRead on mount failed:", err));
     }
-  }, [chat.id, uid, uname]);
+  }, [chat.id, uid, uname, readReceipts]);
 
 
   const [editingMessage, setEditingMessage] = useState<{ id: string; text: string } | null>(null);

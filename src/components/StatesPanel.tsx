@@ -16,7 +16,7 @@ import CreateStateModal from "./states/CreateStateModal";
 import StoryAudiencePicker from "./states/StoryAudiencePicker";
 
 interface StatesPanelProps {
-  onStartChat: (name: string, avatar: string, initialText: string) => void;
+  onStartChat: (name: string, avatar: string, initialText: string, partnerUserId?: string) => void;
   onHasUnseen?: (unseen: boolean) => void;
 }
 

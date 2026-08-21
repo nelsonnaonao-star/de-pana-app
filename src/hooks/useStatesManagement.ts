@@ -42,6 +42,7 @@ export interface UserState {
   stories: Story[];
   hasUnseen: boolean;
   isMe?: boolean;
+  userId?: string;
 }
 
 export const GRADIENTS = [
@@ -295,7 +296,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
 
     const initialText = `Respondí a tu estado ${contextQuote}:\n\n${storyReplyText}`;
 
-    onStartChat(activeUserStates.userName, activeUserStates.userAvatar, initialText);
+    onStartChat(activeUserStates.userName, activeUserStates.userAvatar, initialText, activeUserStates.userId || activeUserStates.id);
     setStoryReplyText("");
     setStoryPaused(false);
     setReplyFeedback("Has respondido a esta historia");
