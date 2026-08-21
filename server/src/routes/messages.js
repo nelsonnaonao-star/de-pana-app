@@ -497,7 +497,7 @@ router.post('/delete', async (req, res) => {
       return res.status(403).json({ error: 'No eres miembro de este chat' });
     }
 
-    const { error } = await supabaseAdmin
+    const { data: updatedMsg, error } = await supabaseAdmin
       .from('messages')
       .update({ is_deleted: true, text: '' })
       .eq('id', message_id)
@@ -532,7 +532,7 @@ router.post('/delete', async (req, res) => {
       }
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, message: updatedMsg });
   } catch (err) {
     console.error('[MESSAGES] delete error:', err);
     res.status(500).json({ error: err.message });
@@ -567,7 +567,7 @@ router.post('/edit', async (req, res) => {  try {
       return res.status(403).json({ error: 'No eres miembro de este chat' });
     }
 
-    const { error } = await supabaseAdmin
+    const { data: updatedMsg, error } = await supabaseAdmin
       .from('messages')
       .update({ text: sanitizedText, edited: true })
       .eq('id', message_id)
@@ -593,7 +593,7 @@ router.post('/edit', async (req, res) => {  try {
       }
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, message: updatedMsg });
   } catch (err) {
     console.error('[MESSAGES] edit error:', err);
     res.status(500).json({ error: err.message });
