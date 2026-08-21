@@ -225,10 +225,6 @@ async function main() {
     }
   });
 
-  // Serve built frontend in production
-  const distPath = path.join(ROOT_DIR, 'dist');
-  app.use(express.static(distPath));
-
   // Global error middleware
   app.use((err, req, res, next) => {
     console.error(`[ERROR] ${req.method} ${req.originalUrl}:`, err.message);
@@ -247,11 +243,6 @@ async function main() {
   });
   app.use('/uploads', (req, res) => {
     res.status(404).json({ error: `Archivo no encontrado: ${req.originalUrl}` });
-  });
-
-  // SPA catch-all for all other routes
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
   });
 
   const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
