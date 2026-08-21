@@ -177,15 +177,23 @@ export async function sendMessage(message: Partial<Message> & { client_id?: stri
 }
 
 export async function markAsRead(chatId: string, userId: string, userName: string) {
-  const res = await authFetch(apiUrl("/api/messages/mark-read"), {
-    method: "POST",
-    body: JSON.stringify({ chat_id: chatId, user_id: userId, reader_name: userName }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || "Error al marcar como leído");
+  try {
+    const res = await authFetch(apiUrl("/api/messages/mark-read"), {
+      method: "POST",
+      body: JSON.stringify({ chat_id: chatId, user_id: userId, reader_name: userName }),
+    });
+    if (res.ok) return res.json();
+  } catch {
+    // Servidor Node inalcanzable -> fallback directo a la BD.
   }
-  return res.json();
+
+  // Fallback: marca leído vía RPC SECURITY DEFINER (no depende del server).
+  // El UPDATE dispara el evento Realtime que pinta el doble check azul.
+  const { data, error } = await supabase.rpc("mark_messages_read", { p_chat: chatId });
+  if (error) {
+    throw new Error(error.message || "Error al marcar como leído");
+  }
+  return { updated: data || 0 };
 }
 
 export async function addReaction(messageId: string, emoji: string) {

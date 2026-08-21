@@ -24,6 +24,7 @@ import { clearForMe, sendMessage as apiSendMessage } from "../services/messages"
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
 import { getAllFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
 import { deleteContact, getContacts, type Contact } from "../services/contacts";
+import { getBlockedUsers, unblockUser, type BlockedUser } from "../services/blocks";
 import { logger } from "../lib/logger";
 import { syncService } from "../services/sync/SyncService";
 
@@ -237,6 +238,25 @@ export default function PhoneSimulator({
     shouldExitRef.current = !isOnMainScreen;
     onSetShouldExitRef.current?.(!isOnMainScreen);
   }, [currentScreen]);
+
+  // Load font scale from preferences on mount
+  useEffect(() => {
+    const loadFontScale = async () => {
+      try {
+        const { value } = await Preferences.get({ key: 'redon_font_scale' });
+        if (value) {
+          const scale = parseFloat(value);
+          if (!isNaN(scale) && scale >= 0.85 && scale <= 1.3) {
+            setFontScale(scale);
+            document.documentElement.style.setProperty('--font-scale', scale.toString());
+          }
+        }
+      } catch (e) {
+        logger.warn("[PhoneSimulator] Failed to load font scale", { error: e });
+      }
+    };
+    loadFontScale();
+  }, []);
 
   // Active Chats & Selected Chat
   const [chats, setChats] = useState<Chat[]>([]);
@@ -458,7 +478,7 @@ export default function PhoneSimulator({
   const [userId, setUserId] = useState("");
   const [hideNumber, setHideNumber] = useState(false);
   const [doubleCheck, setDoubleCheck] = useState(true);
-  const [blockedCount, setBlockedCount] = useState(0);
+  const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [twoStepVerification, setTwoStepVerification] = useState(false);
   const [twoStepPin, setTwoStepPin] = useState("");
   const [muteChats, setMuteChats] = useState(false);
@@ -470,6 +490,7 @@ export default function PhoneSimulator({
   const [mobileDataUsage, setMobileDataUsage] = useState("Ahorro");
   const [autoDownloadPhotos, setAutoDownloadPhotos] = useState(true);
   const [appFont, setAppFont] = useState<"Clásico" | "Mono" | "Elegante" | "Moderno">("Clásico");
+  const [fontScale, setFontScale] = useState(1);
   const [hasUnseenStates, setHasUnseenStates] = useState(false);
   const [backupDate, setBackupDate] = useState("");
   const [backupChatsCount, setBackupChatsCount] = useState(0);
@@ -1597,11 +1618,20 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       excluded.add(user.id);
       if (active.targetUserId) excluded.add(active.targetUserId);
       groupRemoteStreams.forEach((_, peerId) => excluded.add(peerId));
-      setAddMemberContacts(
-        contacts.filter(
-          (c) => c.contact_user_id && !excluded.has(c.contact_user_id)
-        )
-      );
+      // La tabla `contacts` puede tener filas duplicadas de la misma persona
+      // (agregada por QR, chat, sincronización, etc.). Dedup por contact_user_id
+      // igual que `dedupedContacts` para que no aparezca repetida en la lista.
+      const seen = new Map<string, Contact>();
+      for (const c of contacts) {
+        if (!c.contact_user_id || excluded.has(c.contact_user_id)) continue;
+        const existing = seen.get(c.contact_user_id);
+        if (!existing) {
+          seen.set(c.contact_user_id, c);
+        } else if (c.phone && !existing.phone) {
+          seen.set(c.contact_user_id, c);
+        }
+      }
+      setAddMemberContacts(Array.from(seen.values()));
     } catch (err) {
       logger.error("[GRUPOCALL] load contacts error", { error: err });
       toast.error("No se pudieron cargar los contactos");
@@ -1634,7 +1664,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         chat_id: roomId,
       });
       logger.info("[GRUPOCALL] Invited contact to room", { contactName: contact.name, roomId, callId: dbCall?.id });
-      showToast(`${contact.name} invitado a la videollamada`);
+      toast.success(`${contact.name} invitado a la videollamada`);
       setShowAddMember(false);
       // Auto-descartar la invitación si nadie la acepta en 45s.
       if (dbCall?.id) {
@@ -1661,7 +1691,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     } finally {
       setInvitingContactId(null);
     }
-  }, [user, groupParticipantCount, showToast]);
+  }, [user, groupParticipantCount]);
 
   const startOutgoingCall = async (opts: { partnerId: string; name: string; avatar: string; chatId: string; type: "audio" | "video" }) => {
     const { partnerId, name: contactName, avatar: contactAvatar, chatId, type } = opts;
@@ -2080,11 +2110,44 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         await supabase.from("blocks").insert({ blocker_id: user.id, blocked_id: chat.partnerUserId });
       }
       showToast("Usuario bloqueado");
+      loadBlockedUsers();
     } catch (e) {
       logger.warn("[CHAT] block error", { error: e });
       showToast("Error al bloquear usuario");
     }
   };
+
+  const loadBlockedUsers = useCallback(async () => {
+    if (!user?.id) {
+      setBlockedUsers([]);
+      return;
+    }
+    try {
+      const list = await getBlockedUsers(user.id);
+      setBlockedUsers(list);
+    } catch (e) {
+      logger.warn("[SETTINGS] load blocked users error", { error: e });
+      setBlockedUsers([]);
+    }
+  }, [user?.id]);
+
+  const handleUnblock = async (blockedId: string, name: string) => {
+    try {
+      await unblockUser(blockedId);
+      setBlockedUsers(prev => prev.filter(u => u.id !== blockedId));
+      showToast(`Desbloqueaste a ${name}`);
+    } catch (e) {
+      logger.warn("[SETTINGS] unblock error", { error: e });
+      showToast("No se pudo desbloquear al usuario");
+    }
+  };
+
+  // Cargar la lista real de bloqueados cada vez que se abre Privacidad y seguridad
+  useEffect(() => {
+    if (activeSettingsModal === "seguridad") {
+      loadBlockedUsers();
+    }
+  }, [activeSettingsModal, loadBlockedUsers]);
 
   const startLongPressTimer = (chat: Chat, clientX: number, clientY: number) => {
     longPressTimer.current = setTimeout(() => {
@@ -2470,6 +2533,7 @@ try {
                 }}
                 onTriggerCall={handleTriggerCallFromChat}
                 callInProgress={isInitiatingCall}
+                readReceipts={doubleCheck}
                 onForwardMessage={setForwardingMessage}
                 onChatDeleted={(chatId) => {
                   deletedChatIdsRef.current.add(chatId);
@@ -3403,34 +3467,40 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                 </label>
                               </div>
 
-                              <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
-                                <div>
-                                  <div className="text-[11.5px] font-black text-slate-800">Bloqueos</div>
-                                  <div className="text-[9px] text-slate-400">Restringir llamadas y mensajes directos</div>
+                              <div className="border-t border-slate-100 pt-3">
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[11.5px] font-black text-slate-800">Bloqueos</div>
+                                    <div className="text-[9px] text-slate-400">Restringir llamadas y mensajes directos</div>
+                                  </div>
+                                  <span className="text-[10px] font-mono font-black text-slate-800">{blockedUsers.length}</span>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <button 
-                                    onClick={() => {
-                                      if(blockedCount > 0) {
-                                        setBlockedCount(blockedCount - 1);
-                                        showToast("Desbloqueado");
-                                      }
-                                    }}
-                                    className="w-5.5 h-5.5 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-600 text-xs cursor-pointer"
-                                  >
-                                    -
-                                  </button>
-                                  <span className="text-[10px] font-mono font-black text-slate-800">{blockedCount}</span>
-                                  <button 
-                                    onClick={() => {
-                                      setBlockedCount(blockedCount + 1);
-                                      showToast("Contacto bloqueado");
-                                    }}
-                                    className="w-5.5 h-5.5 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-600 text-xs cursor-pointer"
-                                  >
-                                    +
-                                  </button>
-                                </div>
+                                {blockedUsers.length === 0 ? (
+                                  <div className="mt-2 text-[9px] text-slate-400 italic">No has bloqueado a nadie</div>
+                                ) : (
+                                  <div className="mt-2 space-y-1.5">
+                                    {blockedUsers.map(u => (
+                                      <div key={u.id} className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          {u.avatar ? (
+                                            <CachedImage src={u.avatar} className="w-6 h-6 rounded-full object-cover" alt={u.name} />
+                                          ) : (
+                                            <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-600">
+                                              {u.name.charAt(0).toUpperCase()}
+                                            </div>
+                                          )}
+                                          <span className="text-[10.5px] font-semibold text-slate-700 truncate">{u.name}</span>
+                                        </div>
+                                        <button
+                                          onClick={() => handleUnblock(u.id, u.name)}
+                                          className="text-[9px] font-bold text-rose-500 hover:text-rose-600 px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 shrink-0"
+                                        >
+                                          Desbloquear
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
 
                               <div className="border-t border-slate-100 pt-3 space-y-3">
@@ -3696,6 +3766,54 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                 ))}
                               </div>
 
+                              <div className="space-y-3 pt-2 border-t border-slate-100">
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <div className="text-[11.5px] font-black text-slate-800">Tamaño de letra</div>
+                                    <div className="text-[9px] text-slate-400">Escala global para chats, menús y botones</div>
+                                  </div>
+                                  <span className="text-[11px] font-bold text-teal-600 bg-teal-50 px-2 py-1 rounded-lg">
+                                    {Math.round(fontScale * 100)}%
+                                  </span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0.85"
+                                  max="1.3"
+                                  step="0.05"
+                                  value={fontScale}
+                                  onChange={(e) => {
+                                    const newScale = parseFloat(e.target.value);
+                                    setFontScale(newScale);
+                                    document.documentElement.style.setProperty('--font-scale', newScale.toString());
+                                  }}
+                                  onMouseUp={async () => {
+                                    try {
+                                      await Preferences.set({ key: 'redon_font_scale', value: fontScale.toString() });
+                                      localStorage.setItem('redon_font_scale', fontScale.toString());
+                                      showToast(`Tamaño: ${Math.round(fontScale * 100)}%`);
+                                    } catch (e) {
+                                      logger.warn("[PhoneSimulator] Failed to save font scale", { error: e });
+                                    }
+                                  }}
+                                  onTouchEnd={async () => {
+                                    try {
+                                      await Preferences.set({ key: 'redon_font_scale', value: fontScale.toString() });
+                                      localStorage.setItem('redon_font_scale', fontScale.toString());
+                                      showToast(`Tamaño: ${Math.round(fontScale * 100)}%`);
+                                    } catch (e) {
+                                      logger.warn("[PhoneSimulator] Failed to save font scale", { error: e });
+                                    }
+                                  }}
+                                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-teal-500"
+                                />
+                                <div className="flex justify-between text-[9px] text-slate-400">
+                                  <span>Pequeño (85%)</span>
+                                  <span>Normal (100%)</span>
+                                  <span>Grande (130%)</span>
+                                </div>
+                              </div>
+
                               <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-1">
                                 <div className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Previsualización:</div>
                                 <p className={`text-[11px] text-slate-800 ${
@@ -3704,7 +3822,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                   appFont === "Moderno" ? "font-sans tracking-tight font-semibold" : 
                                   "font-sans"
                                 }`}>
-                                  El estilo de letra se aplica a todos los chats, canales, tarifas y configuraciones en tiempo real.
+                                  El estilo y tamaño de letra se aplica a todos los chats, canales, tarifas y configuraciones en tiempo real.
                                 </p>
                               </div>
                             </div>

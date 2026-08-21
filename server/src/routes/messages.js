@@ -118,9 +118,8 @@ router.post('/send', sendLimiter, async (req, res) => {
     }
 
     // Verificación de bloqueo: en un chat 1:1, si el receptor bloqueó al
-    // remitente, el envío se rechaza antes de insertar. (Los grupos no
-    // aplican bloqueo individual; igual que fcm.js, se consulta la tabla
-    // `blocks` con blocker_id = receptor y blocked_id = remitente.)
+    // remitente, el envío se simula como exitoso (200) pero no se inserta
+    // ni se notifica. El usuario bloqueado no debe saber que está bloqueado.
     const { data: blockChat } = await supabaseAdmin
       .from('chats')
       .select('profile_id, admin_id, is_group')
@@ -136,7 +135,48 @@ router.post('/send', sendLimiter, async (req, res) => {
           .eq('blocked_id', req.userId)
           .maybeSingle();
         if (block) {
-          return res.status(403).json({ error: 'No puedes enviar mensajes a este usuario' });
+          const fakeMessage = {
+            id: msg.client_id || crypto.randomUUID(),
+            chat_id: msg.chat_id,
+            sender_id: msg.sender_id,
+            receiver_id: msg.receiver_id || recipientId,
+            text: msg.text || '',
+            type: msg.type || 'text',
+            status: 'sent',
+            created_at: new Date().toISOString(),
+            edited: false,
+            forwarded: false,
+            has_image: !!msg.image_url,
+            image_url: msg.image_url || null,
+            image_alt: msg.image_alt || null,
+            has_audio: !!msg.audio_url,
+            audio_url: msg.audio_url || null,
+            audio_duration: msg.audio_duration || null,
+            mime_type: msg.mime_type || null,
+            has_video: !!msg.video_url,
+            video_url: msg.video_url || null,
+            has_document: !!(msg.document_name || msg.file_url),
+            document_name: msg.document_name || null,
+            document_size: msg.document_size || null,
+            document_type: msg.document_type || null,
+            file_url: msg.file_url || null,
+            has_location: !!msg.latitude,
+            latitude: msg.latitude || null,
+            longitude: msg.longitude || null,
+            location_name: msg.location_name || null,
+            reply_to_id: msg.reply_to_id || null,
+            reply_to_text: msg.reply_to_text || null,
+            reply_to_sender: msg.reply_to_sender || null,
+            sticker_url: msg.sticker_url || null,
+            gif_url: msg.gif_url || null,
+            is_animated: !!msg.is_animated,
+            is_ephemeral: false,
+            ephemeral_expires_at: null,
+            reactions: {},
+            read_by: [],
+            is_deleted: false,
+          };
+          return res.json(fakeMessage);
         }
       }
     }
@@ -387,32 +427,21 @@ router.post('/mark-read', async (req, res) => {
       return res.json({ updated: 0 });
     }
 
-    const messageIds = unreadMessages.map(m => m.id);
-
-    const { error: batchError } = await supabaseAdmin
-      .from('messages')
-      .update({
-        status: 'read',
-        read_at: now,
-      })
-      .in('id', messageIds);
-
-    if (batchError) {
-      console.error('[MESSAGES] batch update error:', batchError);
-      let updated = 0;
-      for (const msg of unreadMessages) {
-        const currentReadBy = (msg.read_by || []);
-        const newReadBy = [...currentReadBy, { userId: user_id, name, readAt: now }];
-        const { error: updateError } = await supabaseAdmin
-          .from('messages')
-          .update({ status: 'read', read_at: now, read_by: newReadBy })
-          .eq('id', msg.id);
-        if (!updateError) updated++;
-      }
-      return res.json({ updated });
+    // Marca por mensaje para anexar `read_by` (el batch de PostgREST no puede
+    // escribir un array distinto por fila). Al persistir read_by, la próxima
+    // visita no re-marca todo el chat ni reescribe read_at innecesariamente.
+    let updated = 0;
+    for (const msg of unreadMessages) {
+      const currentReadBy = (msg.read_by || []);
+      const newReadBy = [...currentReadBy, { userId: user_id, name, readAt: now }];
+      const { error: updateError } = await supabaseAdmin
+        .from('messages')
+        .update({ status: 'read', read_at: now, read_by: newReadBy })
+        .eq('id', msg.id);
+      if (!updateError) updated++;
     }
 
-    res.json({ updated: unreadMessages.length });
+    res.json({ updated });
   } catch (err) {
     console.error('[MESSAGES] mark-read error:', err);
     res.status(500).json({ error: err.message });
@@ -471,7 +500,9 @@ router.post('/delete', async (req, res) => {
     const { error } = await supabaseAdmin
       .from('messages')
       .update({ is_deleted: true, text: '' })
-      .eq('id', message_id);
+      .eq('id', message_id)
+      .select('id, chat_id, sender_id, text, type, status, edited, is_deleted, created_at, reactions, poll_options')
+      .single();
 
     if (error) throw error;
 
@@ -539,7 +570,9 @@ router.post('/edit', async (req, res) => {  try {
     const { error } = await supabaseAdmin
       .from('messages')
       .update({ text: sanitizedText, edited: true })
-      .eq('id', message_id);
+      .eq('id', message_id)
+      .select('id, chat_id, sender_id, text, type, status, edited, is_deleted, created_at, reactions, poll_options')
+      .single();
 
     if (error) throw error;
 
