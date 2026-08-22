@@ -3,16 +3,19 @@ import {
   Plus, Search, Sparkles, Volume2, VolumeX, MessageSquare, 
   MapPin, Eye, MousePointerClick, Image as ImageIcon, Music, 
   Check, Play, Pause, RefreshCw, BarChart3, Star, Tag, Compass,
-  Layers, ChevronRight, Share2, HelpCircle, AlertCircle, Upload, X, Trash2, Download
+  Layers, ChevronRight, Share2, HelpCircle, AlertCircle, Upload, X, Trash2, Download,
+  Crown
 } from "lucide-react";
 import { Share } from "@capacitor/share";
 import { Capacitor } from "@capacitor/core";
 import { Chat, Message } from "../types";
 import MediaEditor from "./MediaEditor";
+import EmprendedorAccessModal from "./EmprendedorAccessModal";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../services/storage";
 import { saveMediaToGalleryDirect } from "../services/mediaUtils";
 import { getMusicLibrary, MusicTrack } from "../services/stickerService";
+import { fetchEmprendedorAccess } from "../services/emprendedorAccess";
 
 export interface BusinessFlyer {
   id: string;
@@ -155,6 +158,27 @@ export default function BusinessPanel({
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
 
+  // ===== MEMBRESÍA EMPRENDEDOR (planes + código de administrador) =====
+  const [hasMembership, setHasMembership] = useState(false);
+  const [showPlansModal, setShowPlansModal] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchEmprendedorAccess().then((info) => {
+      if (!cancelled) setHasMembership(info.active);
+    });
+    return () => { cancelled = true; };
+  }, [currentUserId]);
+
+  // Al entrar a "Publicar" se exige membresía vigente; el resto de pestañas es libre
+  const handleSubTabPress = (tab: typeof activeSubTab) => {
+    if (tab === "create" && !hasMembership) {
+      setShowPlansModal(true);
+      return;
+    }
+    setActiveSubTab(tab);
+  };
+
   // Handle music player
   const toggleMusic = (url: string) => {
     if (!url) {
@@ -236,6 +260,11 @@ export default function BusinessPanel({
     e.preventDefault();
     if (!upName.trim() || !upDesc.trim() || !upLoc.trim()) return;
 
+    if (!hasMembership) {
+      setShowPlansModal(true);
+      return;
+    }
+
     setPublishing(true);
 
     const selectedMusic = musicList.find(m => m.id === upMusicId);
@@ -289,6 +318,11 @@ export default function BusinessPanel({
     e.preventDefault();
     const validProducts = genProducts.filter(p => p.name.trim());
     if (!genName.trim() || !validProducts.length || !genLoc.trim()) return;
+
+    if (!hasMembership) {
+      setShowPlansModal(true);
+      return;
+    }
 
     setPublishing(true);
 
@@ -427,15 +461,22 @@ export default function BusinessPanel({
             <Compass className="w-4 h-4 text-teal-300" />
             <h3 className="text-xs font-black tracking-tight">Red On Negocios</h3>
           </div>
-          <span className="text-[8px] bg-emerald-500 text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider animate-pulse">
-            Modo Emprendedor
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[8px] bg-emerald-500 text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider animate-pulse">
+              Modo Emprendedor
+            </span>
+            {hasMembership && (
+              <span className="text-[8px] bg-amber-400 text-slate-900 font-black px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center gap-1 shadow-sm">
+                <Crown className="w-2.5 h-2.5" /> VIP
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Dynamic Horizontal Sub Tabs */}
         <div className="flex gap-1 bg-black/15 p-1.5 rounded-lg text-[11px] font-bold uppercase mt-1">
           <button
-            onClick={() => setActiveSubTab("feed")}
+            onClick={() => handleSubTabPress("feed")}
             className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
               activeSubTab === "feed" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
@@ -443,15 +484,16 @@ export default function BusinessPanel({
             Feed
           </button>
           <button
-            onClick={() => setActiveSubTab("create")}
-            className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
+            onClick={() => handleSubTabPress("create")}
+            className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer flex items-center justify-center gap-1 ${
               activeSubTab === "create" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
+            {!hasMembership && <Crown className="w-3 h-3 text-amber-400" />}
             Publicar
           </button>
           <button
-            onClick={() => setActiveSubTab("editor")}
+            onClick={() => handleSubTabPress("editor")}
             className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
               activeSubTab === "editor" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
@@ -459,7 +501,7 @@ export default function BusinessPanel({
             Editor Pro 🎨
           </button>
           <button
-            onClick={() => setActiveSubTab("stats")}
+            onClick={() => handleSubTabPress("stats")}
             className={`flex-1 py-1.5 text-center rounded-md transition-all cursor-pointer ${
               activeSubTab === "stats" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
@@ -1383,6 +1425,10 @@ export default function BusinessPanel({
         <div className="absolute inset-0 bg-slate-900 z-50 flex flex-col overflow-hidden">
           <MediaEditor 
             onPublishFlyer={(newFlyer) => {
+              if (!hasMembership) {
+                setShowPlansModal(true);
+                return;
+              }
               onAddFlyer(newFlyer);
               setActiveSubTab("stats");
             }}
@@ -1392,6 +1438,19 @@ export default function BusinessPanel({
           />
         </div>
       )}
+
+      {/* ======================================= */}
+      {/* MODAL: MEMBRESÍA EMPRENDEDOR (planes + código admin) */}
+      {/* ======================================= */}
+      <EmprendedorAccessModal
+        open={showPlansModal}
+        onClose={() => setShowPlansModal(false)}
+        onActivated={() => {
+          setHasMembership(true);
+          setShowPlansModal(false);
+          setActiveSubTab("create");
+        }}
+      />
     </div>
   );
 }
