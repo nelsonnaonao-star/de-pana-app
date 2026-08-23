@@ -136,6 +136,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       locationName: m.location_name,
       isEphemeral: m.is_ephemeral,
       ephemeralExpiresAt: m.ephemeral_expires_at,
+      clientTempId: m.temp_id || undefined,
     };
   };
 
@@ -156,6 +157,10 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     const incomingMap = new Map<string, Message>();
     for (const msg of incoming) {
       incomingMap.set(msg.id, msg);
+    }
+    const incomingByTempId = new Map<string, Message>();
+    for (const msg of incoming) {
+      if (msg.clientTempId) incomingByTempId.set(msg.clientTempId, msg);
     }
 
     let changed = false;
@@ -186,6 +191,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             changed = true;
             return { ...msg, ...twin, id: twin.id, status: "sent" as const, synced: true };
           }
+        }
+        const echoTwin = !savedId ? incomingByTempId.get(msg.id) : undefined;
+        if (echoTwin) {
+          incomingByTempId.delete(msg.id);
+          incomingMap.delete(echoTwin.id);
+          changed = true;
+          const fused: Message = { ...msg, ...echoTwin, status: "sent", synced: true };
+          recordReconciledId(chat.id, msg.id, echoTwin.id);
+          messageRepo.reconcileTemp(chat.id, msg.id, fused).catch(() => {});
+          return fused;
         }
       }
       return msg;

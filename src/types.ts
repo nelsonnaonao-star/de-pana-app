@@ -31,6 +31,7 @@ export interface Message {
   senderId?: string;
   client_id?: string;
   clientId?: string;
+  clientTempId?: string;
   isEphemeral?: boolean;
   ephemeralExpiresAt?: string;
 }
