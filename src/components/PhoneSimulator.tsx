@@ -46,6 +46,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Preferences } from '@capacitor/preferences';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
+import { Virtuoso } from "react-virtuoso";
 
 import { playSound, playSoundOption, getSoundId, setSoundId, stopSound } from "../services/soundService";
 import { SOUND_LIBRARY } from "../data/sounds";
@@ -2235,13 +2236,6 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     c.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
   );
 
-  // Flag which chats are animating for the first time this session.
-  const chatsWithAnimFlag = filteredChats.map((chat) => {
-    const shouldAnimate = !animatedChatIds.has(chat.id);
-    animatedChatIds.add(chat.id);
-    return { chat, shouldAnimate };
-  });
-
   return (
     <div className="relative w-screen h-screen bg-white flex flex-col overflow-hidden select-none">
       {/* Toast Alert Notification */}
@@ -2756,16 +2750,26 @@ try {
               } ${currentScreen === "states" ? "hidden" : ""}`}>
                 
                 {/* CHATS LIST */}
-                <div className={`flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5 ${currentScreen === "chats" ? "" : "hidden"}`}>
+                <div className={`flex-1 flex flex-col min-h-0 ${currentScreen === "chats" ? "" : "hidden"}`}>
                     {/* Recent Section Header */}
-                    <div className="flex justify-between items-center px-1 mb-1">
-                      <h2 className="text-sm font-extrabold text-slate-950 tracking-tight">Recent</h2>
-                      <button className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
-                        <span className="text-lg font-bold leading-none">•••</span>
-                      </button>
+                    <div className="px-4 pt-3.5 pb-[14px]">
+                      <div className="flex justify-between items-center px-1 mb-1">
+                        <h2 className="text-sm font-extrabold text-slate-950 tracking-tight">Recent</h2>
+                        <button className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer">
+                          <span className="text-lg font-bold leading-none">•••</span>
+                        </button>
+                      </div>
                     </div>
 
-                        {chatsWithAnimFlag.map(({ chat, shouldAnimate }) => {
+                <div className="flex-1 min-h-0 px-4">
+                {filteredChats.length > 0 && (
+                <Virtuoso
+                  className="h-full"
+                  data={filteredChats}
+                  computeItemKey={(_, chat) => chat.id}
+                  itemContent={(_index, chat) => {
+                    const shouldAnimate = !animatedChatIds.has(chat.id);
+                    animatedChatIds.add(chat.id);
                       const isSwiped = swipedChatId === chat.id;
                       let touchStartX = 0;
                       let touchStartY = 0;
@@ -2820,7 +2824,8 @@ try {
                       };
 
                       return (
-                        <div key={chat.id} className="relative overflow-hidden rounded-2xl">
+                        <div className="pb-3.5">
+                        <div className="relative overflow-hidden rounded-2xl">
                           {/* Delete button behind */}
                           <div className="absolute inset-0 flex items-center justify-end bg-rose-500 rounded-2xl pr-4">
                             <button
@@ -2922,20 +2927,25 @@ try {
                             </div>
                           </div>
                         </div>
+                        </div>
                       );
-                    })}
+                    }}
+                  />
+                )}
+                {filteredChats.length === 0 && !chatsLoaded && (
+                  <ChatListSkeleton count={8} />
+                )}
 
-                    {filteredChats.length === 0 && !chatsLoaded && (
-                      <ChatListSkeleton count={8} />
-                    )}
-
-                    {filteredChats.length === 0 && chatsLoaded && (
-                      <div className="text-center py-12 text-slate-400 space-y-1">
-                        <p className="text-xs font-semibold">No se encontraron chats</p>
-                        <p className="text-[10px]">Prueba escribiendo otro nombre</p>
-                      </div>
-                    )}
+                {filteredChats.length === 0 && chatsLoaded && (
+                  <div className="px-4 pb-3.5">
+                    <div className="text-center py-12 text-slate-400 space-y-1">
+                      <p className="text-xs font-semibold">No se encontraron chats</p>
+                      <p className="text-[10px]">Prueba escribiendo otro nombre</p>
+                    </div>
                   </div>
+                )}
+                </div>
+                </div>
 
                 {/* Context menu overlay */}
                 {contextMenuChat && contextMenuPos && (
