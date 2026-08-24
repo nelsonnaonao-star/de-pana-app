@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Download, Share2, User } from "lucide-react";
 import QRCode from "qrcode";
+import CachedImage from "./CachedImage";
 
 interface MyQrCodeProps {
   userId: string;
@@ -38,7 +39,7 @@ export default function MyQrCode({ userId, name, phone, avatar, onBack }: MyQrCo
         <div className="bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.08)] p-6 w-full max-w-xs text-center space-y-4">
           <div className="w-16 h-16 rounded-full mx-auto overflow-hidden bg-slate-100">
             {avatar ? (
-              <img src={avatar} alt="" className="w-full h-full object-cover" />
+              <CachedImage src={avatar} alt="" className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full flex items-center justify-center bg-teal-100 text-teal-600">
                 <User className="w-6 h-6" />

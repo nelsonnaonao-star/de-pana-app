@@ -1,4 +1,5 @@
 import { ArrowLeft, Search, Check } from "lucide-react";
+import CachedImage from "../CachedImage";
 
 interface SimulatorCreateGroupProps {
   onBack: () => void;
@@ -88,7 +89,7 @@ export default function SimulatorCreateGroup({
                 {isSelected && <Check className="w-3 h-3 text-white" />}
               </div>
               {contact.avatar ? (
-                <img src={contact.avatar} alt={contact.name} className="w-9 h-9 rounded-full object-cover" loading="lazy" />
+                <CachedImage src={contact.avatar} alt={contact.name} className="w-9 h-9 rounded-full object-cover" loading="lazy" />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                   <span className="text-white font-bold text-[10px]">

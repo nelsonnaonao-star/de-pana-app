@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Users, Eye, EyeOff, Lock, Check } from "lucide-react";
 import { StoryAudience } from "../../hooks/useStatesManagement";
 import { Contact } from "../../services/contacts";
+import CachedImage from "../CachedImage";
 
 interface StoryAudiencePickerProps {
   audience: StoryAudience;
@@ -86,7 +87,7 @@ export default function StoryAudiencePicker({ audience, onChange, contacts }: St
                   >
                     <div className="w-5 h-5 rounded-full bg-slate-200 overflow-hidden shrink-0">
                       {c.avatar ? (
-                        <img src={c.avatar} alt="" className="w-full h-full object-cover" />
+                        <CachedImage src={c.avatar} alt="" className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-[7px] font-bold text-slate-500">
                           {(c.name || "?").slice(0, 1).toUpperCase()}

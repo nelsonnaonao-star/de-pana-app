@@ -1,6 +1,7 @@
 import React from "react";
 import { Smile, Paperclip, Mic, VideoIcon, Send, X, Check, Loader2 } from "lucide-react";
 import { Message } from "../../types";
+import CachedImage from "../CachedImage";
 
 interface ChatInputBarProps {
   inputText: string;
@@ -41,7 +42,7 @@ export default function ChatInputBar({
           <div className="bg-white/95 backdrop-blur-md rounded-2xl px-3 py-2 border border-slate-200 shadow-sm flex items-center gap-2">
             <div className="w-0.5 h-8 bg-teal-500 rounded-full shrink-0"></div>
             {(replyTo.type === "image" || replyTo.type === "sticker" || replyTo.type === "video") && replyTo.mediaUrl && (
-              <img src={replyTo.mediaUrl} className="w-8 h-8 rounded-lg object-cover shrink-0" />
+              <CachedImage src={replyTo.mediaUrl} className="w-8 h-8 rounded-lg object-cover shrink-0" />
             )}
             <div className="flex-1 min-w-0">
               <p className="text-[10px] font-bold text-teal-700 truncate">

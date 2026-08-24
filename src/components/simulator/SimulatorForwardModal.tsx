@@ -1,6 +1,7 @@
 import React from "react";
 import { Forward, Search, ArrowRight } from "lucide-react";
 import { Chat } from "../../types";
+import CachedImage from "../CachedImage";
 
 interface SimulatorForwardModalProps {
   message: { text?: string; type: string; fileName?: string; mediaUrl?: string } | null;
@@ -60,7 +61,7 @@ export default function SimulatorForwardModal({
               className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors text-left"
             >
               {chat.avatar ? (
-                <img src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover" />
+                <CachedImage src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover" />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                   <span className="text-white font-bold text-[10px]">

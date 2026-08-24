@@ -6,6 +6,7 @@ import { supabase } from "../lib/supabase";
 import { createChat } from "../services/chats";
 import { addContact } from "../services/contacts";
 import { useSupabase } from "../contexts/SupabaseContext";
+import CachedImage from "./CachedImage";
 
 interface QrScannerProps {
   userName: string;
@@ -304,7 +305,7 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
             <div className="flex flex-col items-center text-center gap-2">
               <div className="w-14 h-14 rounded-full bg-teal-100 flex items-center justify-center overflow-hidden">
                 {foundProfile.avatar_url ? (
-                  <img
+                  <CachedImage
                     src={foundProfile.avatar_url}
                     alt=""
                     className="w-full h-full object-cover"

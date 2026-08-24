@@ -1213,7 +1213,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           return;
         }
         if (activeCallRef.current) return;
-        logger.info('[WEBRTC SIGNALING] Setting activeCall from Realtime', { callerName, status: 'incoming' });
+        const isGroupChat = !!chatsRef.current.find((c) => c.id === call.chat_id)?.isGroup;
+        logger.info('[WEBRTC SIGNALING] Setting activeCall from Realtime', { callerName, status: 'incoming', isGroupChat });
         playIncomingRingtone();
         setActiveCall({
           id: call.id,
@@ -1224,7 +1225,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           durationSeconds: 0,
           isMuted: false,
           isVideoOff: false,
-          isGroup: false,
+          isGroup: isGroupChat,
           targetUserId: call.caller_id,
           roomId: call.chat_id || undefined,
         });
@@ -1294,6 +1295,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         }
         logger.info('[WEBRTC SIGNALING] Setting activeCall from FCM', { callerName: d.callerName, callId: incomingCallId });
         answeredCallRef.current = false;
+        const isGroupChatFcm = !!chatsRef.current.find((c) => c.id === chatId)?.isGroup;
         playIncomingRingtone();
         setActiveCall({
           id: incomingCallId || ('call_' + Date.now()),
@@ -1304,7 +1306,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           durationSeconds: 0,
           isMuted: false,
           isVideoOff: false,
-          isGroup: false,
+          isGroup: isGroupChatFcm,
           targetUserId: d.callerId,
           roomId: chatId,
         });
@@ -1446,6 +1448,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     });
   };
 
+  const [callSignalPoor, setCallSignalPoor] = useState(false);
+
   const cleanupCall = useCallback(() => {
     const wasConnected = callWasConnectedRef.current;
     const callId = activeCallRef.current?.id;
@@ -1467,6 +1471,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     setAddMemberContacts([]);
     setInvitingContactId(null);
     setActiveCall(null);
+    setCallSignalPoor(false);
     callWasConnectedRef.current = false;
     answeredCallRef.current = false;
     if (wasConnected && callId) {
@@ -1507,6 +1512,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       webrtc.onConnectionStateChange = (state) => {
         logger.info('[WEBRTC SIGNALING] Callee ICE state', { state });
       };
+      webrtc.onNetworkQuality = (poor) => setCallSignalPoor(poor);
       webrtc.onCallEnded = () => {
         logger.info('[WEBRTC SIGNALING] Call ended (auto-answered callee)');
         cleanupCall();
@@ -1808,6 +1814,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       webrtc.onConnectionStateChange = (state) => {
         logger.info('[WEBRTC SIGNALING] ICE state', { state });
       };
+      webrtc.onNetworkQuality = (poor) => setCallSignalPoor(poor);
 
       webrtc.onCallEnded = () => {
         logger.info('[WEBRTC SIGNALING] Call ended');
@@ -2261,6 +2268,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           remoteStream={remoteStream}
           remoteStreamsMap={activeCall.isGroup ? groupRemoteStreams : undefined}
           participantCount={activeCall.isGroup ? groupParticipantCount : 0}
+          signalPoor={callSignalPoor}
           onAddMember={() => openAddMember()}
           pendingReaction={pendingReaction}
           onSendReaction={(emoji) => {
@@ -2308,6 +2316,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
                 webrtc.onCallEnded = () => endGroupCall();
                 await webrtc.subscribeToRoom();
                 await webrtc.announceJoin();
+                updateCallStatus(activeCall.id, 'accepted').catch((e) => logger.warn('[GRUPOCALL] Failed to mark invited call accepted', { error: e }));
                 setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
 } catch (err) {
                 logger.error("[GRUPOCALL] join error", { error: err });
@@ -2338,6 +2347,7 @@ try {
               webrtc.onConnectionStateChange = (state) => {
                 logger.info('[WEBRTC SIGNALING] Callee ICE state', { state });
               };
+              webrtc.onNetworkQuality = (poor) => setCallSignalPoor(poor);
 
               webrtc.onCallEnded = () => {
                 logger.info('[WEBRTC SIGNALING] Call ended (callee)');
@@ -2467,8 +2477,8 @@ try {
                       disabled={invitingContactId !== null}
                       className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-slate-50 active:bg-slate-100 transition-all text-left cursor-pointer disabled:opacity-50"
                     >
-                      <img
-                        src={c.avatar || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e2e8f0'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M12 14c-4 0-6 2-6 4v2h12v-2c0-2-2-4-6-4z'/%3E%3C/svg%3E"}
+                      <CachedImage
+                        src={c.avatar}
                         alt={c.name}
                         className="w-10 h-10 rounded-full object-cover bg-slate-100"
                       />
@@ -3057,9 +3067,9 @@ try {
                       </div>
                       <div className="relative inline-block mt-2 group z-10">
                         {registeredUser.avatar ? (
-                          <img 
-                            src={registeredUser.avatar} 
-                            alt="Profile" 
+                          <CachedImage
+                            src={registeredUser.avatar}
+                            alt="Profile"
                             onClick={() => !isUploadingAvatar && setShowMyAvatarLightbox(true)}
                             className={`w-32 h-32 rounded-full mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
                           />

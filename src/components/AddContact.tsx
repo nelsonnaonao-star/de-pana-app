@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { apiUrl } from "../lib/api";
+import CachedImage from "./CachedImage";
 import { normalizePhone, digitsOnly } from "../utils/phone";
 import {
   ArrowLeft, Phone, User, Check, Loader2, UserPlus, X, Shield, Smartphone, ExternalLink
@@ -245,7 +246,7 @@ export default function AddContact({ currentUserId, onBack, onContactAdded }: Ad
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shrink-0 shadow-md flex items-center justify-center">
                   {foundUser.avatar || foundUser.avatar_url ? (
-                    <img src={foundUser.avatar || foundUser.avatar_url} alt="" className="w-full h-full object-cover" />
+                    <CachedImage src={foundUser.avatar || foundUser.avatar_url} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <span className="text-white font-black text-lg">{getInitials(foundUser.name)}</span>
                   )}

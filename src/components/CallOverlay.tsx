@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   PhoneOff, Phone, Mic, MicOff, Video, VideoOff, RotateCw,
-  Sparkles, Smile, Image, ShieldAlert, Users, Layers, MonitorPlay
+  Sparkles, Smile, Image, ShieldAlert, Users, Layers, MonitorPlay, WifiOff
 } from "lucide-react";
 import { ActiveCall } from "../types";
 
@@ -21,6 +21,7 @@ interface CallOverlayProps {
   onSendReaction?: (emoji: string) => void;
   pendingReaction?: { id: number; emoji: string } | null;
   onFilterChange?: (filterId: string) => void;
+  signalPoor?: boolean;
 }
 
 const EMOJIS = ["👍", "❤️", "🔥", "😮", "😂", "🎉"];
@@ -40,7 +41,8 @@ export default function CallOverlay({
   onAddMember,
   onSendReaction,
   pendingReaction,
-  onFilterChange
+  onFilterChange,
+  signalPoor
 }: CallOverlayProps) {
   const [activeFilter, setActiveFilter] = useState<string>("none");
   const [showEffects, setShowEffects] = useState(false);
@@ -267,6 +269,13 @@ export default function CallOverlay({
           </span>
         ))}
       </div>
+
+      {signalPoor && call.status === "connected" && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 bg-amber-500/20 backdrop-blur-md border border-amber-400/40 text-amber-300 px-3 py-1.5 rounded-full animate-pulse shadow-lg">
+          <WifiOff className="w-3.5 h-3.5" />
+          <span className="text-[10px] font-bold">Señal inestable</span>
+        </div>
+      )}
 
       {isGroupVideo ? (
         <GroupVideoContent />

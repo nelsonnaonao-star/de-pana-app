@@ -325,7 +325,7 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
                     onClick={() => onSelect(url, "sticker")}
                     className="w-full h-full hover:ring-2 ring-teal-500/60 hover:shadow-lg transition-all cursor-pointer active:scale-95"
                   >
-                    <img
+                    <CachedImage
                       src={url}
                       alt="Mis sticker"
                       className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"

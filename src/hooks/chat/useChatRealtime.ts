@@ -50,7 +50,13 @@ export function useChatRealtime(
       const hasSession = await ensureSession();
       if (!hasSession || cancelled) return;
 
+      if (messagesChannelRef.current) {
+        supabase.removeChannel(messagesChannelRef.current);
+        messagesChannelRef.current = null;
+      }
+
       const channel = supabase.channel(`messages-${chatId}`);
+      messagesChannelRef.current = channel;
       channel.on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -114,9 +120,15 @@ export function useChatRealtime(
       const hasSession = await ensureSession();
       if (!hasSession || cancelled) return;
 
+      if (typingChannelRef.current) {
+        supabase.removeChannel(typingChannelRef.current);
+        typingChannelRef.current = null;
+      }
+
       const channel = supabase.channel(`typing-${chatId}`, {
         config: { broadcast: { self: false, ack: false } },
       });
+      typingChannelRef.current = channel;
 
       channel.on('broadcast', { event: 'typing' }, (payload: any) => {
         const data = payload.payload || payload;

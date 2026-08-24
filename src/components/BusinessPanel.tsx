@@ -9,6 +9,7 @@ import {
 import { Share } from "@capacitor/share";
 import { Capacitor } from "@capacitor/core";
 import { Chat, Message } from "../types";
+import CachedImage from "./CachedImage";
 import MediaEditor from "./MediaEditor";
 import EmprendedorAccessModal from "./EmprendedorAccessModal";
 import { supabase } from "../lib/supabase";
@@ -546,7 +547,7 @@ export default function BusinessPanel({
                     {/* Header: User avatar and Name */}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <img
+                        <CachedImage
                           src={flyer.ownerAvatar}
                           alt={flyer.ownerName}
                           className="w-7 h-7 rounded-full object-cover border border-slate-100"
@@ -622,7 +623,7 @@ export default function BusinessPanel({
                       ) : (
                         /* UPLOADED FLYER IMAGE WITH DESCRIPTION */
                         <>
-                          <img
+                          <CachedImage
                             src={flyer.flyerUrl}
                             alt="Flyer"
                             className="w-full h-full object-cover"
@@ -853,7 +854,7 @@ export default function BusinessPanel({
                       </button>
                     ) : (
                       <div className="relative rounded-xl overflow-hidden border-2 border-teal-400">
-                        <img src={upFlyerUrl} alt="Tu flyer" className="w-full h-28 object-cover" />
+                        <CachedImage src={upFlyerUrl} alt="Tu flyer" className="w-full h-28 object-cover" />
                         <button
                           type="button"
                           onClick={() => setUpFlyerUrl("")}
@@ -1306,7 +1307,7 @@ export default function BusinessPanel({
                 </div>
               </div>
             ) : (
-              <img
+              <CachedImage
                 src={viewingFlyer.flyerUrl}
                 alt={viewingFlyer.businessName}
                 className="w-full h-full object-contain bg-slate-900"
@@ -1318,7 +1319,7 @@ export default function BusinessPanel({
           <div className="bg-white rounded-t-3xl -mt-4 relative z-10 p-5 space-y-4 flex-1" onClick={(e) => e.stopPropagation()}>
             {/* Business name & publisher */}
             <div className="flex items-center gap-3">
-              <img
+              <CachedImage
                 src={viewingFlyer.ownerAvatar}
                 alt={viewingFlyer.ownerName}
                 className="w-10 h-10 rounded-full object-cover border-2 border-teal-400"

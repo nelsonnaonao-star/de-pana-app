@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import CachedImage from "../CachedImage";
 
 interface StateViewersModalProps {
   viewersData: { viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number };
@@ -33,7 +34,7 @@ export default function StateViewersModal({ viewersData, onClose }: StateViewers
             <div className="divide-y divide-slate-800/50">
               {viewersData.viewers.map(v => (
                 <div key={v.viewer_id} className="flex items-center gap-3 px-4 py-2.5">
-                  <img
+                  <CachedImage
                     src={v.avatar || ""}
                     alt={v.name}
                     className="w-7 h-7 rounded-full object-cover border border-slate-700"

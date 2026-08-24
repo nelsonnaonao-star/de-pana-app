@@ -14,6 +14,10 @@ let cachedIceServers: RTCConfiguration["iceServers"] | null = null;
 let cacheTimestamp = 0;
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
+const SIGNAL_MAX_RECONNECT_ATTEMPTS = 10;
+const SIGNAL_BASE_RECONNECT_DELAY = 1000;
+const SIGNAL_MAX_RECONNECT_DELAY = 30000;
+
 async function fetchTurnCredentials(): Promise<RTCConfiguration["iceServers"]> {
   const now = Date.now();
   if (cachedIceServers && now - cacheTimestamp < CACHE_TTL) {
@@ -64,12 +68,18 @@ export class WebRTCService {
   private disconnectedTimer: ReturnType<typeof setTimeout> | null = null;
   private iceRestartCount = 0;
   private MAX_ICE_RESTARTS = 3;
+  private signalReconnectAttempt = 0;
+  private signalReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private isCleanedUp = false;
+  private qualityTimer: ReturnType<typeof setInterval> | null = null;
+  private poorStreak = 0;
 
   onRemoteStream: ((stream: MediaStream) => void) | null = null;
   onCallEnded: (() => void) | null = null;
   onConnectionStateChange: ((state: string) => void) | null = null;
   onCalleeReady: (() => void) | null = null;
   onReaction: ((emoji: string) => void) | null = null;
+  onNetworkQuality: ((poor: boolean) => void) | null = null;
 
   constructor(callId: string, userId: string) {
     this.callId = callId;
@@ -184,7 +194,69 @@ export class WebRTCService {
       );
     }
 
+    this.startQualityMonitor();
+
     return this.pc;
+  }
+
+  private startQualityMonitor() {
+    this.stopQualityMonitor();
+    this.poorStreak = 0;
+    this.qualityTimer = setInterval(async () => {
+      const pc = this.pc;
+      if (!pc || pc.connectionState === "closed") return;
+      try {
+        const iceState = pc.iceConnectionState;
+        if (iceState !== "connected" && iceState !== "completed" && iceState !== "disconnected" && iceState !== "failed") return;
+
+        let poor = false;
+        if (iceState === "disconnected" || iceState === "failed") {
+          poor = true;
+        } else {
+          const stats = await pc.getStats();
+          stats.forEach((report: any) => {
+            if (
+              report.type === "candidate-pair" &&
+              report.state === "succeeded" &&
+              report.currentRoundTripTime != null &&
+              report.currentRoundTripTime > 0.4
+            ) {
+              poor = true;
+            }
+            if (
+              report.type === "inbound-rtp" &&
+              (report.packetsReceived + report.packetsLost) > 50 &&
+              report.packetsLost / (report.packetsReceived + report.packetsLost) > 0.06
+            ) {
+              poor = true;
+            }
+          });
+        }
+
+        if (poor) {
+          this.poorStreak++;
+          if (this.poorStreak === 2) {
+            console.warn("[WebRTC] Network quality degraded — unstable signal");
+            this.onNetworkQuality?.(true);
+          }
+        } else {
+          if (this.poorStreak >= 2) {
+            console.log("[WebRTC] Network quality recovered");
+            this.onNetworkQuality?.(false);
+          }
+          this.poorStreak = 0;
+        }
+      } catch {
+      }
+    }, 4000);
+  }
+
+  private stopQualityMonitor() {
+    if (this.qualityTimer) {
+      clearInterval(this.qualityTimer);
+      this.qualityTimer = null;
+    }
+    this.poorStreak = 0;
   }
 
   private startDisconnectedTimer() {
@@ -321,51 +393,93 @@ export class WebRTCService {
       return this.subscribedPromise;
     }
 
+    this.isCleanedUp = false;
+    this.signalReconnectAttempt = 0;
+
     this.subscribedPromise = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("Signal channel subscribe timeout (15s)"));
       }, 15000);
 
-      this.channel = supabase.channel(`call-signal:${this.callId}`, {
-        config: { broadcast: { ack: false, self: false } },
-      });
+      const createChannel = () => {
+        if (this.isCleanedUp) return;
 
-      this.channel.on("broadcast", { event: "signal" }, async (payload) => {
-        const signal = payload.payload as SignalPayload;
-        if (signal.from === this.userId) return;
-
-        switch (signal.type) {
-          case "offer":
-            await this.handleOffer(signal.sdp!);
-            break;
-          case "answer":
-            await this.handleAnswer(signal.sdp!);
-            break;
-          case "ice-candidate":
-            await this.addIceCandidate(
-              signal.candidate!,
-              signal.sdpMid ?? null,
-              signal.sdpMLineIndex ?? null
-            );
-            break;
-          case "call-ended":
-            this.onCallEnded?.();
-            break;
-          case "callee-ready":
-            this.onCalleeReady?.();
-            break;
-          case "reaction":
-            this.onReaction?.(signal.emoji || "");
-            break;
+        if (this.channel) {
+          supabase.removeChannel(this.channel);
+          this.channel = null;
         }
-      });
 
-      this.channel.subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          clearTimeout(timeout);
-          resolve();
+        const channel = supabase.channel(`call-signal:${this.callId}`, {
+          config: { broadcast: { ack: false, self: false } },
+        });
+        this.channel = channel;
+
+        channel.on("broadcast", { event: "signal" }, async (payload) => {
+          const signal = payload.payload as SignalPayload;
+          if (signal.from === this.userId) return;
+
+          switch (signal.type) {
+            case "offer":
+              await this.handleOffer(signal.sdp!);
+              break;
+            case "answer":
+              await this.handleAnswer(signal.sdp!);
+              break;
+            case "ice-candidate":
+              await this.addIceCandidate(
+                signal.candidate!,
+                signal.sdpMid ?? null,
+                signal.sdpMLineIndex ?? null
+              );
+              break;
+            case "call-ended":
+              this.onCallEnded?.();
+              break;
+            case "callee-ready":
+              this.onCalleeReady?.();
+              break;
+            case "reaction":
+              this.onReaction?.(signal.emoji || "");
+              break;
+          }
+        });
+
+        channel.subscribe((status) => {
+          if (channel !== this.channel) return;
+          if (status === "SUBSCRIBED") {
+            clearTimeout(timeout);
+            this.signalReconnectAttempt = 0;
+            resolve();
+          } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+            scheduleReconnect(status);
+          }
+        });
+      };
+
+      const scheduleReconnect = (status: string) => {
+        if (this.isCleanedUp || this.signalReconnectAttempt >= SIGNAL_MAX_RECONNECT_ATTEMPTS) {
+          if (this.signalReconnectAttempt >= SIGNAL_MAX_RECONNECT_ATTEMPTS) {
+            console.error("[WebRTC] Signal channel max reconnect attempts reached");
+          }
+          return;
         }
-      });
+
+        this.signalReconnectAttempt++;
+        const delay = Math.min(
+          SIGNAL_BASE_RECONNECT_DELAY * Math.pow(2, this.signalReconnectAttempt - 1),
+          SIGNAL_MAX_RECONNECT_DELAY
+        );
+        const jitter = Math.random() * 1000;
+        console.warn(`[WebRTC] Signal channel ${status} — reconnect #${this.signalReconnectAttempt} in ${Math.round(delay + jitter)}ms`);
+
+        if (this.signalReconnectTimer) clearTimeout(this.signalReconnectTimer);
+        this.signalReconnectTimer = setTimeout(() => {
+          this.signalReconnectTimer = null;
+          if (!this.isCleanedUp) createChannel();
+        }, delay + jitter);
+      };
+
+      createChannel();
     });
 
     return this.subscribedPromise;
@@ -626,12 +740,22 @@ export class WebRTCService {
 
   cleanup() {
     this.clearDisconnectedTimer();
+    this.stopQualityMonitor();
     this.stopFilterPipeline();
     this.rawVideoTrack = null;
     this.activeFilterCss = "";
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.pc?.close();
-    this.channel?.unsubscribe();
+    if (this.signalReconnectTimer) {
+      clearTimeout(this.signalReconnectTimer);
+      this.signalReconnectTimer = null;
+    }
+    this.isCleanedUp = true;
+    if (this.channel) {
+      supabase.removeChannel(this.channel);
+    } else {
+      this.channel?.unsubscribe();
+    }
     this.localStream = null;
     this.remoteStream = null;
     this.pc = null;

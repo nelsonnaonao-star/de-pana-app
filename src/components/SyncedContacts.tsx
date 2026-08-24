@@ -4,8 +4,10 @@ import {
   ChevronRight, Loader2, Search, X
 } from "lucide-react";
 import { readDeviceContacts, matchContactsWithSupabase, searchByPhone, MatchedProfile } from "../services/device-contacts";
+import CachedImage from "./CachedImage";
 import { getContacts, addContact } from "../services/contacts";
 import { digitsOnly } from "../utils/phone";
+import { useSupabase } from "../contexts/SupabaseContext";
 
 interface SyncedContactsProps {
   currentUserId: string;
@@ -19,6 +21,7 @@ function getInitials(name: string): string {
 }
 
 export default function SyncedContacts({ currentUserId, onBack, onStartChat, onContactsChanged }: SyncedContactsProps) {
+  const { contacts: savedContacts } = useSupabase();
   const [contacts, setContacts] = useState<MatchedProfile[]>([]);
   const [loading, setLoading] = useState(false);
   const [synced, setSynced] = useState(false);
@@ -27,6 +30,32 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MatchedProfile[]>([]);
   const [searching, setSearching] = useState(false);
+
+  // Hidrata la pantalla con los contactos Red On ya guardados (vienen del
+  // contexto, que a su vez se hidrata de SQLite al arrancar), para no arrancar
+  // vacía ni obligar a re-escanear. El escaneo manual sigue siendo el único
+  // camino para descubrir contactos nuevos.
+  useEffect(() => {
+    console.log(`[DIAG] SyncedContacts effect: savedContacts=${savedContacts.length} synced=${synced}`);
+    if (synced) return;
+    const seen = new Set<string>();
+    const mapped: MatchedProfile[] = [];
+    for (const c of savedContacts) {
+      if (!c.contact_user_id || seen.has(c.contact_user_id)) continue;
+      seen.add(c.contact_user_id);
+      mapped.push({
+        id: c.contact_user_id,
+        username: "",
+        name: c.name,
+        phone_number: c.phone || "",
+        avatar_url: c.avatar || "",
+        contactName: c.name,
+      });
+    }
+    if (mapped.length === 0) return;
+    setContacts(mapped);
+    setSynced(true);
+  }, [savedContacts]);
 
   useEffect(() => {
     if (searchQuery.length >= 4) {
@@ -204,7 +233,7 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
           >
             <div className="w-11 h-11 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shrink-0 shadow-sm flex items-center justify-center">
               {profile.avatar_url ? (
-                <img src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                <CachedImage src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
               ) : (
                 <span className="text-white font-black text-sm">{getInitials(profile.contactName || profile.name)}</span>
               )}

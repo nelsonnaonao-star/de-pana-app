@@ -15,6 +15,7 @@ import ChatSearchBar from "./chat/overlays/ChatSearchBar";
 import AttachmentTray from "./chat/overlays/AttachmentTray";
 import PollFormModal from "./chat/overlays/PollFormModal";
 import { useSupabase } from "../contexts/SupabaseContext";
+import CachedImage from "./CachedImage";
 import { getMessages, markAsRead, clearForMe, setEphemeralTimer } from "../services/messages";
 import { deleteChat as apiDeleteChat } from "../services/chats";
 import { addContact } from "../services/contacts";
@@ -1018,8 +1019,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         <div className="relative z-20 mx-3 mb-2">
           <div className="rounded-2xl bg-gradient-to-r from-teal-50 via-emerald-50 to-teal-50 border border-teal-200 p-3 shadow-sm">
             <div className="flex items-center gap-2.5 mb-2.5">
-                <img
-                src={chat.avatar || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23cbd5e1'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M12 14c-4 0-6 2-6 4v2h12v-2c0-2-2-4-6-4z'/%3E%3C/svg%3E"}
+                <CachedImage
+                src={chat.avatar}
                 alt={chat.name || "contacto"}
                 className="w-9 h-9 rounded-full object-cover bg-slate-100 border border-teal-100"
               />

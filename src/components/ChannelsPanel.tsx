@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { getChannels, subscribeToChannel, unsubscribeFromChannel, createChannelUpdate, reactToChannelUpdate, createChannel } from "../services/contentService";
 import { useSupabase } from "../contexts/SupabaseContext";
+import CachedImage from "./CachedImage";
 
 export interface ChannelUpdate {
   id: string;
@@ -282,7 +283,7 @@ export default function ChannelsPanel() {
                   className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 flex items-center justify-between hover:shadow hover:border-slate-200 transition-all cursor-pointer"
                 >
                   <div className="flex items-center gap-2.5 truncate pr-2">
-                    <img
+                    <CachedImage
                       src={chan.avatar}
                       alt={chan.name}
                       className="w-10 h-10 rounded-2xl object-cover border border-slate-100 shrink-0"
@@ -334,7 +335,7 @@ export default function ChannelsPanel() {
                   <ArrowLeft className="w-4 h-4" />
                 </button>
 
-                <img
+                <CachedImage
                   src={activeChannel.avatar}
                   alt={activeChannel.name}
                   className="w-8 h-8 rounded-xl object-cover border border-slate-100"
@@ -548,7 +549,7 @@ export default function ChannelsPanel() {
                         selectedAvatarIdx === idx ? "border-teal-400" : "border-transparent opacity-75"
                       }`}
                     >
-                      <img src={avatarUrl} alt="Option" className="w-full h-full object-cover" />
+                      <CachedImage src={avatarUrl} alt="Option" className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>

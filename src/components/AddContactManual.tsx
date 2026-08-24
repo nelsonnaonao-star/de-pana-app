@@ -7,6 +7,7 @@ import {
 
 const PHONE_RE = /^\+?[0-9]{0,15}$/;
 import { useSupabase } from "../contexts/SupabaseContext";
+import CachedImage from "./CachedImage";
 
 interface AddContactManualProps {
   currentUserId: string;
@@ -217,7 +218,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shrink-0 shadow-md flex items-center justify-center">
                   {detectedUser.avatar ? (
-                    <img src={detectedUser.avatar} alt="" className="w-full h-full object-cover" />
+                    <CachedImage src={detectedUser.avatar} alt="" className="w-full h-full object-cover" />
                   ) : (
                     <span className="text-white font-black text-lg">{getInitials(detectedUser.name)}</span>
                   )}

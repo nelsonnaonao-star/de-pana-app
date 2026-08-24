@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ArrowRight, Phone, User, CheckCircle, Sparkles } from "lucide-react";
 import { normalizePhone } from "../utils/phone";
+import CachedImage from "./CachedImage";
 
 const PHONE_RE = /^\+?[0-9]{0,15}$/;
 
@@ -125,7 +126,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
             </label>
             <div className="flex items-center gap-3">
               <div className="relative w-14 h-14 rounded-2xl overflow-hidden border-2 border-teal-400 p-0.5 shrink-0">
-                <img src={avatar} alt="Selected" className="w-full h-full object-cover rounded-xl" />
+                <CachedImage src={avatar} alt="Selected" className="w-full h-full object-cover rounded-xl" />
                 <span className="absolute bottom-1 right-1 bg-teal-400 text-white p-0.5 rounded-full">
                   <CheckCircle className="w-3 h-3" />
                 </span>
@@ -140,7 +141,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
                       avatar === av ? "border-teal-400 scale-105" : "border-slate-200"
                     }`}
                   >
-                    <img src={av} alt="Avatar option" className="w-full h-full object-cover" />
+                    <CachedImage src={av} alt="Avatar option" className="w-full h-full object-cover" />
                   </button>
                 ))}
               </div>
