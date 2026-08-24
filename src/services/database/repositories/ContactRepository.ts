@@ -60,20 +60,25 @@ function rowValues(contact: Contact, userId: string): unknown[] {
 
 export class ContactRepository {
   async getContacts(userId: string): Promise<Contact[]> {
+    await db.whenReady(3000);
     if (db.ready) {
       try {
         const rows = await db.query(
           "SELECT * FROM contacts WHERE user_id = ? ORDER BY name ASC",
           [userId]
         );
-        return rows.map(fromRow);
+        const mapped = rows.map(fromRow);
+        if (mapped.length > 0) return mapped;
       } catch (e) {
         logger.warn("[ContactRepo] SQLite error, fallback", { error: e });
       }
     }
     try {
       const stored = localStorage.getItem(`${LOCALSTORAGE_PREFIX}${userId}`);
-      if (stored) return JSON.parse(stored) as Contact[];
+      if (stored) {
+        const parsed = JSON.parse(stored) as Contact[];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
     } catch (e) {
       logger.warn("[ContactRepo] localStorage get failed", { error: e });
     }
@@ -81,6 +86,7 @@ export class ContactRepository {
   }
 
   async saveContacts(userId: string, contacts: Contact[]): Promise<void> {
+    await db.whenReady(3000);
     if (db.ready) {
       try {
         const set = [
@@ -94,7 +100,6 @@ export class ContactRepository {
           })),
         ];
         await db.executeSet(set);
-        return;
       } catch (e) {
         logger.warn("[ContactRepo] save SQLite error, fallback", { error: e });
       }
@@ -110,6 +115,7 @@ export class ContactRepository {
   }
 
   async upsertContact(contact: Contact): Promise<void> {
+    await db.whenReady(3000);
     if (db.ready) {
       try {
         await db.executeSet([
@@ -144,10 +150,10 @@ export class ContactRepository {
   }
 
   async clearContacts(userId: string): Promise<void> {
+    await db.whenReady(3000);
     if (db.ready) {
       try {
         await db.run("DELETE FROM contacts WHERE user_id = ?", [userId]);
-        return;
       } catch (e) {
         logger.warn("[ContactRepo] clear SQLite error, fallback", { error: e });
       }

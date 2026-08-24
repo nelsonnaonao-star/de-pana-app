@@ -8,6 +8,7 @@ const DB_VERSION = 1;
 class DatabaseService {
   private static instance: DatabaseService;
   private _ready = false;
+  private _readyWaiters: (() => void)[] = [];
 
   static getInstance(): DatabaseService {
     if (!DatabaseService.instance) {
@@ -18,6 +19,29 @@ class DatabaseService {
 
   get ready(): boolean {
     return this._ready;
+  }
+
+  // Resuelve cuando initialize() terminó (con éxito o fallo). Evita que las
+  // lecturas de caché arranquen antes de tiempo y se caigan al fallback vacío.
+  whenReady(timeoutMs = 3000): Promise<void> {
+    if (this._ready) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const waiter = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this._readyWaiters = this._readyWaiters.filter((w) => w !== waiter);
+        resolve();
+      }, timeoutMs);
+      this._readyWaiters.push(waiter);
+    });
+  }
+
+  private notifyReady() {
+    const waiters = [...this._readyWaiters];
+    this._readyWaiters = [];
+    for (const w of waiters) w();
   }
 
   async initialize(): Promise<void> {
@@ -49,6 +73,8 @@ class DatabaseService {
       console.log("[DatabaseService] SQLite initialized");
     } catch (err) {
       console.error("[DatabaseService] initialization failed:", err);
+    } finally {
+      this.notifyReady();
     }
   }
 

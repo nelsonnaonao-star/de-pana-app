@@ -18,6 +18,7 @@ import { registerPushNotifications, unregisterPushNotifications } from "../servi
 import { setupCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
 import { chatRepo } from "../services/database/repositories/ChatRepository";
 import { contactRepo } from "../services/database/repositories/ContactRepository";
+import { db } from "../services/database/DatabaseService";
 import toast from "react-hot-toast";
 import { logger } from "../lib/logger";
 
@@ -143,8 +144,31 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   const loadedUserId = useRef<string | null>(null);
   const loadingUserDataRef = useRef(false);
   const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const presenceChannelConnectedRef = useRef(false);
   const profilesChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const participantsChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  // Reconexión de canales globales tras corte de red (patrón chats.ts):
+  // backoff exponencial + jitter, tope 10 intentos, timers cancelables.
+  const globalChannelsRetryRef = useRef<{
+    presence: { attempt: number; timer: ReturnType<typeof setTimeout> | null };
+    profiles: { attempt: number; timer: ReturnType<typeof setTimeout> | null };
+    participants: { attempt: number; timer: ReturnType<typeof setTimeout> | null };
+  }>({
+    presence: { attempt: 0, timer: null },
+    profiles: { attempt: 0, timer: null },
+    participants: { attempt: 0, timer: null },
+  });
+
+  const cancelGlobalChannelRetries = () => {
+    for (const key of ["presence", "profiles", "participants"] as const) {
+      const st = globalChannelsRetryRef.current[key];
+      st.attempt = 0;
+      if (st.timer) {
+        clearTimeout(st.timer);
+        st.timer = null;
+      }
+    }
+  };
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const discoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const chatsRef = useRef<Chat[]>([]);
@@ -229,8 +253,26 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       const cachedLastUser = loadLastUser();
       if (cachedLastUser?.id) {
         logger.info("[SUPABASE] Eager cache pre-load for last user", { userId: cachedLastUser.id.slice(0, 8) });
+        console.log(`[DIAG] boot: eager preload start userId=${cachedLastUser.id.slice(0, 8)} dbReady=${db.ready}`);
         setUser({ id: cachedLastUser.id });
         loadUserData(cachedLastUser.id);
+        // Red de seguridad: si la lectura eager corrió antes de que SQLite
+        // estuviera listo y el estado quedó sin contactos, rehidratar una vez
+        // que la BD terminó de inicializar (offline incluido).
+        db.whenReady(4000).then(async () => {
+          const uid = loadedUserId.current;
+          if (!uid || uid !== cachedLastUser.id) return;
+          if (contactsRef.current.length > 0) return;
+          try {
+            const fresh = await contactRepo.getContacts(uid);
+            if (loadedUserId.current !== uid || contactsRef.current.length > 0 || fresh.length === 0) return;
+            console.log(`[DIAG] post-db contacts heal count=${fresh.length}`);
+            setContacts(fresh);
+            lastKnownContacts.set(uid, fresh);
+          } catch (e) {
+            logger.warn("[SUPABASE] post-db contacts heal failed", { error: e });
+          }
+        });
       }
     }
 
@@ -385,6 +427,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       listener?.subscription?.unsubscribe();
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
       if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
+      cancelGlobalChannelRetries();
       if (profilesChannelRef.current) supabase.removeChannel(profilesChannelRef.current);
       if (participantsChannelRef.current) supabase.removeChannel(participantsChannelRef.current);
       presenceChannelRef.current?.untrack();
@@ -431,6 +474,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
     // Load cached data immediately for instant UI (scoped to userId)
     const cachedProfile = loadCache<Profile | null>(cacheKey(userId, "profile"), null);
+    console.log(`[DIAG] loadUserData: before cache read userId=${userId.slice(0, 8)} dbReady=${db.ready}`);
     const [cachedChats, cachedContacts] = await Promise.all([
       chatRepo.getChats(userId).catch((e) => {
         logger.warn("[SUPABASE] chat cache read failed", { error: e });
@@ -441,6 +485,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         return [] as Contact[];
       }),
     ]);
+    console.log(`[DIAG] loadUserData: cache read done chats=${cachedChats.length} contacts=${cachedContacts.length}`);
     const cachedCalls = loadCache<Call[]>(cacheKey(userId, "calls"), []);
     
     // Account switched while loading: bail out so the eager cached state of an
@@ -565,11 +610,51 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     if (presenceChannelRef.current) {
       supabase.removeChannel(presenceChannelRef.current);
       presenceChannelRef.current = null;
+      presenceChannelConnectedRef.current = false;
     }
 
+    // Reconexión de canales globales (mismo patrón que chats.ts):
+    // backoff exponencial + jitter, tope 10 intentos.
+    const GLOBAL_MAX_RECONNECT_ATTEMPTS = 10;
+    const GLOBAL_BASE_RECONNECT_DELAY = 1000;
+    const GLOBAL_MAX_RECONNECT_DELAY = 30000;
+
+    const scheduleGlobalReconnect = (
+      key: "presence" | "profiles" | "participants",
+      status: string,
+      recreate: () => void
+    ) => {
+      const st = globalChannelsRetryRef.current[key];
+      if (st.attempt >= GLOBAL_MAX_RECONNECT_ATTEMPTS) {
+        logger.error("[SUPABASE] Global realtime channel max reconnect attempts reached", { key, userId });
+        return;
+      }
+      st.attempt++;
+      const delay = Math.min(GLOBAL_BASE_RECONNECT_DELAY * Math.pow(2, st.attempt - 1), GLOBAL_MAX_RECONNECT_DELAY);
+      const jitter = Math.random() * 1000;
+      logger.warn("[SUPABASE] Global realtime channel issue, scheduling reconnect", { key, status, userId, attempt: st.attempt, delay: Math.round(delay + jitter) });
+      if (st.timer) clearTimeout(st.timer);
+      st.timer = setTimeout(() => {
+        st.timer = null;
+        recreate();
+      }, delay + jitter);
+    };
+
+    const globalRetrySuccess = (key: "presence" | "profiles" | "participants") => {
+      const st = globalChannelsRetryRef.current[key];
+      st.attempt = 0;
+      if (st.timer) {
+        clearTimeout(st.timer);
+        st.timer = null;
+      }
+    };
+
     // Set online status and track presence
-    supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {
-      if (presenceChannelRef.current) return; // already set up by another call
+    const createPresenceChannel = () => {
+      if (presenceChannelRef.current) {
+        supabase.removeChannel(presenceChannelRef.current);
+        presenceChannelRef.current = null;
+      }
       const channel = supabase.channel(`presence-global-${userId}`, {
         config: { broadcast: { ack: false, self: false } },
       });
@@ -589,121 +674,146 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       channel.subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
           await channel.track({ user_id: userId, online_at: new Date().toISOString() });
+          presenceChannelConnectedRef.current = true;
+          globalRetrySuccess("presence");
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          presenceChannelConnectedRef.current = false;
+          scheduleGlobalReconnect("presence", status, createPresenceChannel);
         }
       });
       presenceChannelRef.current = channel;
+    };
+    supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {
+      createPresenceChannel();
     });
 
     // Heartbeat: re-set status online every 30s
     if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     heartbeatRef.current = setInterval(() => {
-      if (userId) {
+      if (userId && presenceChannelConnectedRef.current) {
         supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
       }
     }, 30000);
 
     // Realtime subscription on profiles to update chat list online status
-    if (profilesChannelRef.current) {
-      supabase.removeChannel(profilesChannelRef.current);
-      profilesChannelRef.current = null;
-    }
-    const profilesChannel = supabase.channel(`profiles-online-${userId}`);
-    profilesChannel.on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "profiles" },
-      (payload) => {
-        const updated = payload.new as { id: string; status: string };
-        setChats((prev) =>
-          prev.map((c) => {
-            if (c.is_group) return c;
-            const partnerId = c.profile_id === userId ? c.admin_id : c.profile_id;
-            if (partnerId === updated.id) {
-              return { ...c, is_online: updated.status === "online" };
-            }
-            return c;
-          })
-        );
+    const createProfilesChannel = () => {
+      if (profilesChannelRef.current) {
+        supabase.removeChannel(profilesChannelRef.current);
+        profilesChannelRef.current = null;
       }
-    );
-    profilesChannel.subscribe();
-    profilesChannelRef.current = profilesChannel;
+      const profilesChannel = supabase.channel(`profiles-online-${userId}`);
+      profilesChannel.on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "profiles" },
+        (payload) => {
+          const updated = payload.new as { id: string; status: string };
+          setChats((prev) =>
+            prev.map((c) => {
+              if (c.is_group) return c;
+              const partnerId = c.profile_id === userId ? c.admin_id : c.profile_id;
+              if (partnerId === updated.id) {
+                return { ...c, is_online: updated.status === "online" };
+              }
+              return c;
+            })
+          );
+        }
+      );
+      profilesChannel.subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          globalRetrySuccess("profiles");
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          scheduleGlobalReconnect("profiles", status, createProfilesChannel);
+        }
+      });
+      profilesChannelRef.current = profilesChannel;
+    };
+    createProfilesChannel();
 
     // Subscribe to chat_participants to detect when user is added to a group
-    if (participantsChannelRef.current) {
-      supabase.removeChannel(participantsChannelRef.current);
-    }
-    const participantsChannel = supabase.channel(`chat-participants-${userId}`);
-    participantsChannel.on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "chat_participants", filter: `profile_id=eq.${userId}` },
-      async (payload: any) => {
-        logger.info("🔥 REALTIME chat_participants INSERT received", { payload });
-        const chatId = payload.new?.chat_id;
-        if (!chatId) {
-          logger.warn("[SUPABASE] chat_participants INSERT event missing chat_id", { payload });
-          return;
-        }
-        logger.info("[SUPABASE] New chat_participant for chat", { chatId });
-        try {
-          const { data: chatData, error: chatError } = await supabase
-            .from("chats")
-            .select("*")
-            .eq("id", chatId)
-            .single();
-          if (chatError) {
-            logger.error("[SUPABASE] Failed to fetch new chat (RLS?)", { error: chatError });
+    const createParticipantsChannel = () => {
+      if (participantsChannelRef.current) {
+        supabase.removeChannel(participantsChannelRef.current);
+        participantsChannelRef.current = null;
+      }
+      const participantsChannel = supabase.channel(`chat-participants-${userId}`);
+      participantsChannel.on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "chat_participants", filter: `profile_id=eq.${userId}` },
+        async (payload: any) => {
+          logger.info("🔥 REALTIME chat_participants INSERT received", { payload });
+          const chatId = payload.new?.chat_id;
+          if (!chatId) {
+            logger.warn("[SUPABASE] chat_participants INSERT event missing chat_id", { payload });
             return;
           }
-          if (!chatData) {
-            logger.warn("[SUPABASE] New chat not found", { chatId });
-            return;
-          }
-          logger.info("[SUPABASE] Fetched new chat data", { chatData });
-
-          // Update React state (prepend to chat list)
-          setChats(prev => {
-            if (prev.some(c => c.id === chatId)) {
-              logger.info("[SUPABASE] Chat already in list, skipping", { chatId });
-              return prev;
-            }
-            logger.info("[SUPABASE] Prepending chat to list", { chatId });
-            return [chatData as Chat, ...prev];
-          });
-
-          // Persist to SQLite so the chat survives app restarts
+          logger.info("[SUPABASE] New chat_participant for chat", { chatId });
           try {
-            const existingChats = await chatRepo.getChats(userId);
-            if (!existingChats.some(c => c.id === chatId)) {
-              await chatRepo.saveChats(userId, [chatData as Chat, ...existingChats]);
-              logger.info("[SUPABASE] Saved new chat to SQLite", { chatId });
+            const { data: chatData, error: chatError } = await supabase
+              .from("chats")
+              .select("*")
+              .eq("id", chatId)
+              .single();
+            if (chatError) {
+              logger.error("[SUPABASE] Failed to fetch new chat (RLS?)", { error: chatError });
+              return;
             }
-          } catch (sqliteErr) {
-            logger.warn("[SUPABASE] Failed to persist new chat to SQLite", { error: sqliteErr });
-          }
+            if (!chatData) {
+              logger.warn("[SUPABASE] New chat not found", { chatId });
+              return;
+            }
+            logger.info("[SUPABASE] Fetched new chat data", { chatData });
 
-          const groupName = (chatData as any).name || "Grupo";
-          const isCreator = (chatData as any).admin_id === userId || (chatData as any).profile_id === userId;
-          if (!isCreator) {
-            toast.success(`Te agregaron al grupo "${groupName}"`);
+            // Update React state (prepend to chat list)
+            setChats(prev => {
+              if (prev.some(c => c.id === chatId)) {
+                logger.info("[SUPABASE] Chat already in list, skipping", { chatId });
+                return prev;
+              }
+              logger.info("[SUPABASE] Prepending chat to list", { chatId });
+              return [chatData as Chat, ...prev];
+            });
+
+            // Persist to SQLite so the chat survives app restarts
+            try {
+              const existingChats = await chatRepo.getChats(userId);
+              if (!existingChats.some(c => c.id === chatId)) {
+                await chatRepo.saveChats(userId, [chatData as Chat, ...existingChats]);
+                logger.info("[SUPABASE] Saved new chat to SQLite", { chatId });
+              }
+            } catch (sqliteErr) {
+              logger.warn("[SUPABASE] Failed to persist new chat to SQLite", { error: sqliteErr });
+            }
+
+            const groupName = (chatData as any).name || "Grupo";
+            const isCreator = (chatData as any).admin_id === userId || (chatData as any).profile_id === userId;
+            if (!isCreator) {
+              toast.success(`Te agregaron al grupo "${groupName}"`);
+            }
+          } catch (e) {
+            logger.error("[SUPABASE] Error processing chat_participants event", { error: e });
           }
-        } catch (e) {
-          logger.error("[SUPABASE] Error processing chat_participants event", { error: e });
         }
-      }
-    );
-    participantsChannel.subscribe((status: string) => {
-      logger.info("[SUPABASE] chat_participants channel status", { status, userId });
-      if (status === "CHANNEL_ERROR") {
-        logger.error("[SUPABASE] CHANNEL_ERROR on chat_participants — Realtime may not be enabled for this table in Supabase dashboard, or RLS is blocking.");
-      } else if (status === "TIMED_OUT") {
-        logger.error("[SUPABASE] TIMED_OUT on chat_participants — network issue or server unreachable.");
-      } else if (status === "CLOSED") {
-        logger.warn("[SUPABASE] chat_participants channel CLOSED, will not receive events.");
-      } else if (status === "SUBSCRIBED") {
-        logger.info("[SUPABASE] chat_participants SUBSCRIBED — listening for new groups.");
-      }
-    });
-    participantsChannelRef.current = participantsChannel;
+      );
+      participantsChannel.subscribe((status: string) => {
+        logger.info("[SUPABASE] chat_participants channel status", { status, userId });
+        if (status === "SUBSCRIBED") {
+          logger.info("[SUPABASE] chat_participants SUBSCRIBED — listening for new groups.");
+          globalRetrySuccess("participants");
+        } else if (status === "CHANNEL_ERROR") {
+          logger.error("[SUPABASE] CHANNEL_ERROR on chat_participants — Realtime may not be enabled for this table in Supabase dashboard, or RLS is blocking.");
+          scheduleGlobalReconnect("participants", status, createParticipantsChannel);
+        } else if (status === "TIMED_OUT") {
+          logger.error("[SUPABASE] TIMED_OUT on chat_participants — network issue or server unreachable.");
+          scheduleGlobalReconnect("participants", status, createParticipantsChannel);
+        } else if (status === "CLOSED") {
+          logger.warn("[SUPABASE] chat_participants channel CLOSED, will not receive events.");
+          scheduleGlobalReconnect("participants", status, createParticipantsChannel);
+        }
+      });
+      participantsChannelRef.current = participantsChannel;
+    };
+    createParticipantsChannel();
 
     // beforeunload: set offline on tab/browser close
     const handleBeforeUnload = () => {
@@ -725,6 +835,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         presenceChannelRef.current?.track({ user_id: userId, online_at: new Date().toISOString() });
         if (!heartbeatRef.current) {
           heartbeatRef.current = setInterval(() => {
+            if (!presenceChannelConnectedRef.current) return;
             supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
           }, 30000);
         }
@@ -961,11 +1072,13 @@ const refreshChats = async () => {
     // Clean up heartbeat, discovery poll, channels, presence channel, event listeners
     if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     if (discoveryPollRef.current) { clearInterval(discoveryPollRef.current); discoveryPollRef.current = null; }
+    cancelGlobalChannelRetries();
     if (profilesChannelRef.current) { supabase.removeChannel(profilesChannelRef.current); profilesChannelRef.current = null; }
     if (participantsChannelRef.current) { supabase.removeChannel(participantsChannelRef.current); participantsChannelRef.current = null; }
     presenceChannelRef.current?.untrack();
     presenceChannelRef.current?.unsubscribe();
     presenceChannelRef.current = null;
+    presenceChannelConnectedRef.current = false;
     cleanupListenersRef.current?.();
     cleanupListenersRef.current = null;
     if (user) {
