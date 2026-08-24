@@ -5,6 +5,7 @@ import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
 import AudioMessagePlayer from "./AudioMessagePlayer";
 import { saveMediaToGalleryDirect, shareMedia, openDocument } from "../../services/mediaUtils";
+import CachedImage from "../CachedImage";
 import toast from "react-hot-toast";
 
 const URL_PATTERN = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
@@ -337,9 +338,10 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           </div>
         )}
 
-        <img
-          src={msg.mediaUrl}
+        <CachedImage
+          src={msg.mediaUrl || ""}
           alt={isSticker ? "Sticker" : "Image"}
+          loading="eager"
           onLoad={() => setImgLoaded(true)}
           onError={() => setImgError(true)}
           className={`${isSticker

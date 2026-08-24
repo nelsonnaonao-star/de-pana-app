@@ -197,6 +197,7 @@ export default function CachedImage({
             path: `image_cache/${fileName}`,
             data: base64,
             directory: Directory.Data,
+            recursive: true,
           }).catch(() => {});
         }
         memoryCache.set(src, dataUrl);
