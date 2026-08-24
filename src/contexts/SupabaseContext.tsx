@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { Network } from "@capacitor/network";
+import { App as CapacitorApp } from "@capacitor/app";
 
 declare global {
   interface Window {
@@ -889,9 +890,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         logger.warn("[SUPABASE] Network.addListener failed", { error: e });
       });
 
-    // Fallback: poll for new chats every 6s (catches anything Realtime misses)
-    if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
-    discoveryPollRef.current = setInterval(async () => {
+    // Fallback: poll for new chats every 60s (catches anything Realtime misses).
+    // Pausado en background (appStateChange); al volver a foreground se reinicia
+    // y corre una pasada inmediata para no esperar hasta 60s.
+    const runDiscoveryPoll = async () => {
       try {
         const fresh = await getChats(userId);
         if (!fresh || fresh.length === 0) return;
@@ -908,7 +910,31 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         logger.warn("[SUPABASE] Discovery poll error", { error: e });
       }
-    }, 6000);
+    };
+    const startDiscoveryPoll = () => {
+      if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
+      discoveryPollRef.current = setInterval(runDiscoveryPoll, 60000);
+    };
+    startDiscoveryPoll();
+
+    let capAppStateHandler: { remove: () => Promise<void> } | null = null;
+    CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      if (isActive) {
+        startDiscoveryPoll();
+        runDiscoveryPoll();
+      } else {
+        if (discoveryPollRef.current) {
+          clearInterval(discoveryPollRef.current);
+          discoveryPollRef.current = null;
+        }
+      }
+    })
+      .then((handle) => {
+        capAppStateHandler = handle as unknown as { remove: () => Promise<void> };
+      })
+      .catch((e) => {
+        logger.warn("[SUPABASE] App.addListener failed", { error: e });
+      });
 
     // Store cleanup for use in logout/unmount
     if (cleanupListenersRef.current) cleanupListenersRef.current();
@@ -917,6 +943,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       window.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("online", handleOnline);
+      if (capAppStateHandler) {
+        capAppStateHandler.remove();
+        capAppStateHandler = null;
+      }
       if (capNetworkHandler) {
         capNetworkHandler.remove();
         capNetworkHandler = null;
