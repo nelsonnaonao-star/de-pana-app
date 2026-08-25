@@ -86,10 +86,11 @@ export class WebRTCGroupService {
     this.channel.on("broadcast", { event: "group_signal" }, async (payload) => {
       const signal = payload.payload as GroupSignal;
       if (signal.from === this.userId) return;
+      console.log(`[GJOIN] rx signal type=${signal.type} from=${signal.from.slice(0, 8)} to=${signal.to ? signal.to.slice(0, 8) : "-"} peers=${this.peerConns.size}`);
 
       switch (signal.type) {
         case "join":
-          logger("participant joined:", signal.from);
+          console.log(`[GJOIN] JOIN handler from=${signal.from.slice(0, 8)} existingPC=${this.peerConns.has(signal.from)}`);
           await this.createPeerConnection(signal.from);
           break;
         case "offer":
@@ -132,7 +133,7 @@ export class WebRTCGroupService {
         if (status === "SUBSCRIBED") {
           clearTimeout(timeout);
           this.subscribed = true;
-          logger("subscribed to group room");
+          console.log(`[GJOIN] SUBSCRIBED user=${this.userId.slice(0, 8)} topic=group-call:${this.roomId}`);
           resolve();
         }
       });
@@ -161,18 +162,25 @@ export class WebRTCGroupService {
   }
 
   async announceJoin(): Promise<void> {
+    console.log(`[GJOIN] announceJoin user=${this.userId.slice(0, 8)} room=group-call:${this.roomId} subscribed=${this.subscribed}`);
     await this.sendSignal({ type: "join", from: this.userId });
     const peers: string[] = [];
     this.peerConns.forEach((_, peerId) => peers.push(peerId));
     await this.sendSignal({ type: "join", from: this.userId, participants: peers });
+    console.log(`[GJOIN] announceJoin sent (2x join)`);
     this.onReady?.();
   }
 
   private async createPeerConnection(peerId: string, sendOffer = true): Promise<RTCPeerConnection | null> {
     const existing = this.peerConns.get(peerId);
-    if (existing) return existing;
+    if (existing) {
+      console.log(`[GJOIN] PC exists for ${peerId.slice(0, 8)} — reuse (sendOffer=${sendOffer})`);
+      return existing;
+    }
+    if (!sendOffer) console.log(`[GJOIN] PC create for ${peerId.slice(0, 8)} (answerer, no offer)`);
 
     const servers = await this.fetchIceServers();
+    console.log(`[GJOIN] PC ${peerId.slice(0, 8)} iceServers=${servers.length} cached=${!!this.iceServers} localTracks=${this.localStream?.getTracks().length ?? 0}`);
     const pc = new RTCPeerConnection({ iceServers: servers });
 
     if (this.localStream) {
@@ -219,7 +227,7 @@ export class WebRTCGroupService {
 
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
-      logger("ICE", peerId, state);
+      console.log(`[GJOIN] ICE ${peerId.slice(0, 8)} -> ${state} (pcCount=${this.peerConns.size})`);
       if (state === "failed" || state === "disconnected") {
         this.closePeer(peerId);
         this.removeRemoteStream(peerId);
@@ -246,7 +254,7 @@ export class WebRTCGroupService {
         to: peerId,
         sdp: JSON.stringify(offer),
       });
-      logger("offer sent to", peerId);
+      console.log(`[GJOIN] OFFER sent to ${peerId.slice(0, 8)}`);
     } catch (err) {
       console.error("[RTCGroup] createOffer error:", err);
     }
@@ -255,6 +263,7 @@ export class WebRTCGroupService {
   }
 
   private async receiveOffer(from: string, sdp: string): Promise<void> {
+    console.log(`[GJOIN] offer RX from=${from.slice(0, 8)} existingPC=${this.peerConns.has(from)}`);
     let pc = this.peerConns.get(from);
     if (!pc) {
       await this.createPeerConnection(from, false);
@@ -273,13 +282,14 @@ export class WebRTCGroupService {
         to: from,
         sdp: JSON.stringify(answer),
       });
-      logger("answer sent to", from);
+      console.log(`[GJOIN] ANSWER sent to ${from.slice(0, 8)}`);
     } catch (err) {
       console.error("[RTCGroup] receiveOffer error:", err);
     }
   }
 
   private async receiveAnswer(from: string, sdp: string): Promise<void> {
+    console.log(`[GJOIN] answer RX from=${from.slice(0, 8)} existingPC=${this.peerConns.has(from)}`);
     const pc = this.peerConns.get(from);
     if (!pc) {
       console.warn("[RTCGroup] receiveAnswer: no PC for", from);
@@ -296,7 +306,7 @@ export class WebRTCGroupService {
   private async addIceCandidate(from: string, candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) {
     const pc = this.peerConns.get(from);
     if (!pc) {
-      console.warn("[RTCGroup] addIceCandidate: no PC for", from);
+      console.warn(`[GJOIN] ICE RX DROPPED from=${from.slice(0, 8)} — no PC (peers=${[...this.peerConns.keys()].map(k => k.slice(0, 8)).join(",")})`);
       return;
     }
     try {

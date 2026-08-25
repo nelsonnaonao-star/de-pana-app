@@ -20,7 +20,11 @@ async function uploadDirectToSupabase(
       upsert: false,
     });
 
-  if (error) throw error;
+  if (error) {
+    console.error(`[VIDSEND] upload-ERROR ${(blob.size / 1048576).toFixed(2)}MB type=${baseType} file=${fileName} message="${error.message}" status=${(error as any).statusCode ?? "?"} name=${error.name}`);
+    throw error;
+  }
+  console.log(`[VIDSEND] upload-DONE ${fileName}`);
 
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(fileName);
   return urlData?.publicUrl || `${supabaseUrl}/storage/v1/object/public/${BUCKET}/${fileName}`;

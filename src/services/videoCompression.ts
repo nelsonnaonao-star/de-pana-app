@@ -29,7 +29,10 @@ function loadVideo(url: string): Promise<HTMLVideoElement> {
     const v = document.createElement("video");
     v.preload = "metadata";
     v.playsInline = true;
-    v.muted = false;
+    // La reproducción es solo interna para extraer frames al canvas: NUNCA
+    // debe salir audio por el altavoz durante la compresión.
+    v.muted = true;
+    v.volume = 0;
     v.src = url;
     v.onloadedmetadata = () => resolve(v);
     v.onerror = () => reject(new Error("Error loading video"));

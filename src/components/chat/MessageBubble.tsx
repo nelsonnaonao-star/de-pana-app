@@ -5,6 +5,8 @@ import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
 import AudioMessagePlayer from "./AudioMessagePlayer";
 import { saveMediaToGalleryDirect, shareMedia, openDocument } from "../../services/mediaUtils";
+import { getCachedVideoPath, cacheVideoUrl } from "../../services/videoCache";
+import { Capacitor } from "@capacitor/core";
 import CachedImage from "../CachedImage";
 import toast from "react-hot-toast";
 
@@ -232,13 +234,34 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
   handleAddReaction: (id: string, emoji: string) => void;
 }) {
   const { saving, save } = useSaveMedia();
+  const [videoReady, setVideoReady] = useState(false);
+  const [videoSrc, setVideoSrc] = useState(src);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !src) return;
+    let cancelled = false;
+    (async () => {
+      const cached = await getCachedVideoPath(src);
+      if (cancelled) return;
+      if (cached) {
+        setVideoSrc(cached);
+      } else {
+        cacheVideoUrl(src).catch(() => {});
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [src]);
+
+  useEffect(() => {
+    setVideoReady(false);
+  }, [videoSrc]);
 
   const handleShare = useCallback(() => {
     shareMedia(src, "Video");
   }, [src]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black"
       onClick={onClose}
     >
       <MediaViewerToolbar
@@ -250,14 +273,33 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
         saving={saving}
       />
 
-      <div className="w-full h-full flex items-center justify-center relative">
+      <div
+        className="w-full h-full flex items-center justify-center relative bg-black"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {!videoReady && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none z-10">
+            <div className="w-16 h-16 rounded-full bg-black/50 backdrop-blur-sm border border-white/10 flex items-center justify-center">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="white" className="ml-1">
+                <polygon points="8,5 19,12 8,19" />
+              </svg>
+            </div>
+            <div className="flex items-center gap-2 text-white/60 text-[11px] font-semibold">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Cargando video…
+            </div>
+          </div>
+        )}
         <video
-          src={src}
+          src={videoSrc}
           controls
+          autoPlay
           playsInline
-          crossOrigin="anonymous"
           preload="auto"
-          className="w-[80vw] max-w-[320px] aspect-square object-cover rounded-2xl shadow-[0_0_40px_rgba(0,0,0,0.5)] border-4 border-[#075E54]/50"
+          onCanPlay={() => setVideoReady(true)}
+          onLoadedData={() => setVideoReady(true)}
+          onError={() => setVideoReady(false)}
+          className={`w-full h-full object-contain transition-opacity duration-200 ${videoReady ? "opacity-100" : "opacity-0"}`}
         />
       </div>
     </div>
@@ -895,7 +937,7 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
     <>
       {showViewer && (
         <VideoViewer
-          src={msg.mediaUrl!}
+          src={msg.localVideoUrl || msg.mediaUrl!}
           msg={msg}
           onClose={() => setShowViewer(false)}
           handleForwardMessage={handleForwardMessage}

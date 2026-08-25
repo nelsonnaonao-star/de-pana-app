@@ -184,6 +184,18 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   });
   const DEBOUNCE_MS = 4000; // 4s debounce for presence flapping
 
+  // Heartbeat helper: writes to both profiles.status AND user_presence
+  // (user_presence is checked server-side by pg_cron every 60s to
+  // detect stale online users who died without logout).
+  const heartbeatWrite = (uid: string) => {
+    const now = new Date().toISOString();
+    supabase.from("profiles").update({ status: "online" }).eq("id", uid).then(() => {}).catch(() => {});
+    supabase.from("user_presence").upsert(
+      { user_id: uid, last_seen: now, status: "online" },
+      { onConflict: "user_id" }
+    ).then(() => {}).catch(() => {});
+  };
+
   // Debounced presence update to avoid flapping on micro network cuts / tab switches
   const updatePresenceDebounced = async (userId: string, status: "online" | "offline") => {
     const ref = presenceDebounceRef.current;
@@ -197,6 +209,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         ref.onlineTimer = setTimeout(async () => {
           try {
             await supabase.from("profiles").update({ status: "online" }).eq("id", userId);
+            supabase.from("user_presence").upsert(
+              { user_id: userId, last_seen: new Date().toISOString(), status: "online" },
+              { onConflict: "user_id" }
+            ).then(() => {}).catch(() => {});
             logger.debug("[Presence] Online status confirmed", { userId });
           } catch {}
           ref.onlineTimer = undefined;
@@ -213,6 +229,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         ref.offlineTimer = setTimeout(async () => {
           try {
             await supabase.from("profiles").update({ status: "offline" }).eq("id", userId);
+            supabase.from("user_presence").upsert(
+              { user_id: userId, last_seen: new Date().toISOString(), status: "offline" },
+              { onConflict: "user_id" }
+            ).then(() => {}).catch(() => {});
             logger.debug("[Presence] Offline status confirmed", { userId });
           } catch {}
           ref.offlineTimer = undefined;
@@ -237,6 +257,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     if (ref.pendingStatus) {
       try {
         await supabase.from("profiles").update({ status: ref.pendingStatus }).eq("id", userId);
+        supabase.from("user_presence").upsert(
+          { user_id: userId, last_seen: new Date().toISOString(), status: ref.pendingStatus },
+          { onConflict: "user_id" }
+        ).then(() => {}).catch(() => {});
         logger.debug("[Presence] Flushed pending status", { userId, status: ref.pendingStatus });
       } catch {}
       ref.pendingStatus = undefined;
@@ -254,7 +278,6 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       const cachedLastUser = loadLastUser();
       if (cachedLastUser?.id) {
         logger.info("[SUPABASE] Eager cache pre-load for last user", { userId: cachedLastUser.id.slice(0, 8) });
-        console.log(`[DIAG] boot: eager preload start userId=${cachedLastUser.id.slice(0, 8)} dbReady=${db.ready}`);
         setUser({ id: cachedLastUser.id });
         loadUserData(cachedLastUser.id);
         // Red de seguridad: si la lectura eager corrió antes de que SQLite
@@ -267,7 +290,6 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           try {
             const fresh = await contactRepo.getContacts(uid);
             if (loadedUserId.current !== uid || contactsRef.current.length > 0 || fresh.length === 0) return;
-            console.log(`[DIAG] post-db contacts heal count=${fresh.length}`);
             setContacts(fresh);
             lastKnownContacts.set(uid, fresh);
           } catch (e) {
@@ -475,7 +497,6 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
     // Load cached data immediately for instant UI (scoped to userId)
     const cachedProfile = loadCache<Profile | null>(cacheKey(userId, "profile"), null);
-    console.log(`[DIAG] loadUserData: before cache read userId=${userId.slice(0, 8)} dbReady=${db.ready}`);
     const [cachedChats, cachedContacts] = await Promise.all([
       chatRepo.getChats(userId).catch((e) => {
         logger.warn("[SUPABASE] chat cache read failed", { error: e });
@@ -486,7 +507,6 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         return [] as Contact[];
       }),
     ]);
-    console.log(`[DIAG] loadUserData: cache read done chats=${cachedChats.length} contacts=${cachedContacts.length}`);
     const cachedCalls = loadCache<Call[]>(cacheKey(userId, "calls"), []);
     
     // Account switched while loading: bail out so the eager cached state of an
@@ -684,15 +704,18 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       });
       presenceChannelRef.current = channel;
     };
-    supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {
-      createPresenceChannel();
-    });
+    supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {}).catch(() => {});
+    supabase.from("user_presence").upsert(
+      { user_id: userId, last_seen: new Date().toISOString(), status: "online" },
+      { onConflict: "user_id" }
+    ).then(() => {}).catch(() => {});
+    createPresenceChannel();
 
     // Heartbeat: re-set status online every 30s
     if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     heartbeatRef.current = setInterval(() => {
       if (userId && presenceChannelConnectedRef.current) {
-        supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
+        heartbeatWrite(userId);
       }
     }, 30000);
 
@@ -837,7 +860,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         if (!heartbeatRef.current) {
           heartbeatRef.current = setInterval(() => {
             if (!presenceChannelConnectedRef.current) return;
-            supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {});
+            heartbeatWrite(userId);
           }, 30000);
         }
         // Refresh chats when user returns to the tab
@@ -919,6 +942,56 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
     let capAppStateHandler: { remove: () => Promise<void> } | null = null;
     CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      // ── Presence: background/foreground nativo de Capacitor ──
+      // En Android, visibilitychange y beforeunload NO son confiables.
+      // Este listener es la fuente PRIMARIA de presencia en móvil.
+      if (!userId) return;
+      if (!isActive) {
+        // BACKGROUND / CIERRE: marcar offline INMEDIATO (sin debounce)
+        if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+        presenceChannelRef.current?.untrack();
+        presenceChannelConnectedRef.current = false;
+        supabase.from("profiles").update({ status: "offline" }).eq("id", userId).then(() => {
+          logger.info("[Presence] Background → offline (immediate)");
+        }).catch(() => {});
+        supabase.from("user_presence").upsert(
+          { user_id: userId, last_seen: new Date().toISOString(), status: "offline" },
+          { onConflict: "user_id" }
+        ).then(() => {}).catch(() => {});
+      } else {
+        // FOREGROUND: marcar online + reconectar presence channel + heartbeat
+        supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {
+          logger.info("[Presence] Foreground → online (immediate)");
+        }).catch(() => {});
+        supabase.from("user_presence").upsert(
+          { user_id: userId, last_seen: new Date().toISOString(), status: "online" },
+          { onConflict: "user_id" }
+        ).then(() => {}).catch(() => {});
+        if (presenceChannelRef.current && presenceChannelConnectedRef.current) {
+          presenceChannelRef.current.track({ user_id: userId, online_at: new Date().toISOString() }).catch(() => {});
+        } else {
+          createPresenceChannel();
+        }
+        if (!heartbeatRef.current) {
+          heartbeatRef.current = setInterval(() => {
+            if (userId && presenceChannelConnectedRef.current) {
+              heartbeatWrite(userId);
+            }
+          }, 30000);
+        }
+        // Refrescar lista de chats para actualizar estados visuales
+        getChats(userId).then(fresh => {
+          if (!fresh || fresh.length === 0) return;
+          setChats(prev => {
+            const merged = new Map<string, Chat>();
+            for (const c of fresh) merged.set(c.id, c);
+            for (const c of prev) if (!merged.has(c.id)) merged.set(c.id, c);
+            return Array.from(merged.values());
+          });
+        }).catch(() => {});
+      }
+
+      // ── Discovery poll: pausar en background, reanudar en foreground ──
       if (isActive) {
         startDiscoveryPoll();
         runDiscoveryPoll();

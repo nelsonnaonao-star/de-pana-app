@@ -5,6 +5,7 @@ import { Chat, Message } from "../../types";
 import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction } from "../../services/messages";
 import { uploadChatMedia } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
+import { cacheVideoBlob } from "../../services/videoCache";
 import { revokeCachedMedia } from "../../services/mediaCache";
 import { supabase } from "../../lib/supabase";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
@@ -487,86 +488,139 @@ pendingSendIdsRef.current.add(tempId);
     input.accept = accept;
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
+      if (!file) {
+        // Usuario canceló el picker: liberar el candado o quedaría bloqueado.
+        isSendingRef.current = false;
+        return;
+      }
 
       const tempId = "msg_" + Date.now();
-      const clientIdFile = newClientId();
-      const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-      let posterUrl: string | undefined;
-      if (type === "video") {
-        try { posterUrl = await generateVideoThumbnail(file); } catch { }
-      }
-
-      const shouldCompress = type === "video" && file.size > 5 * 1024 * 1024;
-      const blobUrl = URL.createObjectURL(new Blob([await file.arrayBuffer()], { type: file.type }));
-      const sendingMsg: Message = {
-        id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type,
-        mediaUrl: blobUrl,
-        fileName: file.name,
-        fileSize: shouldCompress ? "Comprimiendo…" : formatFileSize(file.size),
-        status: "sending",
-        synced: false,
-        posterUrl,
-      };
-      setMessages(prev => [...prev, sendingMsg]);
-      onSendMessage(sendingMsg);
-      messageRepo.upsertMessage(chatId, sendingMsg);
-      pendingSendIdsRef.current.add(tempId);
-      inFlightMessageIds.add(tempId);
-
-      let fileToUpload = file;
+      let bubbleCreated = false;
       try {
-        if (shouldCompress) {
-          const compressed = await compressVideo(file);
-          fileToUpload = compressed instanceof Blob ? new File([compressed], file.name, { type: compressed.type }) : file;
-          const newSize = formatFileSize(fileToUpload.size);
-          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: newSize } : m));
+        const clientIdFile = newClientId();
+        const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        // El handle del archivo del picker en Android es de UN SOLO USO (stream
+        // content:// que se consume): cualquier segunda lectura lanza
+        // NotReadableError. Se leen los bytes UNA vez aquí y TODO lo demás
+        // (preview, miniatura, compresión, subida) se construye desde memoria.
+        let localBlob: Blob;
+        try {
+          console.log(`[VIDSEND] step=read-start name=${file.name} size=${(file.size / 1048576).toFixed(2)}MB type=${file.type || "?"}`);
+          localBlob = new Blob([await file.arrayBuffer()], { type: file.type || "video/mp4" });
+          console.log(`[VIDSEND] step=read-ok ${(localBlob.size / 1048576).toFixed(2)}MB`);
+        } catch (e: any) {
+          console.log(`[VIDSEND] step=read FAIL ${e?.message}`);
+          throw new Error("No se pudo leer el video desde la galería. Inténtalo de nuevo.");
         }
-      } catch (e: any) {
-        console.warn("[CHAT] Compression failed, using original:", e?.message);
-        fileToUpload = file;
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: formatFileSize(file.size) } : m));
-      }
+        const localFile = new File([localBlob], file.name || "video.mp4", { type: localBlob.type });
 
-      try {
-        const blob = new Blob([fileToUpload], { type: fileToUpload.type });
-        const url = await uploadChatMedia(blob, type === "video" ? "video" : "files");
-        const mediaUpdated = { ...sendingMsg, mediaUrl: url, posterUrl };
-        await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdFile, sender_id: uid });
-        setMessages(prev => {
-          if (!prev.some(m => m.id === tempId)) return prev;
-          return prev.map(m => m.id === tempId ? mediaUpdated : m);
-        });
-        const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
-        if (!isLocalChat) {
-          const payload: any = { chat_id: chatId, sender_id: uid, type, text: file.name, client_id: clientIdFile, temp_id: tempId };
-          if (type === "image") { payload.image_url = url; payload.text = "Imagen"; }
-          else if (type === "video") { payload.video_url = url; payload.text = "Video"; }
-          else if (type === "audio") { payload.audio_url = url; payload.text = "Audio"; }
-          else {
-            payload.file_url = url;
-            payload.document_name = file.name;
-            payload.document_size = file.size ? formatFileSize(file.size) : null;
-            payload.document_type = file.type || null;
-            payload.mime_type = file.type || null;
+        const shouldCompress = type === "video" && localBlob.size > 5 * 1024 * 1024;
+        // Tope duro para videos: el WebView no puede recomprimirlos si falla la
+        // decodificación, y subir crudos muy grandes suele abortar. Mejor fallar
+        // temprano con un mensaje claro que colgarse o romper en silencio.
+        if (type === "video" && localBlob.size > 500 * 1024 * 1024) {
+          console.log(`[VIDSEND] step=too-large ${(localBlob.size / 1048576).toFixed(1)}MB > 500MB`);
+          throw new Error(`El video pesa ${(localBlob.size / 1048576).toFixed(0)}MB y el máximo para enviar es 500MB`);
+        }
+
+        let posterUrl: string | undefined;
+        if (type === "video") {
+          try { posterUrl = await generateVideoThumbnail(localFile); console.log(`[VIDSEND] step=poster ok=${!!posterUrl}`); } catch (e: any) { console.log(`[VIDSEND] step=poster FAIL ${e?.message}`); }
+        }
+
+        const blobUrl = URL.createObjectURL(localBlob);
+        const sendingMsg: Message = {
+          id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type,
+          mediaUrl: blobUrl,
+          fileName: localFile.name,
+          fileSize: shouldCompress ? "Comprimiendo…" : formatFileSize(localBlob.size),
+          status: "sending",
+          synced: false,
+          posterUrl,
+        };
+        setMessages(prev => [...prev, sendingMsg]);
+        onSendMessage(sendingMsg);
+        messageRepo.upsertMessage(chatId, sendingMsg);
+        pendingSendIdsRef.current.add(tempId);
+        inFlightMessageIds.add(tempId);
+        bubbleCreated = true;
+
+        let fileToUpload: Blob = localFile;
+        try {
+          if (shouldCompress) {
+            console.log(`[VIDSEND] step=compress start (${(localBlob.size / 1048576).toFixed(2)}MB > 5MB)`);
+            const compressed = await compressVideo(localFile);
+            fileToUpload = compressed instanceof Blob ? new File([compressed], localFile.name, { type: compressed.type }) : localFile;
+            console.log(`[VIDSEND] step=compress done -> ${(fileToUpload.size / 1048576).toFixed(2)}MB type=${fileToUpload.type}`);
+            const newSize = formatFileSize(fileToUpload.size);
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: newSize } : m));
+          } else {
+            console.log(`[VIDSEND] step=compress skipped (${(localBlob.size / 1048576).toFixed(2)}MB <= 5MB o no-video)`);
           }
-          const saved = await apiSendMessage(payload);
-          const savedRow = { ...mediaUpdated, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
-          recordReconciledId(chatId, tempId, saved.id);
-          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
-          messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
-            console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
-          );
-        } else {
-          const final = { ...mediaUpdated, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
-          messageRepo.upsertMessage(chatId, final);
-          messageRepo.deleteMessage(chatId, tempId);
-          setMessages(prev => prev.map(m => m.id === tempId ? final : m));
+        } catch (e: any) {
+          console.warn(`[VIDSEND] step=compress FAIL fallback-original: ${e?.message}`);
+          // Si ni la compresión pudo (video largo/decodificación fallida) Y además
+          // el original excede el tope, no intentar la subida cruda imposible.
+          if (localBlob.size > 500 * 1024 * 1024) {
+            throw new Error(`No se pudo comprimir el video (${(localBlob.size / 1048576).toFixed(0)}MB) y el máximo para enviar es 500MB`);
+          }
+          fileToUpload = localFile;
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: formatFileSize(localBlob.size) } : m));
+        }
+
+        try {
+          const blob = new Blob([fileToUpload], { type: fileToUpload.type });
+          console.log(`[VIDSEND] step=upload-start ${(blob.size / 1048576).toFixed(2)}MB contentType=${blob.type} folder=${type === "video" ? "video" : "files"}`);
+          const url = await uploadChatMedia(blob, type === "video" ? "video" : "files");
+          console.log(`[VIDSEND] step=upload-ok url=${url.slice(0, 90)}`);
+          if (type === "video") {
+            cacheVideoBlob(url, localBlob).catch(() => {});
+          }
+          const mediaUpdated = { ...sendingMsg, mediaUrl: url, posterUrl };
+          await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdFile, sender_id: uid });
+          setMessages(prev => {
+            if (!prev.some(m => m.id === tempId)) return prev;
+            return prev.map(m => m.id === tempId ? mediaUpdated : m);
+          });
+          const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
+          if (!isLocalChat) {
+            const payload: any = { chat_id: chatId, sender_id: uid, type, text: file.name, client_id: clientIdFile, temp_id: tempId };
+            if (type === "image") { payload.image_url = url; payload.text = "Imagen"; }
+            else if (type === "video") { payload.video_url = url; payload.text = "Video"; }
+            else if (type === "audio") { payload.audio_url = url; payload.text = "Audio"; }
+            else {
+              payload.file_url = url;
+              payload.document_name = file.name;
+              payload.document_size = file.size ? formatFileSize(file.size) : null;
+              payload.document_type = file.type || null;
+              payload.mime_type = file.type || null;
+            }
+            const saved = await apiSendMessage(payload);
+            const savedRow = { ...mediaUpdated, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+            recordReconciledId(chatId, tempId, saved.id);
+            setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...savedRow } : m));
+            messageRepo.reconcileTemp(chatId, tempId, savedRow).catch((err) =>
+              console.error("[SEND] reconcileTemp falló (UI ya marcó sent):", err)
+            );
+          } else {
+            const final = { ...mediaUpdated, id: `local_${Date.now()}`, status: "sent" as const, synced: true, rawCreatedAt: new Date().toISOString() };
+            messageRepo.upsertMessage(chatId, final);
+            messageRepo.deleteMessage(chatId, tempId);
+            setMessages(prev => prev.map(m => m.id === tempId ? final : m));
+          }
+        } catch (err: any) {
+          console.error("[CHAT] File upload error:", err);
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
+          toast.error(`Error al enviar archivo: ${err?.message || "Error desconocido"}`);
         }
       } catch (err: any) {
-        console.error("[CHAT] File upload error:", err);
-        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
+        // Fallo FUERA de las etapas cubiertas (lectura del archivo, creación del
+        // preview, etc.). Mismo patrón que el resto de errores de envío.
+        console.error("[CHAT] Send failed:", err);
+        if (bubbleCreated) {
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
+        }
         toast.error(`Error al enviar archivo: ${err?.message || "Error desconocido"}`);
       } finally {
         pendingSendIdsRef.current.delete(tempId);

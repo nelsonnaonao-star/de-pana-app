@@ -20,7 +20,8 @@ import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
 import { getAllUserData } from "../services/server-api";
 import { useSupabase } from "../contexts/SupabaseContext";
-import { clearForMe, sendMessage as apiSendMessage } from "../services/messages";
+import { clearForMe, sendMessage as apiSendMessage, getMessages } from "../services/messages";
+import { messageRepo } from "../services/database/repositories/MessageRepository";
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
 import { getAllFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
 import { deleteContact, getContacts, type Contact } from "../services/contacts";
@@ -97,6 +98,51 @@ interface PhoneSimulatorProps {
   onClearExternalMessageTrigger?: () => void;
   onBackPress?: (handler: () => boolean) => void;
   onSetShouldExit?: (shouldExit: boolean) => void;
+}
+
+// Mapea el DTO de get_user_messages (services/messages) al Message de UI,
+// con los mismos campos que usa el mapper de ChatRoom, para persistir en
+// SQLite mensajes que llegan con el chat cerrado (canal chats-for).
+function mapDtoToUiMessage(m: any, uid: string): Message {
+  const durNum = m.audio_duration ? Number(m.audio_duration) : 0;
+  const durStr = durNum > 0 ? `${Math.floor(durNum / 60)}:${String(Math.floor(durNum % 60)).padStart(2, "0")}` : undefined;
+  let pollOpts = m.poll_options;
+  if (typeof pollOpts === "string") {
+    try { pollOpts = JSON.parse(pollOpts); } catch { pollOpts = []; }
+  }
+  return {
+    id: m.id,
+    sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
+    text: m.text,
+    timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+    rawCreatedAt: m.created_at || undefined,
+    type: (m.type as Message["type"]) || "text",
+    mediaUrl: m.image_url || m.sticker_url || m.gif_url || m.audio_url || m.video_url || m.file_url || undefined,
+    duration: durStr,
+    fileName: m.document_name || m.file_name || m.image_alt || undefined,
+    fileSize: m.document_size || undefined,
+    mimeType: m.mime_type || undefined,
+    reactions: m.reactions,
+    status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
+    forwarded: m.forwarded || false,
+    edited: m.edited || false,
+    replyToId: m.reply_to_id,
+    replyToText: m.reply_to_text,
+    replyToSender: m.reply_to_sender,
+    pollQuestion: m.poll_question,
+    pollOptions: Array.isArray(pollOpts) ? pollOpts.map((o: any) => ({
+      id: o.id || String(Math.random()),
+      text: o.text || "",
+      votes: Number(o.votes) || 0,
+      votedUsers: Array.isArray(o.votedUsers) ? o.votedUsers : [],
+    })) : [],
+    latitude: m.latitude,
+    longitude: m.longitude,
+    locationName: m.location_name,
+    isEphemeral: m.is_ephemeral,
+    ephemeralExpiresAt: m.ephemeral_expires_at,
+    clientTempId: m.temp_id || undefined,
+  };
 }
 
 export default function PhoneSimulator({
@@ -1042,6 +1088,28 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   chatsRef.current = chats;
   const clearedAtMapRef = useRef(clearedAtMap);
   clearedAtMapRef.current = clearedAtMap;
+  // Debounce por chat para el persist ligero de mensajes entrantes (chat cerrado)
+  const persistMsgTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Última vez que el canal chats-for incrementó unread de un chat (dedup con FCM)
+  const lastRealtimeUnreadRef = useRef<Record<string, number>>({});
+
+  // Persistencia ligera de un mensaje entrante con el chat cerrado: RPC
+  // get_user_messages limit 1 + upsertMessage (dedup por id). Compartida por el
+  // canal chats-for y el puente FCM (CallFcmService → pushNotificationReceived).
+  const scheduleLightMessagePersist = useCallback((chatId: string) => {
+    if (!user) return;
+    const pendingTimer = persistMsgTimersRef.current.get(chatId);
+    if (pendingTimer) clearTimeout(pendingTimer);
+    persistMsgTimersRef.current.set(chatId, setTimeout(() => {
+      persistMsgTimersRef.current.delete(chatId);
+      getMessages(chatId, { limit: 1 }).then((msgs) => {
+        const latest = msgs.length ? msgs.reduce((a, b) => (((a.created_at || "") >= (b.created_at || "")) ? a : b)) : null;
+        if (!latest) return;
+        const mapped = mapDtoToUiMessage(latest, user.id);
+        messageRepo.upsertMessage(chatId, { ...mapped, chatId, synced: true });
+      }).catch(() => {});
+    }, 1200));
+  }, [user]);
 
   // Handle message synced callback: replace tempId with server ID and update status
   const handleMessageSynced = useCallback((tempId: string, chatId: string, savedId: string) => {
@@ -1149,6 +1217,12 @@ const lastSentAtRef = useRef<Record<string, number>>({});
             updated_at: chat.updated_at,
           };
           db.run("UPDATE chats SET updated_at = ? WHERE id = ?", [chat.updated_at, chat.id]);
+          // Persistir el mensaje completo en SQLite (chat cerrado): reusa la
+          // misma rutina debounced que el puente FCM.
+          if (!isCleared) {
+            lastRealtimeUnreadRef.current[chat.id] = Date.now();
+            scheduleLightMessagePersist(chat.id);
+          }
           return updated.sort(sortChats);
         });
       }
@@ -1339,6 +1413,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         return;
       }
       logger.info('[EVENT] context', { selectedChatId, currentScreen });
+      const isChatOpen = selectedChatId === d.chatId && currentScreen === 'chat_room';
       setChats(prev => {
         const idx = prev.findIndex(chat => chat.id === d.chatId);
         if (idx === -1) {
@@ -1352,11 +1427,21 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           return prev;
         }
         const updated = [...prev];
-        updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
+        // Dedup con el canal chats-for: si ese canal ya incrementó el unread de
+        // este chat hace menos de 10s, no volver a incrementar (sería +2).
+        const realtimeRecently = Date.now() - (lastRealtimeUnreadRef.current[d.chatId] || 0) < 10000;
+        if (!realtimeRecently) {
+          updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
+        }
         if (d.body) updated[idx].lastMessage = d.body;
         return updated.sort(sortChats);
       });
-      if (selectedChatId === d.chatId && currentScreen === 'chat_room') {
+      if (!isChatOpen) {
+        // Mensaje recibido con el chat cerrado: persistir en SQLite (misma
+        // rutina debounced del canal chats-for). Si está abierto, el
+        // refetchTrigger de abajo ya trae y persiste vía getMessages(50).
+        scheduleLightMessagePersist(d.chatId);
+      } else {
         setRefetchTrigger(n => n + 1);
       }
     };
@@ -1393,7 +1478,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       window.removeEventListener('new-message-received', handleNewMessage);
       window.removeEventListener('answer-call', handleAnswerCall);
     };
-  }, [user?.id, selectedChatId, currentScreen]);
+   }, [user?.id, selectedChatId, currentScreen, scheduleLightMessagePersist]);
 
   useEffect(() => {
     if (externalMessageTrigger) {
@@ -2309,7 +2394,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
                 };
                 webrtc.onCallEnded = () => endGroupCall();
                 await webrtc.subscribeToRoom();
+                console.log(`[GJOIN] accept-flow: subscribed roomId=${roomId} user=${user.id.slice(0, 8)}`);
                 await webrtc.announceJoin();
+                console.log(`[GJOIN] accept-flow: announced, peers=${webrtc.getParticipantsCount()}`);
                 updateCallStatus(activeCall.id, 'accepted').catch((e) => logger.warn('[GRUPOCALL] Failed to mark invited call accepted', { error: e }));
                 setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
 } catch (err) {
@@ -2745,7 +2832,7 @@ try {
               </div>
 
               {/* Main Tab Content Body */}
-              <div className={`flex-1 overflow-y-auto bg-white relative flex flex-col h-full ${
+              <div className={`flex-1 overflow-y-auto bg-white relative flex flex-col h-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] ${
                 currentScreen === "chats" ? "pt-[170px]" : ""
               } ${currentScreen === "states" ? "hidden" : ""}`}>
                 
@@ -2764,7 +2851,7 @@ try {
                 <div className="flex-1 min-h-0 px-4">
                 {filteredChats.length > 0 && (
                 <Virtuoso
-                  className="h-full"
+                  className="h-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
                   data={filteredChats}
                   computeItemKey={(_, chat) => chat.id}
                   itemContent={(_index, chat) => {
@@ -2883,11 +2970,11 @@ try {
                             style={isSwiped ? { transform: 'translateX(80px)' } : undefined}
                           >
                             <div className="relative shrink-0">
-                              <div className={`p-[2px] rounded-full border-2 transition-transform hover:rotate-12 duration-500 ${chat.isGroup ? "border-purple-500" : chat.status === "online" ? "border-emerald-500" : "border-slate-300"}`}>
+                              <div className={`p-[1px] rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden border border-slate-200 transition-transform hover:rotate-12 duration-500 ${chat.isGroup ? "border-purple-500" : chat.status === "online" ? "border-emerald-500" : ""}`}>
                                 {displayAvatar ? (
-                                  <CachedImage src={displayAvatar} alt={chat.name} className="w-14 h-14 rounded-full object-cover" loading="lazy" />
+                                  <CachedImage src={displayAvatar} alt={chat.name} className="w-14 h-14 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] object-cover" loading="lazy" />
                                 ) : chat.isGroup ? (
-                                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
+                                  <div className="w-14 h-14 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
                                     <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                       <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                                       <circle cx="9" cy="7" r="4" />
@@ -2896,7 +2983,7 @@ try {
                                     </svg>
                                   </div>
                                 ) : (
-                                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                                  <div className="w-14 h-14 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                                     <span className="text-white font-black text-sm">
                                       {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
                                     </span>
@@ -3081,10 +3168,10 @@ try {
                             src={registeredUser.avatar}
                             alt="Profile"
                             onClick={() => !isUploadingAvatar && setShowMyAvatarLightbox(true)}
-                            className={`w-32 h-32 rounded-full mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
+                            className={`w-32 h-32 rounded-[16px] mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
                           />
                         ) : (
-                          <div className="w-32 h-32 rounded-full mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/25 shadow-xl ring-4 ring-white/10 flex items-center justify-center">
+                          <div className="w-32 h-32 rounded-[16px] mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/25 shadow-xl ring-4 ring-white/10 flex items-center justify-center">
                             <User className="w-14 h-14 text-white" />
                           </div>
                         )}
