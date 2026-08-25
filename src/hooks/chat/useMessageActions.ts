@@ -773,6 +773,7 @@ pendingSendIdsRef.current.add(tempId);
       if (msg?.posterUrl) revokeCachedMedia(msg.posterUrl);
       await apiDeleteMessage(messageId);
       setMessages(prev => prev.filter((m) => m.id !== messageId));
+      messageRepo.deleteMessage(chatId, messageId).catch(() => {});
       onMessageDeleted?.(chatId, messageId);
     } catch (e) {
       console.error("[CHAT] Delete error:", e);
@@ -785,6 +786,7 @@ pendingSendIdsRef.current.add(tempId);
     if (msg?.mediaUrl) revokeCachedMedia(msg.mediaUrl);
     if (msg?.posterUrl) revokeCachedMedia(msg.posterUrl);
     setMessages(prev => prev.filter((m) => m.id !== messageId));
+    messageRepo.deleteMessage(chatId, messageId).catch(() => {});
     onMessageDeleted?.(chatId, messageId);
   };
 
