@@ -156,6 +156,14 @@ public class CallFcmService extends FirebaseMessagingService {
                     Log.e(TAG, "Failed to bridge to Capacitor JS", e);
                 }
             } else {
+                // Bridge message pushes to JS (unread/preview + persistencia ligera en SQLite).
+                // La notificación visual sigue siendo SOLO la nativa de abajo: el JS no muestra ninguna.
+                try {
+                    PushNotificationsPlugin.sendRemoteMessage(message);
+                    Log.d(TAG, "Bridged message to Capacitor JS");
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to bridge message to Capacitor JS", e);
+                }
                 showForegroundMessageNotification(message);
             }
         } else {
@@ -163,6 +171,14 @@ public class CallFcmService extends FirebaseMessagingService {
             if ("call".equals(type)) {
                 showCallNotification(message);
             } else {
+                // Bridge message pushes to JS antes de la notificación nativa: el JS
+                // procesa el dato (persistencia SQLite) pero NO muestra nada visual.
+                try {
+                    PushNotificationsPlugin.sendRemoteMessage(message);
+                    Log.d(TAG, "Bridged message to Capacitor JS (background)");
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to bridge message to Capacitor JS", e);
+                }
                 showMessageNotification(message);
             }
         }
