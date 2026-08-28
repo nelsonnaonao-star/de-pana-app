@@ -12,6 +12,63 @@ const router = Router();
 
 ffmpeg.setFfmpegPath(ffmpegPath.path);
 
+const SUPABASE_HOST = 'akgsylutbpgolurkcavh.supabase.co';
+const BUCKET = 'chat-images';
+
+export function validateMediaReference(url) {
+  if (!url || typeof url !== 'string') return true;
+  if (url.startsWith('blob:') || url.startsWith('data:')) return true;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return true;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== SUPABASE_HOST) return true;
+    if (!parsed.pathname.includes(`/object/public/${BUCKET}/`)) return false;
+    const pathPart = decodeURIComponent(parsed.pathname.split(`/object/public/${BUCKET}/`)[1] || '');
+    if (!pathPart || pathPart.includes('..') || pathPart.startsWith('/')) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function extractPath(url) {
+  if (!url || typeof url !== 'string') return null;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== SUPABASE_HOST) return null;
+    const match = parsed.pathname.match(
+      new RegExp(`/object/public/${BUCKET}/(.+)$`)
+    );
+    if (!match) return null;
+    const storagePath = decodeURIComponent(match[1]);
+    if (!storagePath || storagePath.includes('..') || storagePath.startsWith('/')) return null;
+    return storagePath;
+  } catch {
+    return null;
+  }
+}
+
+async function isChatMember(chatId, userId) {
+  const { data: chat } = await supabaseAdmin
+    .from('chats')
+    .select('profile_id, admin_id, is_group')
+    .eq('id', chatId)
+    .maybeSingle();
+  if (!chat) return false;
+  if (chat.profile_id === userId || chat.admin_id === userId) return true;
+  if (chat.is_group) {
+    const { data: participant } = await supabaseAdmin
+      .from('chat_participants')
+      .select('profile_id')
+      .eq('chat_id', chatId)
+      .eq('profile_id', userId)
+      .maybeSingle();
+    return !!participant;
+  }
+  return false;
+}
+
 const uploadVideo = multer({
   storage: multer.diskStorage({
     destination: path.join(__dirname, '..', '..', 'uploads'),
@@ -162,5 +219,74 @@ async function uploadToSupabase(filePath, mimeType, ext = 'mp4') {
   const { data } = supabaseAdmin.storage.from('chat-images').getPublicUrl(fileName);
   return data.publicUrl;
 }
+
+// ─── Signed URL endpoint ────────────────────────────────────────
+router.post('/signed-url', async (req, res) => {
+  try {
+    const { messageId } = req.body;
+    if (!messageId || typeof messageId !== 'string') {
+      return res.status(400).json({ error: 'messageId requerido' });
+    }
+
+    const { data: msg, error: fetchError } = await supabaseAdmin
+      .from('messages')
+      .select('id, chat_id, image_url, audio_url, video_url, file_url')
+      .eq('id', messageId)
+      .maybeSingle();
+
+    if (fetchError || !msg) {
+      return res.status(404).json({ error: 'Mensaje no encontrado' });
+    }
+
+    if (!(await isChatMember(msg.chat_id, req.userId))) {
+      return res.status(403).json({ error: 'No eres miembro de este chat' });
+    }
+
+    const fields = ['image_url', 'audio_url', 'video_url', 'file_url'];
+    const paths = [];
+    const fieldMap = {};
+
+    for (const field of fields) {
+      const raw = msg[field];
+      if (!raw) continue;
+      const p = extractPath(raw);
+      if (p) {
+        paths.push(p);
+        fieldMap[field] = p;
+      }
+    }
+
+    if (paths.length === 0) {
+      return res.json({ image: null, audio: null, video: null, file: null });
+    }
+
+    const { data: signedData, error: signError } = await supabaseAdmin.storage
+      .from(BUCKET)
+      .createSignedUrls(paths, 3600);
+
+    if (signError) {
+      console.error('[MEDIA] signedUrl error:', signError.message);
+      return res.status(500).json({ error: 'Error generando URLs firmadas' });
+    }
+
+    const result = { image: null, audio: null, video: null, file: null };
+    const signedMap = {};
+    for (const item of (signedData || [])) {
+      if (item.path && item.signedUrl) {
+        signedMap[item.path] = item.signedUrl;
+      }
+    }
+
+    for (const [field, p] of Object.entries(fieldMap)) {
+      const key = field.replace('_url', '');
+      result[key] = signedMap[p] || null;
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('[MEDIA] signed-url error:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
 
 export default router;

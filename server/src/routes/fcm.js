@@ -102,6 +102,10 @@ router.post('/send', async (req, res) => {
     return res.status(400).json({ error: 'profile_id and title required' });
   }
 
+  if (req.userId !== profile_id && req.userRole !== 'service_role') {
+    return res.status(403).json({ error: 'No puedes enviar notificaciones para otro usuario' });
+  }
+
   const tokens = await getTokens(profile_id);
   if (!tokens.length) {
     return res.json({ ok: true, sent: 0 });
