@@ -288,7 +288,7 @@ function ContactRow({
       onTouchEnd={onTouchEnd}
       className="w-full bg-white rounded-xl p-3 flex items-center gap-3 hover:shadow-md hover:bg-slate-50 transition-all text-left cursor-pointer border border-transparent hover:border-slate-200"
     >
-      <div className={`w-11 h-11 rounded-full overflow-hidden bg-gradient-to-br ${avatarColors[colorIndex]} shrink-0 shadow-sm flex items-center justify-center`}>
+      <div className={`w-11 h-11 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden bg-gradient-to-br ${avatarColors[colorIndex]} shrink-0 shadow-sm flex items-center justify-center`}>
         {contact.avatar ? (
           <CachedImage src={contact.avatar} alt="" className="w-full h-full object-cover" loading="lazy" />
         ) : (

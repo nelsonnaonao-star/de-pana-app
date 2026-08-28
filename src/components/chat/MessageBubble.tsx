@@ -669,7 +669,7 @@ export default React.memo(function MessageBubble({
   return (
     <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-2.5 min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
+        className={`max-w-[85%] rounded-2xl px-4 ${msg.type === "audio" || msg.type === "voice_note" ? "py-0.5" : "py-2.5"} min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
           isMe ? activeMeBubble.css : activeThemBubble.css
         }`}
         onClick={() => {
@@ -718,7 +718,7 @@ export default React.memo(function MessageBubble({
         )}
 
         {msg.type === "audio" && msg.mediaUrl && (
-          <div className="w-full min-w-[220px]">
+          <div className="w-fit">
             <AudioMessagePlayer
               audioUrl={msg.mediaUrl}
               msgId={msg.id}

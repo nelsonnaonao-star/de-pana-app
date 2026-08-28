@@ -36,7 +36,6 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
   // vacía ni obligar a re-escanear. El escaneo manual sigue siendo el único
   // camino para descubrir contactos nuevos.
   useEffect(() => {
-    console.log(`[DIAG] SyncedContacts effect: savedContacts=${savedContacts.length} synced=${synced}`);
     if (synced) return;
     const seen = new Set<string>();
     const mapped: MatchedProfile[] = [];

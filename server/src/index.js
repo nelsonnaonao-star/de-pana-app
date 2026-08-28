@@ -47,7 +47,7 @@ async function main() {
     'capacitor://localhost',
     'ionic://localhost',
     'file://',
-    'https://de-pana-app.onrender.com',
+    'https://de-pana-app-kucq.onrender.com',
     process.env.CORS_ORIGIN || '',
   ].filter(Boolean);
 

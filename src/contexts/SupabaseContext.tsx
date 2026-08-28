@@ -1,15 +1,7 @@
-import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
+import React, { createContext, useContext, useEffect, useState, useRef, useMemo, ReactNode } from "react";
 import { Network } from "@capacitor/network";
 import { App as CapacitorApp } from "@capacitor/app";
 
-declare global {
-  interface Window {
-    __debugChats: () => Promise<void>;
-    __startAutoDebug: () => void;
-    __stopAutoDebug: () => void;
-    __autoDebugInterval: ReturnType<typeof setInterval> | null;
-  }
-}
 import { supabase } from "../lib/supabase";
 import { Profile, signOut as authSignOut } from "../services/auth";
 import { Chat, getChats } from "../services/chats";
@@ -445,8 +437,24 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     // la sesión/caché ya pintó antes, este disparo no tiene efecto.
     const bootWatchdog = setTimeout(() => setLoading(false), 4500);
 
+    // Listener para sesión irrecuperable: cuando authFetch detecta que
+    // refreshSession() lanzó excepción (token muerto de verdad), dispara este
+    // CustomEvent. Solo limpiamos el user state — NO borramos caché/contactos/
+    // chats para que al volver a loguearse todo esté intacto.
+    const handleSessionUnrecoverable = () => {
+      logger.info("[AUTH] session-unrecoverable received — clearing session, keeping local cache");
+      toast.error("Tu sesión expiró. Inicia sesión de nuevo.", { duration: 5000 });
+      loadedUserId.current = null;
+      clearLastUser();
+      setUser(null);
+      setProfile(null);
+      setLoading(false);
+    };
+    window.addEventListener("session-unrecoverable", handleSessionUnrecoverable);
+
     return () => {
       clearTimeout(bootWatchdog);
+      window.removeEventListener("session-unrecoverable", handleSessionUnrecoverable);
       listener?.subscription?.unsubscribe();
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
       if (discoveryPollRef.current) clearInterval(discoveryPollRef.current);
@@ -1088,70 +1096,6 @@ const refreshChats = async () => {
     saveCache(cacheKey(user.id, "calls"), cl);
   };
 
-  // Helper: POST logs to debug server (for terminal viewing)
-  function sendLog(level: string, ...args: any[]) {
-    try {
-      fetch("http://localhost:3456", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ level, args: args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)) }),
-      }).catch(() => {});
-    } catch (e) {
-      logger.warn("[SupabaseContext] sendLog failed", { error: e });
-    }
-  }
-
-  // Expose debug function globally so user can run it from browser console
-  window.__debugChats = async () => {
-    if (!user) { logger.error("No user logged in"); return; }
-    const lines: string[] = [];
-    const log = (msg: string) => { lines.push(msg); logger.info(msg); sendLog("info", msg); };
-    log("=== CHAT DIAGNOSTIC ===");
-    log("User ID: " + user.id);
-    // 1. Check chat_participants
-    const { data: myParts, error: partErr } = await supabase
-      .from("chat_participants")
-      .select("chat_id, profile_id");
-    log("chat_participants: " + JSON.stringify(myParts) + " Error: " + JSON.stringify(partErr));
-    // 2. Check chats SELECT via RLS
-    const { data: allChats, error: chatErr } = await supabase
-      .from("chats")
-      .select("*");
-    log("chats (all via RLS): " + (allChats?.length || 0) + " Error: " + JSON.stringify(chatErr));
-    if (allChats) {
-      for (const c of allChats) log("  Chat: " + c.id + " " + c.name + " is_group:" + c.is_group + " profile_id:" + c.profile_id + " admin_id:" + c.admin_id);
-    }
-    // 3. Check direct participant chats
-    const { data: directChats } = await supabase
-      .from("chats")
-      .select("*")
-      .or(`profile_id.eq.${user.id},admin_id.eq.${user.id}`);
-    log("direct chats count: " + (directChats?.length || 0));
-    // 4. Try fetching chat_participants for each chat
-    if (myParts) {
-      for (const p of myParts) {
-        const { data: chat } = await supabase.from("chats").select("*").eq("id", p.chat_id).single();
-        log("Participant chat_id: " + p.chat_id + " fetched: " + (chat?.name || "NULL (RLS BLOCKED)"));
-      }
-    }
-    // 5. Current context chats
-    log("Context chats count: " + chats.length);
-    log("=== END DIAGNOSTIC ===");
-  };
-
-  window.__startAutoDebug = () => {
-    logger.info("Auto-debug started (every 5s). Run __stopAutoDebug() to stop.");
-    if (window.__autoDebugInterval) clearInterval(window.__autoDebugInterval);
-    window.__autoDebugInterval = setInterval(() => window.__debugChats(), 5000);
-  };
-  window.__stopAutoDebug = () => {
-    if (window.__autoDebugInterval) {
-      clearInterval(window.__autoDebugInterval);
-      window.__autoDebugInterval = null;
-      logger.info("Auto-debug stopped.");
-    }
-  };
-
   const completePasswordReset = async (newPassword: string) => {
     const uid = user?.id;
     const { error } = await supabase.auth.updateUser({ password: newPassword });
@@ -1205,23 +1149,25 @@ const refreshChats = async () => {
     setCalls([]);
   };
 
+  const contextValue = useMemo(() => ({
+    user,
+    profile,
+    loading,
+    chats,
+    contacts,
+    calls,
+    passwordRecovery,
+    completePasswordReset,
+    refreshProfile,
+    refreshChats,
+    refreshContacts,
+    refreshCalls,
+    logout,
+  }), [user, profile, loading, chats, contacts, calls, passwordRecovery, completePasswordReset, refreshProfile, refreshChats, refreshContacts, refreshCalls, logout]);
+
   return (
     <SupabaseContext.Provider
-      value={{
-        user,
-        profile,
-        loading,
-        chats,
-        contacts,
-        calls,
-        passwordRecovery,
-        completePasswordReset,
-        refreshProfile,
-        refreshChats,
-        refreshContacts,
-        refreshCalls,
-        logout,
-      }}
+      value={contextValue}
     >
       {children}
     </SupabaseContext.Provider>

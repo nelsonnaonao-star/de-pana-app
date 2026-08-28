@@ -17,7 +17,7 @@ public class ReplyReceiver extends BroadcastReceiver {
 
     private static final String TAG = "ReplyReceiver";
     private static final String CAPACITOR_STORAGE = "CapacitorStorage";
-    private static final String MESSAGES_API = "https://de-pana-app.onrender.com/api/messages/send";
+    private static final String MESSAGES_API = "https://de-pana-app-kucq.onrender.com/api/messages/send";
 
     @Override
     public void onReceive(Context context, Intent intent) {

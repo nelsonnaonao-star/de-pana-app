@@ -3,6 +3,9 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.redon.app"
     compileSdk = rootProject.ext.compileSdkVersion
+    buildFeatures {
+        buildConfig true
+    }
     defaultConfig {
         applicationId "com.redon.app"
         minSdkVersion rootProject.ext.minSdkVersion

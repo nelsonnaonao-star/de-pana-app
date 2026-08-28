@@ -4,7 +4,7 @@ import {browserTracingIntegration, replayIntegration} from '@sentry/react';
 export function initSentryWeb() {
   Sentry.init({
     dsn: import.meta.env.VITE_SENTRY_DSN,
-    environment: 'staging',
+    environment: import.meta.env.DEV ? 'development' : 'production',
     integrations: [
       browserTracingIntegration(),
       replayIntegration({

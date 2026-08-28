@@ -13,7 +13,7 @@ const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
-  environment: "staging",
+  environment: process.env.NODE_ENV === "production" ? "production" : "development",
   tracesSampleRate: 1.0,
   integrations: [Sentry.expressIntegration()],
 });

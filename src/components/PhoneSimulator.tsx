@@ -60,9 +60,7 @@ import SimulatorForwardModal from "./simulator/SimulatorForwardModal";
 import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
 import ImageLightbox from "./chat/overlays/ImageLightbox";
 
-// Module-level set of chat ids already animated this session — survives remounts
-// so returning to the chats list doesn't replay the fade-in on seen items.
-const animatedChatIds = new Set<string>();
+// (animatedChatIdsRef moved inside PhoneSimulator component to satisfy Rules of Hooks)
 
 const QrScanner = React.lazy(() => import("./QrScanner"));
 const MyQrCode = React.lazy(() => import("./MyQrCode"));
@@ -155,6 +153,7 @@ export default function PhoneSimulator({
   onBackPress,
   onSetShouldExit,
 }: PhoneSimulatorProps) {
+  const animatedChatIdsRef = useRef(new Set<string>());
   const { user, profile, contacts: appContacts, chats: supabaseChats, loading, refreshChats, refreshContacts, refreshProfile, logout } = useSupabase();
 
   // Deduplicate contacts by contact_user_id (prefer entry with phone) or by name+phone
@@ -531,7 +530,7 @@ export default function PhoneSimulator({
       if (!isNaN(t) && now - t > RING_TTL_MS) {
         // Registro 'ringing' colgado: nadie lo va a contestar ya. Se limpia para
         // la base y se descarta para que no dé vueltas como llamada fantasma.
-        updateCallStatus(callId, 'missed').catch(() => {});
+        updateCallStatus(callId, 'missed').catch((e) => logger.warn('[WEBRTC SIGNALING] Failed to mark stale call missed', { error: e, callId }));
         return false;
       }
       seenIncomingCallsRef.current.set(callId, now);
@@ -782,7 +781,7 @@ export default function PhoneSimulator({
               text: initialText,
               type: "text" as any,
               status: "sent" as any,
-            }).catch(() => {});
+            }).catch((e) => logger.error("[BIZ] initial message to existing chat failed", { error: e, chatId: existing.id }));
             setCurrentScreen("chat_room");
             refreshChats().catch(() => {});
             return;
@@ -815,7 +814,7 @@ export default function PhoneSimulator({
               text: initialText,
               type: "text" as any,
               status: "sent" as any,
-            }).catch(() => {});
+            }).catch((e) => logger.error("[BIZ] initial message to new chat failed", { error: e, chatId: chat.id }));
             setCurrentScreen("chat_room");
             refreshChats().catch(() => {});
             return;
@@ -1107,7 +1106,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         if (!latest) return;
         const mapped = mapDtoToUiMessage(latest, user.id);
         messageRepo.upsertMessage(chatId, { ...mapped, chatId, synced: true });
-      }).catch(() => {});
+      }).catch((e) => logger.warn("[LIGHT-PERSIST] Failed to persist latest message", { error: e, chatId }));
     }, 1200));
   }, [user]);
 
@@ -1148,7 +1147,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         const full = await getChatWithPartner(chat.id, user.id);
         if (!full) return;
         setChats(prev => {
-          if (prev.some(c => c.id === full.id)) return prev;
+          const existing = prev.find(c => c.id === full.id);
+          if (existing) return prev;
           return [full as any, ...prev].sort(sortChats);
         });
         // Also sync context
@@ -1288,7 +1288,23 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           return;
         }
         if (activeCallRef.current) return;
-        const isGroupChat = !!chatsRef.current.find((c) => c.id === call.chat_id)?.isGroup;
+        let isGroupChat = !!chatsRef.current.find((c) => c.id === call.chat_id)?.isGroup;
+        // Si el chat no es grupo pero ya hay otra call activa en el mismo chat_id,
+        // es una invitación a sala existente → tratar como grupo.
+        if (!isGroupChat && call.chat_id) {
+          try {
+            const { data: otherCalls } = await supabase
+              .from("calls")
+              .select("id")
+              .eq("chat_id", call.chat_id)
+              .in("status", ["ringing", "accepted", "ongoing"])
+              .neq("id", call.id)
+              .limit(1);
+            if (otherCalls && otherCalls.length > 0) isGroupChat = true;
+          } catch (e) {
+            logger.warn('[WEBRTC SIGNALING] Failed to check for existing calls on chat', { error: e, chatId: call.chat_id });
+          }
+        }
         logger.info('[WEBRTC SIGNALING] Setting activeCall from Realtime', { callerName, status: 'incoming', isGroupChat });
         playIncomingRingtone();
         setActiveCall({
@@ -1370,7 +1386,23 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         }
         logger.info('[WEBRTC SIGNALING] Setting activeCall from FCM', { callerName: d.callerName, callId: incomingCallId });
         answeredCallRef.current = false;
-        const isGroupChatFcm = !!chatsRef.current.find((c) => c.id === chatId)?.isGroup;
+        let isGroupChatFcm = !!chatsRef.current.find((c) => c.id === chatId)?.isGroup;
+        // Si el chat no es grupo pero ya hay otra call activa en el mismo chat_id,
+        // es una invitación a sala existente → tratar como grupo.
+        if (!isGroupChatFcm && chatId) {
+          try {
+            const { data: otherCalls } = await supabase
+              .from("calls")
+              .select("id")
+              .eq("chat_id", chatId)
+              .in("status", ["ringing", "accepted", "ongoing"])
+              .neq("id", incomingCallId)
+              .limit(1);
+            if (otherCalls && otherCalls.length > 0) isGroupChatFcm = true;
+          } catch (e) {
+            logger.warn('[WEBRTC SIGNALING] Failed to check for existing calls on chat (FCM)', { error: e, chatId });
+          }
+        }
         playIncomingRingtone();
         setActiveCall({
           id: incomingCallId || ('call_' + Date.now()),
@@ -1414,28 +1446,30 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       }
       logger.info('[EVENT] context', { selectedChatId, currentScreen });
       const isChatOpen = selectedChatId === d.chatId && currentScreen === 'chat_room';
-      setChats(prev => {
-        const idx = prev.findIndex(chat => chat.id === d.chatId);
-        if (idx === -1) {
-          // Chat not found locally — fetch and insert
-          getChatWithPartner(d.chatId, user!.id).then(full => {
-            if (!full) return;
-            setChats(later => {
-              if (later.some(c => c.id === full.id)) return later;
-              return [{ ...full, lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 } as any, ...later].sort(sortChats);
-            });          });
-          return prev;
-        }
-        const updated = [...prev];
-        // Dedup con el canal chats-for: si ese canal ya incrementó el unread de
-        // este chat hace menos de 10s, no volver a incrementar (sería +2).
-        const realtimeRecently = Date.now() - (lastRealtimeUnreadRef.current[d.chatId] || 0) < 10000;
-        if (!realtimeRecently) {
-          updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
-        }
-        if (d.body) updated[idx].lastMessage = d.body;
-        return updated.sort(sortChats);
-      });
+      // Check if chat exists first (synchronous), fetch only if missing.
+      const chatExists = chatsRef.current.some(chat => chat.id === d.chatId);
+      if (!chatExists) {
+        // Chat not found locally — fetch and insert outside setChats to avoid race condition.
+        getChatWithPartner(d.chatId, user!.id).then(full => {
+          if (!full) return;
+          setChats(later => {
+            if (later.some(c => c.id === full.id)) return later;
+            return [{ ...full, avatar: (full as any).avatar || "", lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 } as any, ...later].sort(sortChats);
+          });
+        });
+      } else {
+        setChats(prev => {
+          const idx = prev.findIndex(chat => chat.id === d.chatId);
+          if (idx === -1) return prev;
+          const updated = [...prev];
+          const realtimeRecently = Date.now() - (lastRealtimeUnreadRef.current[d.chatId] || 0) < 10000;
+          if (!realtimeRecently) {
+            updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
+          }
+          if (d.body) updated[idx].lastMessage = d.body;
+          return updated.sort(sortChats);
+        });
+      }
       if (!isChatOpen) {
         // Mensaje recibido con el chat cerrado: persistir en SQLite (misma
         // rutina debounced del canal chats-for). Si está abierto, el
@@ -1503,6 +1537,99 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       onClearExternalMessageTrigger();
     }
   }, [externalMessageTrigger, currentScreen, selectedChatId, onClearExternalMessageTrigger]);
+
+  // Señal de aviso + transición real: escuchar broadcasts cuando hay llamada activa.
+  // Cuando alguien invita a un nuevo participante a la misma sala, A y B transicionan
+  // de WebRTCService (1:1) a WebRTCGroupService (grupo) en el mismo roomId.
+  useEffect(() => {
+    const active = activeCallRef.current;
+    if (!active) return;
+    const roomId = active.roomId || active.id;
+    if (!roomId) return;
+    // Solo transicionar si estamos en 1:1 (no ya en grupo)
+    if (active.isGroup) return;
+
+    const channel = supabase.channel(`call-room-update:${roomId}`);
+    channel.on("broadcast", { event: "room-update" }, (payload) => {
+      const d = payload.payload as Record<string, unknown> | undefined;
+      if (d?.type === "member_invited" && typeof d.invitedName === "string") {
+        console.log(`[GTRANS] A/B received member_invited for ${d.invitedName}, roomId=${roomId}, activeCallId=${activeCallRef.current?.id}, isGroup=${activeCallRef.current?.isGroup}`);
+        toast(`Agregando a ${d.invitedName} a la llamada...`, { icon: "📞" });
+        // Transición real 1:1 -> grupo
+        void (async () => {
+          if (!user) return;
+          const current = activeCallRef.current;
+          if (!current || current.isGroup) {
+            console.log(`[GTRANS] Transition aborted: no active call or already group`);
+            return;
+          }
+          const currentRoomId = current.roomId || current.id;
+          if (!currentRoomId) {
+            console.log(`[GTRANS] Transition aborted: no roomId`);
+            return;
+          }
+
+          console.log(`[GTRANS] A/B transitioning 1:1->group: cleaning WebRTCService, callId=${current.id}`);
+          // Limpiar WebRTCService 1:1 existente
+          webrtcRef.current?.cleanup();
+          webrtcRef.current = null;
+          setRemoteStream(null);
+          setLocalStream(null);
+
+          // Crear WebRTCGroupService igual que hace C en onAccept
+          try {
+            console.log(`[GTRANS] A/B creating WebRTCGroupService roomId=${currentRoomId} user=${user.id.slice(0,8)}`);
+            const webrtc = new WebRTCGroupService(currentRoomId, user.id);
+            groupCallRef.current = webrtc;
+
+            webrtc.onReaction = (peerId: string, emoji: string) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
+
+            webrtc.onRemoteStream = (peerId: string, stream: MediaStream) => {
+              console.log(`[GTRANS] A/B onRemoteStream from peer ${peerId}`);
+              setGroupRemoteStreams((prev) => {
+                const next = new Map(prev);
+                next.set(peerId, stream);
+                setGroupParticipantCount((c) => Math.max(c, next.size));
+                return next;
+              });
+            };
+
+            webrtc.onParticipantLeft = (peerId: string) => {
+              console.log(`[GTRANS] A/B onParticipantLeft: ${peerId}`);
+              setGroupRemoteStreams((prev) => {
+                const next = new Map(prev);
+                next.delete(peerId);
+                return next;
+              });
+              setGroupParticipantCount((c) => Math.max(0, c - 1));
+            };
+
+            webrtc.onCallEnded = () => endGroupCall();
+
+            console.log(`[GTRANS] A/B starting local stream`);
+            await webrtc.startLocalStream(true, current.type === "video");
+            setGroupLocalStream(webrtc.getLocalStream());
+
+            console.log(`[GTRANS] A/B subscribing to room`);
+            await webrtc.subscribeToRoom();
+            console.log(`[GTRANS] A/B subscribed, announcing join`);
+            await webrtc.announceJoin();
+            console.log(`[GTRANS] A/B announceJoin done, peers=${webrtc.getParticipantsCount()}`);
+
+            setGroupParticipantCount(webrtc.getParticipantsCount());
+            setActiveCall((prev) => prev ? { ...prev, isGroup: true, status: "connected" } : null);
+            console.log(`[GTRANS] A/B transition complete, isGroup=true`);
+          } catch (err) {
+            logger.error("[GRUPOCALL] Transition 1:1->group failed", { error: err });
+            setGroupCallError("Error al cambiar a llamada grupal");
+          }
+        })();
+      }
+    });
+    channel.subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [activeCall?.id, activeCall?.roomId]);
 
   // activeChat derived from chats + selectedChatId
   const activeChat = chats.find((c) => c.id === selectedChatId);
@@ -1814,6 +1941,23 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       logger.info("[GRUPOCALL] Invited contact to room", { contactName: contact.name, roomId, callId: dbCall?.id });
       toast.success(`${contact.name} invitado a la videollamada`);
       setShowAddMember(false);
+      // Señal a participantes existentes en la sala via broadcast
+      try {
+        const roomChannel = supabase.channel(`call-room-update:${roomId}`);
+        roomChannel.subscribe((status) => {
+          if (status === "SUBSCRIBED") {
+            roomChannel.send({
+              type: "broadcast",
+              event: "room-update",
+              payload: { type: "member_invited", invitedName: contact.name },
+            }).then(() => { supabase.removeChannel(roomChannel); });
+          } else {
+            supabase.removeChannel(roomChannel);
+          }
+        });
+      } catch (e) {
+        logger.warn("[GRUPOCALL] Broadcast invite signal failed", { error: e });
+      }
       // Auto-descartar la invitación si nadie la acepta en 45s.
       if (dbCall?.id) {
         setTimeout(() => {
@@ -2317,9 +2461,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     setContextMenuPos(null);
   };
 
-  const filteredChats = chats.filter((c) =>
+  const filteredChats = useMemo(() => chats.filter((c) =>
     c.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-  );
+  ), [chats, debouncedSearchQuery]);
 
   return (
     <div className="relative w-screen h-screen bg-white flex flex-col overflow-hidden select-none">
@@ -2364,19 +2508,21 @@ const lastSentAtRef = useRef<Record<string, number>>({});
               webrtcRef.current?.setVideoFilter(filterId).catch(() => {});
             }
           }}
-          onAccept={async () => {
+onAccept={async () => {
             if (!user) return;
             if (activeCall.isGroup) {
               // Incoming group call: join room
               const roomId = activeCall.roomId || activeCall.id.replace("group_", "");
               if (!roomId) { setGroupCallError("No se pudo unir a la sala"); return; }
               try {
+                console.log(`[GTRANS] C accepting group call: roomId=${roomId} user=${user.id.slice(0,8)} callId=${activeCall.id}`);
                 const webrtc = new WebRTCGroupService(roomId, user.id);
                 groupCallRef.current = webrtc;
                 webrtc.onReaction = (peerId: string, emoji: string) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
                 await webrtc.startLocalStream(true, activeCall.type === "video");
                 setGroupLocalStream(webrtc.getLocalStream());
                 webrtc.onRemoteStream = (peerId: string, stream: MediaStream) => {
+                  console.log(`[GTRANS] C onRemoteStream from peer ${peerId}`);
                   setGroupRemoteStreams((prev) => {
                     const next = new Map(prev);
                     next.set(peerId, stream);
@@ -2385,6 +2531,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
                   });
                 };
                 webrtc.onParticipantLeft = (peerId: string) => {
+                  console.log(`[GTRANS] C onParticipantLeft: ${peerId}`);
                   setGroupRemoteStreams((prev) => {
                     const next = new Map(prev);
                     next.delete(peerId);
@@ -2394,12 +2541,12 @@ const lastSentAtRef = useRef<Record<string, number>>({});
                 };
                 webrtc.onCallEnded = () => endGroupCall();
                 await webrtc.subscribeToRoom();
-                console.log(`[GJOIN] accept-flow: subscribed roomId=${roomId} user=${user.id.slice(0, 8)}`);
+                console.log(`[GTRANS] C subscribed roomId=${roomId} user=${user.id.slice(0,8)}`);
                 await webrtc.announceJoin();
-                console.log(`[GJOIN] accept-flow: announced, peers=${webrtc.getParticipantsCount()}`);
+                console.log(`[GTRANS] C announceJoin done, peers=${webrtc.getParticipantsCount()}`);
                 updateCallStatus(activeCall.id, 'accepted').catch((e) => logger.warn('[GRUPOCALL] Failed to mark invited call accepted', { error: e }));
                 setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
-} catch (err) {
+              } catch (err) {
                 logger.error("[GRUPOCALL] join error", { error: err });
                 setGroupCallError("No se pudo unir a la llamada grupal");
               }
@@ -2855,8 +3002,8 @@ try {
                   data={filteredChats}
                   computeItemKey={(_, chat) => chat.id}
                   itemContent={(_index, chat) => {
-                    const shouldAnimate = !animatedChatIds.has(chat.id);
-                    animatedChatIds.add(chat.id);
+const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
+                      animatedChatIdsRef.current.add(chat.id);
                       const isSwiped = swipedChatId === chat.id;
                       let touchStartX = 0;
                       let touchStartY = 0;
@@ -3870,15 +4017,15 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                     <div className="text-[10.5px] text-slate-400">Tono cuando llega una notificación</div>
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                                <div className="flex flex-col gap-1 bg-slate-100 p-1.5 rounded-xl max-h-[200px] overflow-y-auto scrollbar-thin">
                                   {SOUND_LIBRARY.message.map((opt) => (
-                                    <div key={opt.id} className="flex-1 flex flex-col gap-1">
+                                    <div key={opt.id} className="flex flex-col gap-1 w-full">
                                       <button
                                         onClick={() => {
                                           setPreviewMsgSound(opt.id);
                                           playSoundOption("message", opt.id, 0.7);
                                         }}
-                                        className={`py-1 text-[10px] font-black rounded-lg transition-all cursor-pointer ${
+                                        className={`w-full py-2 px-2 text-left text-[11px] font-black rounded-lg transition-all cursor-pointer ${
                                           previewMsgSound === opt.id
                                             ? "bg-white text-[#0a4d52] shadow-sm"
                                             : "bg-transparent text-slate-500 hover:text-slate-800"
@@ -3896,7 +4043,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                             stopSound();
                                             showToast(`Sonido de mensaje: ${opt.name} ✅`);
                                           }}
-                                          className="py-1 text-[9.5px] font-bold text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors cursor-pointer"
+                                          className="w-full py-1.5 text-[10px] font-bold text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors cursor-pointer"
                                         >
                                           Guardar
                                         </button>
@@ -3913,15 +4060,15 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                     <div className="text-[10.5px] text-slate-400">Tono cuando llega una llamada</div>
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                                <div className="flex flex-col gap-1 bg-slate-100 p-1.5 rounded-xl max-h-[200px] overflow-y-auto scrollbar-thin">
                                   {SOUND_LIBRARY.call.map((opt) => (
-                                    <div key={opt.id} className="flex-1 flex flex-col gap-1">
+                                    <div key={opt.id} className="flex flex-col gap-1 w-full">
                                       <button
                                         onClick={() => {
                                           setPreviewCallSound(opt.id);
                                           playSoundOption("call", opt.id, 0.8);
                                         }}
-                                        className={`py-1 text-[10px] font-black rounded-lg transition-all cursor-pointer ${
+                                        className={`w-full py-2 px-2 text-left text-[11px] font-black rounded-lg transition-all cursor-pointer ${
                                           previewCallSound === opt.id
                                             ? "bg-white text-[#0a4d52] shadow-sm"
                                             : "bg-transparent text-slate-500 hover:text-slate-800"
@@ -3939,7 +4086,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                             stopSound();
                                             showToast(`Sonido de llamada: ${opt.name} ✅`);
                                           }}
-                                          className="py-1 text-[9.5px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
+                                          className="w-full py-1.5 text-[10px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
                                         >
                                           Guardar
                                         </button>

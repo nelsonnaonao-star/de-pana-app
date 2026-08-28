@@ -81,9 +81,9 @@ export default function ChatHeader({
           >
             <div className="relative">
               {chat.avatar ? (
-                <CachedImage src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover border border-white/20" />
+                <CachedImage src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] object-cover border border-white/20" />
               ) : isGroup ? (
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center border border-white/20">
+                <div className="w-11 h-11 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center border border-white/20">
                   <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                     <circle cx="9" cy="7" r="4" />
@@ -92,7 +92,7 @@ export default function ChatHeader({
                   </svg>
                 </div>
               ) : (
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center border border-white/20">
+                <div className="w-11 h-11 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center border border-white/20">
                   <span className="text-white font-bold text-xs">
                     {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
                   </span>

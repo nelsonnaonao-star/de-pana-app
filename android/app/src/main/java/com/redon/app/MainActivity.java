@@ -33,7 +33,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        WebView.setWebContentsDebuggingEnabled(true);
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
         instance = this;
         createNotificationChannels();
         requestNotificationPermission();
@@ -150,6 +152,10 @@ public class MainActivity extends BridgeActivity {
         if ("message".equals(event)) {
             if ("noti1".equals(soundId)) return "noti1";
             if ("noti2".equals(soundId)) return "noti2";
+            if ("noti3".equals(soundId)) return "noti3";
+            if ("noti4".equals(soundId)) return "noti4";
+            if ("noti5".equals(soundId)) return "noti5";
+            if ("noti6".equals(soundId)) return "noti6";
             return "notificacion";
         }
         if ("ring2".equals(soundId)) return "ring1";
@@ -207,6 +213,18 @@ public class MainActivity extends BridgeActivity {
             }
             if (!"noti2".equals(msgSound)) {
                 createToneChannel(nm, "redon-messages-noti2", "Mensajes 2", "noti2", new long[]{0, 300, 200, 300}, audioAttrs);
+            }
+            if (!"noti3".equals(msgSound)) {
+                createToneChannel(nm, "redon-messages-noti3", "Mensajes 3", "noti3", new long[]{0, 300, 200, 300}, audioAttrs);
+            }
+            if (!"noti4".equals(msgSound)) {
+                createToneChannel(nm, "redon-messages-noti4", "Mensajes 4", "noti4", new long[]{0, 300, 200, 300}, audioAttrs);
+            }
+            if (!"noti5".equals(msgSound)) {
+                createToneChannel(nm, "redon-messages-noti5", "Mensajes 5", "noti5", new long[]{0, 300, 200, 300}, audioAttrs);
+            }
+            if (!"noti6".equals(msgSound)) {
+                createToneChannel(nm, "redon-messages-noti6", "Mensajes 6", "noti6", new long[]{0, 300, 200, 300}, audioAttrs);
             }
             if (!"ring2".equals(callSound)) {
                 createToneChannel(nm, "redon-calls-ring2", "Llamadas 2", "ring1", new long[]{0, 500, 300, 500, 300, 500}, audioAttrs);

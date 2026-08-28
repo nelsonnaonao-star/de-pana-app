@@ -1,12 +1,18 @@
 import { supabase } from "./supabase";
 
-const FALLBACK_URL = "https://de-pana-app.onrender.com";
+const FALLBACK_URL = "https://de-pana-app-kucq.onrender.com";
 
 const base = import.meta.env.VITE_SERVER_URL || FALLBACK_URL;
 
 export function apiUrl(path: string): string {
   return base + path;
 }
+
+// Timestamp del último fallo de refresh real (excepción, no 401 genérico).
+// Usado para cooldown: no disparar session-unrecoverable más de una vez
+// cada 45s aunque una ráfaga de llamadas falle simultáneamente.
+let lastRefreshFailureAt = 0;
+const REFRESH_FAILURE_COOLDOWN_MS = 45000;
 
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
@@ -35,14 +41,27 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
   }
 
   if (response.status === 401) {
+    let refreshThrew = false;
     try {
       const { data: { session: refreshed } } = await supabase.auth.refreshSession();
       if (refreshed?.access_token) {
         headers['Authorization'] = `Bearer ${refreshed.access_token}`;
         response = await fetch(url, { ...opts, headers });
       }
+      // Si refreshSession no lanzó pero devolvió null → token vencido pero
+      // no "explotó". Podría ser 401 del servidor por otra razón (rate limit,
+      // permisos, etc.). No disparar sesión muerta — es ambiguo.
     } catch {
-      // refresh failed
+      // refreshSession() lanzó excepción real → token/refresh irrecuperable
+      refreshThrew = true;
+    }
+
+    if (refreshThrew && response.status >= 400) {
+      const now = Date.now();
+      if (now - lastRefreshFailureAt > REFRESH_FAILURE_COOLDOWN_MS) {
+        lastRefreshFailureAt = now;
+        window.dispatchEvent(new CustomEvent("session-unrecoverable"));
+      }
     }
   }
 

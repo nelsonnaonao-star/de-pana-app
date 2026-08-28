@@ -134,7 +134,7 @@ export default function StoryViewer({
           <CachedImage
             src={activeUserStates.userAvatar}
             alt={activeUserStates.userName}
-            className="w-8 h-8 rounded-full object-cover border border-white/25"
+            className="w-8 h-8 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] object-cover border border-white/25"
           />
           <div>
             <h4 className="text-[10px] font-black leading-none">{activeUserStates.userName}</h4>

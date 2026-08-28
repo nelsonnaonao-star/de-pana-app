@@ -42,6 +42,6 @@ services:
       - key: VITE_SERVER_URL
         value: https://redon-server.onrender.com
       - key: CORS_ORIGIN
-        value: https://de-pana-app.onrender.com
+        value: https://de-pana-app-kucq.onrender.com
       - key: CLIENT_ORIGIN
-        value: https://de-pana-app.onrender.com
+        value: https://de-pana-app-kucq.onrender.com

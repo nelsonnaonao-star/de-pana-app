@@ -6,7 +6,7 @@ export function initSentryCapacitor() {
 
   Sentry.init({
     dsn: import.meta.env.VITE_SENTRY_DSN,
-    environment: 'staging',
+    environment: import.meta.env.DEV ? 'development' : 'production',
     enableAutoSessionTracking: true,
     sessionTrackingIntervalMillis: 30000,
     tracesSampleRate: 0.2,

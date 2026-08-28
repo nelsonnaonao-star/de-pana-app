@@ -39,7 +39,7 @@ export default function ContactProfile({ isOpen, profile, onClose }: ContactProf
               <X className="w-4 h-4" />
             </button>
             <div className="flex flex-col items-center">
-              <div className="w-20 h-20 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shadow-lg border-2 border-white/30 flex items-center justify-center mb-3 relative group">
+              <div className="w-20 h-20 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shadow-lg border-2 border-white/30 flex items-center justify-center mb-3 relative group">
                 {profile.avatar ? (
                   <>
                     <CachedImage src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />

@@ -3,6 +3,12 @@ import { Smile, Paperclip, Mic, VideoIcon, Send, X, Check, Loader2 } from "lucid
 import { Message } from "../../types";
 import CachedImage from "../CachedImage";
 
+function formatRecTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 interface ChatInputBarProps {
   inputText: string;
   setInputText: (text: string) => void;
@@ -65,8 +71,8 @@ export default function ChatInputBar({
       {/* FLOATING CHAT INPUT AREA */}
       <div className="px-3 pb-4 pt-2 bg-transparent relative z-10 shrink-0 flex items-center gap-1.5 overflow-hidden">
         {recordingType ? (
-          <div className="flex-1 bg-teal-900/95 backdrop-blur-md rounded-2xl border border-teal-800/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] text-white animate-fade-in overflow-hidden">
-            {recordingType === "video" && (
+          recordingType === "video" ? (
+            <div className="flex-1 bg-teal-900/95 backdrop-blur-md rounded-2xl border border-teal-800/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] text-white animate-fade-in overflow-hidden">
               <div className="w-[200px] h-[200px] mx-auto my-3 bg-black rounded-full flex items-center justify-center relative overflow-hidden">
                 {!isCameraReady && (
                   <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/80 rounded-full">
@@ -84,30 +90,89 @@ export default function ChatInputBar({
                   onPlaying={() => setIsCameraReady(true)}
                 />
               </div>
-            )}
-            <div className="flex items-center justify-between px-4 py-3">
-              <div className="flex items-center gap-2.5">
-                <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping"></span>
-                <span className="text-xs font-bold tracking-wide">
-                  {recordingType === "voice" ? "Grabando voz" : "Grabando video"} • <span className="text-teal-300 font-mono">{recordingSeconds}s</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={() => setRecordingType(null)}
-                  className="px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-all cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button 
-                  onClick={onFinishVoiceNote}
-                  className="px-4 py-1.5 text-xs font-bold text-teal-950 bg-teal-300 hover:bg-teal-200 rounded-full flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
-                >
-                  <Check className="w-3.5 h-3.5 stroke-[3]" /> Enviar
-                </button>
+              <div className="flex items-center justify-between px-4 py-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping"></span>
+                  <span className="text-xs font-bold tracking-wide">
+                    Grabando video • <span className="text-teal-300 font-mono">{recordingSeconds}s</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setRecordingType(null)}
+                    className="px-3 py-1.5 text-xs font-semibold text-slate-300 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    onClick={onFinishVoiceNote}
+                    className="px-4 py-1.5 text-xs font-bold text-teal-950 bg-teal-300 hover:bg-teal-200 rounded-full flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer"
+                  >
+                    <Check className="w-3.5 h-3.5 stroke-[3]" /> Enviar
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex-1 animate-fade-in">
+              <div
+                className="w-full max-w-[320px] mx-auto rounded-3xl flex flex-col items-center gap-[18px] px-5 py-7"
+                style={{ background: "#0c1617" }}
+              >
+                <div className="relative w-[150px] h-[150px] flex items-center justify-center">
+                  <div
+                    className="absolute inset-0 rounded-full"
+                    style={{
+                      border: "2px solid transparent",
+                      background: "conic-gradient(from 0deg, #5EB7FF, #C65EFF, #5EB7FF) border-box",
+                      WebkitMask: "linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0)",
+                      WebkitMaskComposite: "xor",
+                      maskComposite: "exclude",
+                      animation: "rn-ring-spin 4s linear infinite",
+                    }}
+                  />
+                  <div
+                    className="w-[120px] h-[120px] rounded-full flex items-center justify-center"
+                    style={{
+                      gap: 4,
+                      background: "radial-gradient(circle, rgba(94,183,255,0.15), transparent 70%)",
+                      animation: "rn-pulse-glow 1.8s ease-in-out infinite",
+                    }}
+                  >
+                    <div style={{ width: 4, height: 24, background: "#5EB7FF", borderRadius: 2, animation: "rn-bar-bounce 1s ease-in-out infinite", animationDelay: "0s" }} />
+                    <div style={{ width: 4, height: 36, background: "#8B9CFF", borderRadius: 2, animation: "rn-bar-bounce 1s ease-in-out infinite", animationDelay: "0.15s" }} />
+                    <div style={{ width: 4, height: 48, background: "#C65EFF", borderRadius: 2, animation: "rn-bar-bounce 1s ease-in-out infinite", animationDelay: "0.3s" }} />
+                    <div style={{ width: 4, height: 32, background: "#8B9CFF", borderRadius: 2, animation: "rn-bar-bounce 1s ease-in-out infinite", animationDelay: "0.45s" }} />
+                    <div style={{ width: 4, height: 20, background: "#5EB7FF", borderRadius: 2, animation: "rn-bar-bounce 1s ease-in-out infinite", animationDelay: "0.6s" }} />
+                  </div>
+                </div>
+                <p className="m-0 text-[13px] font-medium uppercase tracking-[0.04em] text-slate-400">Grabando nota de voz</p>
+                <p className="m-0 text-[22px] font-semibold tabular-nums" style={{ color: "#4ADE80" }}>{formatRecTime(recordingSeconds)}</p>
+                <div className="flex justify-between items-center w-full px-2">
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      onClick={() => setRecordingType(null)}
+                      className="w-12 h-12 rounded-full flex items-center justify-center text-[18px] leading-none cursor-pointer"
+                      style={{ background: "rgba(255,255,255,0.1)", color: "#F87171" }}
+                    >
+                      {"✕"}
+                    </button>
+                    <span className="text-[11px] text-slate-400">Cancelar</span>
+                  </div>
+                  <div className="flex flex-col items-center gap-1.5">
+                    <button
+                      onClick={onFinishVoiceNote}
+                      className="w-12 h-12 rounded-full flex items-center justify-center text-[18px] leading-none text-white cursor-pointer"
+                      style={{ background: "#5EB7FF" }}
+                    >
+                      {"➤"}
+                    </button>
+                    <span className="text-[11px] text-slate-400">Enviar</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
         ) : (
           <>
             <div className="flex-1 min-w-0 bg-white rounded-full pl-3 pr-1.5 py-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100/50 flex items-center gap-1 transition-all duration-300 overflow-hidden">

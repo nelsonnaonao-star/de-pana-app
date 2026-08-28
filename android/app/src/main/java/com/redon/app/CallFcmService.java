@@ -46,6 +46,10 @@ public class CallFcmService extends FirebaseMessagingService {
         if ("message".equals(event)) {
             if ("noti1".equals(soundId)) return "noti1";
             if ("noti2".equals(soundId)) return "noti2";
+            if ("noti3".equals(soundId)) return "noti3";
+            if ("noti4".equals(soundId)) return "noti4";
+            if ("noti5".equals(soundId)) return "noti5";
+            if ("noti6".equals(soundId)) return "noti6";
             return "notificacion";
         }
         // llamada: ring1 -> ringtone, ring2 -> ring1, ring3 -> ring2
@@ -63,6 +67,10 @@ public class CallFcmService extends FirebaseMessagingService {
     private String messageChannelId(String soundId) {
         if ("noti1".equals(soundId)) return CHANNEL_MESSAGES + "-noti1";
         if ("noti2".equals(soundId)) return CHANNEL_MESSAGES + "-noti2";
+        if ("noti3".equals(soundId)) return CHANNEL_MESSAGES + "-noti3";
+        if ("noti4".equals(soundId)) return CHANNEL_MESSAGES + "-noti4";
+        if ("noti5".equals(soundId)) return CHANNEL_MESSAGES + "-noti5";
+        if ("noti6".equals(soundId)) return CHANNEL_MESSAGES + "-noti6";
         return CHANNEL_MESSAGES;
     }
 

@@ -95,7 +95,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
                 className="flex flex-col items-center gap-1 min-w-[70px] cursor-pointer"
               >
                 <div className="relative">
-                  <div className="w-16 h-16 rounded-full ring-2 ring-emerald-500 ring-offset-2 ring-offset-slate-50 object-cover overflow-hidden">
+                  <div className="w-[68px] h-[76px] rounded-[8px_8px_8px_0px/8px_8px_8px_10px] ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50 object-cover overflow-hidden">
                     {myStories.length > 0 ? (
                       <CachedImage
                         src={myUserStateRepresentation.userAvatar}
@@ -118,15 +118,15 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
                 <div
                   key={userState.id}
                   onClick={() => handleOpenStoryViewer(userState)}
-                  className="flex flex-col items-center gap-1 min-w-[70px] cursor-pointer"
+                  className="flex flex-col items-center gap-1 min-w-[80px] cursor-pointer"
                 >
                   <div className="relative">
                     <CachedImage
                       src={userState.userAvatar}
                       alt={userState.userName}
-                      className={`w-16 h-16 rounded-full object-cover ${
+                      className={`w-[68px] h-[76px] rounded-[8px_8px_8px_0px/8px_8px_8px_10px] object-cover ${
                         userState.hasUnseen
-                          ? "ring-2 ring-emerald-500 ring-offset-2 ring-offset-slate-50"
+                          ? "ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50"
                           : "ring-1 ring-slate-300 ring-offset-1 ring-offset-slate-50"
                       }`}
                     />

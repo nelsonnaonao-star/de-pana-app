@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Play, Pause, Mic, Loader2 } from "lucide-react";
+import { Mic, Loader2 } from "lucide-react";
 
 const PLAY_EVENT = "audio-message-play";
 
@@ -12,6 +12,27 @@ function formatTime(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+const ORB_SIZE = 60;
+const RING_RADIUS = 26;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const INNER_RADIUS = 24;
+const SEEK_BAND_START = 25;
+
+const ORB_KEYFRAMES = `
+  @keyframes orb-morph-1 {
+    0%,100% { transform: translate(-5px,-3px) scale(1); }
+    50% { transform: translate(5px,3px) scale(1.15); }
+  }
+  @keyframes orb-morph-2 {
+    0%,100% { transform: translate(4px,-4px) scale(1.05); }
+    50% { transform: translate(-4px,4px) scale(0.9); }
+  }
+  @keyframes orb-morph-3 {
+    0%,100% { transform: translate(-3px,5px) scale(0.95); }
+    50% { transform: translate(3px,-5px) scale(1.1); }
+  }
+`;
+
 interface AudioMessagePlayerProps {
   audioUrl: string;
   msgId: string;
@@ -20,7 +41,13 @@ interface AudioMessagePlayerProps {
   duration?: string;
 }
 
-export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = false, duration }: AudioMessagePlayerProps) {
+export default function AudioMessagePlayer({
+  audioUrl,
+  msgId,
+  isMe,
+  isGlass = false,
+  duration,
+}: AudioMessagePlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -28,7 +55,6 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const rangeRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const audio = new Audio();
@@ -39,13 +65,12 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
 
     const onLoadedMetadata = () => {
       const metaDur = audio.duration;
-      // Parse the expected duration from the "m:ss" prop as a fallback
       let expectedSec = 0;
       if (duration) {
         const parts = duration.split(":");
-        if (parts.length === 2) expectedSec = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        if (parts.length === 2)
+          expectedSec = parseInt(parts[0]) * 60 + parseInt(parts[1]);
       }
-      // If metadata duration is suspiciously longer than expected (>50% more), cap it
       if (expectedSec > 0 && metaDur > expectedSec * 1.5) {
         setDurationSec(expectedSec);
       } else {
@@ -113,13 +138,27 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
     }
   }, [isPlaying, msgId, hasError]);
 
-  const onRangeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const val = parseFloat(e.target.value);
-    audio.currentTime = val;
-    setCurrentTime(val);
-  }, []);
+  const onOrbClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      const audio = audioRef.current;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const dx = e.clientX - (rect.left + rect.width / 2);
+      const dy = e.clientY - (rect.top + rect.height / 2);
+      const dist = Math.hypot(dx, dy);
+
+      if (audio && durationSec > 0 && dist >= SEEK_BAND_START && dist <= ORB_SIZE) {
+        const frac = ((((Math.atan2(dy, dx) * 180) / Math.PI + 90) % 360) + 360) % 360 / 360;
+        const time = frac * durationSec;
+        audio.currentTime = time;
+        setCurrentTime(time);
+        return;
+      }
+
+      togglePlay();
+    },
+    [durationSec, togglePlay]
+  );
 
   const toggleSpeed = useCallback(() => {
     const next = speed === 1 ? 1.5 : speed === 1.5 ? 2 : 1;
@@ -127,8 +166,24 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
     if (audioRef.current) audioRef.current.playbackRate = next;
   }, [speed]);
 
-  const pct = durationSec > 0 ? (currentTime / durationSec) * 100 : 0;
   const displayDuration = durationSec > 0 ? durationSec : 0;
+  const progressFrac =
+    durationSec > 0 && isFinite(durationSec)
+      ? Math.min(1, Math.max(0, currentTime / durationSec))
+      : 0;
+  const dashoffset = RING_CIRCUMFERENCE - RING_CIRCUMFERENCE * progressFrac;
+
+  const isDarkBubble = isMe;
+  const ringTrackColor = isDarkBubble ? "rgba(255,255,255,0.2)" : "rgba(10,77,82,0.2)";
+  const ringProgressColor = isDarkBubble ? "#ffffff" : "#0a4d52";
+  const textColor = isDarkBubble ? "rgba(255,255,255,0.9)" : "#0a4d52";
+  const speedColor = isDarkBubble ? "rgba(255,255,255,0.7)" : "#0a4d52";
+
+  const blobBase = { position: "absolute" as const, borderRadius: "50%" };
+  const blobAnimation = (name: string, secs: number) => ({
+    animation: `${name} ${secs}s ease-in-out infinite`,
+    animationPlayState: (isPlaying ? "running" : "paused") as "running" | "paused",
+  });
 
   if (hasError) {
     return (
@@ -140,75 +195,131 @@ export default function AudioMessagePlayer({ audioUrl, msgId, isMe, isGlass = fa
   }
 
   return (
-    <div className="flex items-center gap-2 w-full min-w-[190px] max-w-[260px]">
-      <button
-        onClick={(e) => { e.stopPropagation(); togglePlay(); }}
-        className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-all active:scale-90"
+    <>
+      <style>{ORB_KEYFRAMES}</style>
+      <div
+        className="flex items-center gap-3 w-fit"
         style={{
-          background: isGlass
-            ? "rgba(0,0,0,0.08)"
-            : isMe
-              ? "rgba(255,255,255,0.25)"
-              : "rgba(0,0,0,0.08)",
-          boxShadow: isPlaying
-            ? "0 2px 8px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.15)"
-            : "0 1px 3px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.2)",
+          background: "transparent",
+          borderRadius: 20,
+          padding: "4px 16px",
         }}
       >
-        {isLoading ? (
-          <Loader2 className={`w-4 h-4 animate-spin ${isGlass ? "text-gray-500" : isMe ? "text-white" : "text-slate-500"}`} />
-        ) : isPlaying ? (
-          <Pause className={`w-4 h-4 ${isGlass ? "text-gray-800" : isMe ? "text-white" : "text-[#0a4d52]"}`} />
-        ) : (
-          <Play className={`w-4 h-4 ml-0.5 ${isGlass ? "text-gray-800" : isMe ? "text-white" : "text-[#0a4d52]"}`} />
-        )}
-      </button>
+        <div
+          onClick={onOrbClick}
+          role="button"
+          aria-label={isPlaying ? "Pausar" : "Reproducir"}
+          className="relative shrink-0 select-none"
+          style={{ width: ORB_SIZE, height: ORB_SIZE, minWidth: ORB_SIZE, cursor: "pointer" }}
+        >
+          <svg
+            width={ORB_SIZE}
+            height={ORB_SIZE}
+            className="absolute inset-0"
+            style={{ transform: "rotate(-90deg)" }}
+            aria-hidden="true"
+          >
+            <circle
+              cx={ORB_SIZE / 2}
+              cy={ORB_SIZE / 2}
+              r={RING_RADIUS}
+              fill="none"
+              stroke={ringTrackColor}
+              strokeWidth="2"
+            />
+            <circle
+              cx={ORB_SIZE / 2}
+              cy={ORB_SIZE / 2}
+              r={RING_RADIUS}
+              fill="none"
+              stroke={ringProgressColor}
+              strokeWidth="2"
+              strokeDasharray={RING_CIRCUMFERENCE}
+              strokeDashoffset={dashoffset}
+              strokeLinecap="round"
+              style={{ transition: "stroke-dashoffset 0.15s linear" }}
+            />
+          </svg>
 
-      <div className="flex-1 flex flex-col gap-1 min-w-0">
-        <input
-          ref={rangeRef}
-          type="range"
-          min={0}
-          max={durationSec || 0}
-          step={0.1}
-          value={currentTime}
-          onChange={onRangeChange}
-          onClick={(e) => e.stopPropagation()}
-          className="w-full h-1.5 rounded-full appearance-none cursor-pointer audio-slider"
-          style={{
-            background: isGlass
-              ? `linear-gradient(to right, rgba(0,0,0,0.55) ${pct}%, rgba(0,0,0,0.12) ${pct}%)`
-              : isMe
-                ? `linear-gradient(to right, rgba(255,255,255,0.95) ${pct}%, rgba(255,255,255,0.25) ${pct}%)`
-                : `linear-gradient(to right, #0a4d52 ${pct}%, rgba(0,0,0,0.12) ${pct}%)`,
-          }}
-        />
-
-        <div className="flex justify-between items-center">
-          <span className={`text-[9px] font-mono ${isGlass ? "text-gray-600" : isMe ? "text-white/70" : "text-slate-400"}`}>
-            {isPlaying ? formatTime(currentTime) : formatTime(displayDuration)}
-          </span>
-          <div className="flex items-center gap-1">
-            {isPlaying && (
-              <span className={`text-[9px] font-mono ${isGlass ? "text-gray-400" : isMe ? "text-white/50" : "text-slate-300"}`}>
-                {formatTime(displayDuration)}
-              </span>
-            )}
-            <button
-              onClick={(e) => { e.stopPropagation(); toggleSpeed(); }}
-              className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ml-2 transition-colors ${
-                isGlass
-                  ? "bg-black/5 text-gray-600 hover:bg-black/10"
-                  : isMe
-                    ? "bg-white/15 text-white/80 hover:bg-white/25"
-                    : "bg-black/10 text-slate-500 hover:bg-black/20"
-              }`}
-            >
-              {speed}x
-            </button>
+          <div
+            className="relative"
+            style={{
+              position: "absolute",
+              inset: 6,
+              borderRadius: "50%",
+              overflow: "hidden",
+              background: "#0A2E28",
+            }}
+          >
+            <div
+              style={{
+                ...blobBase,
+                ...blobAnimation("orb-morph-1", 3.2),
+                width: 32,
+                height: 32,
+                left: 8,
+                top: 8,
+                background: "#5EB7FF",
+                filter: "blur(9px)",
+                opacity: 0.9,
+              }}
+            />
+            <div
+              style={{
+                ...blobBase,
+                ...blobAnimation("orb-morph-2", 2.6),
+                width: 24,
+                height: 24,
+                left: 12,
+                top: 12,
+                background: "#C65EFF",
+                filter: "blur(8px)",
+                opacity: 0.8,
+              }}
+            />
+            <div
+              style={{
+                ...blobBase,
+                ...blobAnimation("orb-morph-3", 3.8),
+                width: 20,
+                height: 20,
+                left: 14,
+                top: 14,
+                background: "#4ADE80",
+                filter: "blur(7px)",
+                opacity: 0.65,
+              }}
+            />
           </div>
+
+          {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <Loader2
+                className="w-4 h-4 animate-spin"
+                style={{ color: ringProgressColor, opacity: 0.6 }}
+              />
+            </div>
+          )}
         </div>
+
+        <span
+          className="text-xs font-semibold tabular-nums shrink-0"
+          style={{ color: textColor, fontWeight: 600 }}
+        >
+          {isPlaying || currentTime > 0 ? formatTime(currentTime) : formatTime(displayDuration)}
+        </span>
+
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleSpeed();
+          }}
+          className="p-0 border-0 bg-transparent cursor-pointer shrink-0"
+          style={{ color: speedColor, fontSize: 10, fontWeight: 700 }}
+        >
+          {speed}x
+        </button>
       </div>
-    </div>
+    </>
   );
 }

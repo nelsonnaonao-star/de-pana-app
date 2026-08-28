@@ -200,7 +200,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           changed = true;
           const fused: Message = { ...msg, ...echoTwin, status: "sent", synced: true };
           recordReconciledId(chat.id, msg.id, echoTwin.id);
-          messageRepo.reconcileTemp(chat.id, msg.id, fused).catch(() => {});
+          messageRepo.reconcileTemp(chat.id, msg.id, fused).catch((e) => console.warn("[CHATROOM] reconcileTemp failed", e, chat.id, msg.id));
           return fused;
         }
       }
@@ -494,7 +494,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           if (pendingIdx !== -1) {
             const pendingMsg = prev[pendingIdx];
             const reconciled = { ...pendingMsg, ...mapped, id: raw.id, status: "sent" as const, synced: true };
-            messageRepo.deleteMessage(chat.id, pendingMsg.id).catch(() => {});
+            messageRepo.deleteMessage(chat.id, pendingMsg.id).catch((e) => console.warn("[CHATROOM] deleteMessage failed", e, chat.id, pendingMsg.id));
             recordReconciledId(chat.id, pendingMsg.id, raw.id);
             const updated = [...prev];
             updated[pendingIdx] = reconciled;
