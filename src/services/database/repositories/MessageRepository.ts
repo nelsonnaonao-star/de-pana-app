@@ -62,12 +62,12 @@ function toRow(msg: Message, chatId: string): Record<string, unknown> {
   };
 }
 
-function fromRow(row: Record<string, unknown>): Message {
+function fromRow(row: Record<string, unknown>): Message | null {
   const rowSenderId = (row.sender_id as string) || undefined;
   const rowClientId = (row.client_id as string) || undefined;
   if (row.payload && typeof row.payload === "string") {
     try {
-      const parsed = JSON.parse(row.payload) as Message;
+      const parsed = JSON.parse(row.payload) as any;
       // Hidratar desde las columnas (fuente de verdad del DTO): si el payload
       // quedó desactualizado (p. ej. un saveMessages sin sender_id), las
       // columnas garantizan que el envío no pierda datos críticos.
@@ -76,7 +76,7 @@ function fromRow(row: Record<string, unknown>): Message {
         parsed.client_id = rowClientId;
         parsed.clientId = rowClientId;
       }
-      return parsed;
+      return parsed as Message;
     } catch (e) {
       logger.warn("[MessageRepo] Failed to parse payload", { error: e });
     }
@@ -141,7 +141,7 @@ export class MessageRepository {
           "SELECT * FROM messages WHERE chat_id = ? ORDER BY raw_created_at ASC",
           [chatId]
         );
-        sqliteRows = rows.map(fromRow);
+        sqliteRows = rows.map(fromRow).filter((m): m is Message => m !== null);
       } catch (e) {
         logger.warn("[MessageRepo] SQLite error, fallback", { error: e });
       }
@@ -325,7 +325,7 @@ export class MessageRepository {
         fromSqlite = rows.map((r) => ({
           chatId: (r.chat_id as string) || "",
           message: fromRow(r),
-        }));
+        })).filter((item): item is { chatId: string; message: Message } => item.message !== null);
       } catch (e) {
         logger.warn("[MessageRepo] getAllUnsynced SQLite error", { error: e });
       }

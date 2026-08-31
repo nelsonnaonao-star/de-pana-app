@@ -71,12 +71,12 @@ export default function ChatHeader({
       </div>
 
       <div className="relative z-10 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <button onClick={onBack} className="p-1 hover:bg-white/10 rounded-lg transition-colors cursor-pointer">
+        <div className="flex-1 min-w-0 flex items-center gap-2">
+          <button onClick={onBack} className="p-1 shrink-0 hover:bg-white/10 rounded-lg transition-colors cursor-pointer">
             <ArrowLeft className="w-5 h-5 text-teal-100" />
           </button>
           <div
-            className="flex items-center gap-2 cursor-pointer"
+            className="flex items-center gap-2 cursor-pointer min-w-0"
             onClick={() => { if (!isGroup && onOpenProfile) onOpenProfile(); }}
           >
             <div className="relative">
@@ -102,8 +102,8 @@ export default function ChatHeader({
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-[#0a4d52]"></span>
               )}
             </div>
-            <div>
-              <h3 className="text-xs font-bold leading-tight truncate max-w-[120px]">{chat.name}</h3>
+            <div className="min-w-0">
+              <h3 className="text-xs font-bold leading-tight truncate max-w-[140px]">{chat.name}</h3>
               <span className="text-[10px] text-teal-200 block">
                 {partnerTyping ? "Escribiendo..." : isGroup ? "Grupo" : chat.status === "online" ? "En línea" : "Desconectado"}
               </span>
@@ -111,7 +111,7 @@ export default function ChatHeader({
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={() => onTriggerCall("audio")}
             disabled={callInProgress}

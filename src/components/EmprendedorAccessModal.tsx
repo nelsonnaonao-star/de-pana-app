@@ -68,7 +68,7 @@ export default function EmprendedorAccessModal({ open, onClose, onActivated }: E
               <Crown className="w-5 h-5 text-slate-900" />
             </div>
             <span className="text-[9px] font-black uppercase tracking-[0.2em] text-teal-200 bg-white/10 border border-white/20 px-2 py-1 rounded-full">
-              Red On Negocios
+              Wepa Negocios
             </span>
           </div>
 
@@ -93,7 +93,7 @@ export default function EmprendedorAccessModal({ open, onClose, onActivated }: E
               <p className="text-[11px] text-slate-500 leading-relaxed max-w-[240px]">
                 Tu plan <strong className="text-teal-600">{activatedInfo.planName}</strong> está activo por{" "}
                 <strong className="text-teal-600">{activatedInfo.days} día{activatedInfo.days !== 1 ? "s" : ""}</strong>.
-                Ya puedes publicar flyers en Red On Negocios.
+                Ya puedes publicar flyers en Wepa Negocios.
               </p>
               <button
                 onClick={onActivated}

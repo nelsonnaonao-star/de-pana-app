@@ -11,6 +11,7 @@ import { db } from "./services/database/DatabaseService";
 import { syncService } from "./services/sync/SyncService";
 import { syncSoundPrefsFromNative } from "./services/soundService";
 import ChatListSkeleton from "./components/ChatListSkeleton";
+import FullSplash from "./components/FullSplash";
 
 function AppContent() {
   const { user, loading, passwordRecovery } = useSupabase();
@@ -27,11 +28,14 @@ function AppContent() {
     shouldExitOnBackRef.current = shouldExit;
   }, []);
 
-  useEffect(() => {
-    // Hide native splash as soon as the React app paints (login OR home), so the
-    // auth/login screen is visible immediately instead of staying behind the splash.
-    SplashScreen.hide().catch(() => {});
-  }, []);
+  const [fullSplashVisible, setFullSplashVisible] = useState(true);
+
+  const hideFullSplash = useCallback(() => {
+    if (fullSplashVisible) {
+      setFullSplashVisible(false);
+      SplashScreen.hide().catch(() => {});
+    }
+  }, [fullSplashVisible]);
 
   useEffect(() => {
     // Safety timeout: don't block UI if SQLite hangs (e.g. on web)
@@ -50,6 +54,12 @@ function AppContent() {
 
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    if (!loading && dbReady) {
+      hideFullSplash();
+    }
+  }, [loading, dbReady, hideFullSplash]);
 
   // Non-blocking housekeeping, deferred until after first paint.
   useEffect(() => {
@@ -96,41 +106,42 @@ function AppContent() {
     };
   }, []);
 
-  if (loading) {
-    return (
-      <div className="w-screen h-screen bg-white flex flex-col">
-        <div className="h-[56px] bg-slate-100 animate-pulse" />
-        <ChatListSkeleton count={8} />
-      </div>
-    );
-  }
-
   return (
     <>
-      <Toaster
-        position="top-center"
-        containerStyle={{ zIndex: 100000 }}
-        toastOptions={{
-          duration: 4000,
-          style: { fontSize: "13px", fontWeight: 600, borderRadius: "12px", padding: "12px 16px" },
-          error: { style: { background: "#fef2f2", color: "#b91c1c", border: "1px solid #fecaca" } },
-          success: { style: { background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0" } },
-        }}
-      />
-      {!user ? (
-        <AuthScreen />
-      ) : passwordRecovery ? (
-        <PasswordResetScreen />
-      ) : dbReady ? (
-        <PhoneSimulator 
-          onBackPress={registerBackHandler} 
-          onSetShouldExit={setShouldExitOnBack}
-        />
-      ) : (
-        <div className="w-screen h-screen bg-white flex flex-col">
-          <div className="h-[56px] bg-slate-100 animate-pulse" />
-          <ChatListSkeleton count={8} />
-        </div>
+      {fullSplashVisible && <FullSplash onHidden={hideFullSplash} maxDurationMs={10000} />}
+      {!fullSplashVisible && (
+        <>
+          <Toaster
+            position="top-center"
+            containerStyle={{ zIndex: 99999 }}
+            toastOptions={{
+              duration: 4000,
+              style: { fontSize: "13px", fontWeight: 600, borderRadius: "12px", padding: "12px 16px" },
+              error: { style: { background: "#fef2f2", color: "#b91c1c", border: "1px solid #fecaca" } },
+              success: { style: { background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0" } },
+            }}
+          />
+          {loading ? (
+            <div className="w-screen h-screen bg-white flex flex-col">
+              <div className="h-[56px] bg-slate-100 animate-pulse" />
+              <ChatListSkeleton count={8} />
+            </div>
+          ) : !user ? (
+            <AuthScreen />
+          ) : passwordRecovery ? (
+            <PasswordResetScreen />
+          ) : dbReady ? (
+            <PhoneSimulator 
+              onBackPress={registerBackHandler} 
+              onSetShouldExit={setShouldExitOnBack}
+            />
+          ) : (
+            <div className="w-screen h-screen bg-white flex flex-col">
+              <div className="h-[56px] bg-slate-100 animate-pulse" />
+              <ChatListSkeleton count={8} />
+            </div>
+          )}
+        </>
       )}
     </>
   );

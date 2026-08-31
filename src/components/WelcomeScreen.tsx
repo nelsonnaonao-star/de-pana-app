@@ -43,7 +43,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
           <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-teal-400 to-[#3ab3b8] flex items-center justify-center shadow-lg shadow-teal-400/30 mb-4 animate-pulse">
             <span className="text-2xl font-black tracking-tight text-white">R</span>
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight drop-shadow-md">Red On</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight drop-shadow-md">WEPA</h1>
           <p className="text-xs text-slate-300 font-medium mt-1 uppercase tracking-widest">
             Comunicaciones Seguras
           </p>
@@ -112,7 +112,7 @@ export default function WelcomeScreen({ onRegister }: WelcomeScreenProps) {
           <span className="text-[9px] font-bold uppercase tracking-widest text-teal-300">
             Crear Cuenta
           </span>
-          <h2 className="text-2xl font-black tracking-tight">Regístrate en Red On</h2>
+          <h2 className="text-2xl font-black tracking-tight">Regístrate en WEPA</h2>
         </div>
       </div>
 

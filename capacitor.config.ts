@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.redon.app',
-  appName: 'Red On',
+  appName: 'WEPA',
   webDir: 'dist',
   server: {
     androidScheme: 'https',
@@ -15,9 +15,11 @@ const config: CapacitorConfig = {
     },
     SplashScreen: {
       showSpinner: false,
-      launchShowDuration: 3000,
+      launchShowDuration: 2000,
       launchAutoHide: true,
-      backgroundColor: '#F1F5F6',
+      backgroundColor: '#0A1F1C',
+      androidSplashResourceName: 'splash',
+      androidScaleType: 'FIT_XY',
     },
   },
 };

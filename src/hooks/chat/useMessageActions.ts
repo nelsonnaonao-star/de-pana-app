@@ -2,12 +2,11 @@ import { MutableRefObject, FormEvent, useRef } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Chat, Message } from "../../types";
-import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction } from "../../services/messages";
+import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction, votePoll } from "../../services/messages";
 import { uploadChatMedia } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
 import { cacheVideoBlob } from "../../services/videoCache";
 import { revokeCachedMedia } from "../../services/mediaCache";
-import { supabase } from "../../lib/supabase";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
 import { inFlightMessageIds } from "../../services/sync/SyncService";
 import toast from "react-hot-toast";
@@ -730,11 +729,7 @@ pendingSendIdsRef.current.add(tempId);
     });
 
     if (updatedPollOptions) {
-      Promise.resolve(supabase
-        .from("messages")
-        .update({ poll_options: JSON.stringify(updatedPollOptions) })
-        .eq("id", messageId)
-      ).then(() => {}).catch(err => console.error("[ChatRoom] update poll options failed:", err));
+      votePoll(messageId, updatedPollOptions).catch(err => console.error("[ChatRoom] update poll options failed:", err));
     }
   };
 
@@ -772,7 +767,11 @@ pendingSendIdsRef.current.add(tempId);
       if (msg?.mediaUrl) revokeCachedMedia(msg.mediaUrl);
       if (msg?.posterUrl) revokeCachedMedia(msg.posterUrl);
       await apiDeleteMessage(messageId);
-      setMessages(prev => prev.filter((m) => m.id !== messageId));
+      setMessages(prev => prev.map(m =>
+        m.id === messageId
+          ? { ...m, type: "system" as const, text: "Mensaje eliminado", mediaUrl: undefined, posterUrl: undefined, is_deleted: true }
+          : m
+      ));
       messageRepo.deleteMessage(chatId, messageId).catch(() => {});
       onMessageDeleted?.(chatId, messageId);
     } catch (e) {

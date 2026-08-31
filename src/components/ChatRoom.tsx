@@ -96,7 +96,20 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     ? dedupedMessages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()))
     : dedupedMessages;
 
-  const mapApiMsg = (m: any): Message => {
+  const mapApiMsg = (m: any): Message | null => {
+    if (m.is_deleted) {
+      return {
+        id: m.id,
+        sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
+        text: "Mensaje eliminado",
+        timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
+        rawCreatedAt: m.created_at || undefined,
+        type: "system" as const,
+        chatId: chat.id,
+        sender_id: m.sender_id,
+        is_deleted: true,
+      };
+    }
     const durNum = m.audio_duration ? Number(m.audio_duration) : 0;
     const durStr = durNum > 0 ? `${Math.floor(durNum / 60)}:${String(Math.floor(durNum % 60)).padStart(2, "0")}` : undefined;
     return {
@@ -269,7 +282,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         getMessages(chat.id, { limit: 50 }).then(apiMessages => {
           console.log('[CHAT] getMessages result count:', apiMessages?.length);
           if (apiMessages && apiMessages.length > 0) {
-            const mapped = apiMessages.map(mapApiMsg);
+            const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
             mergeServerMessages(mapped);
             messageRepo.saveMessages(chat.id, mapped);
             const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
@@ -307,7 +320,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     if (chat.id && refetchTrigger && refetchTrigger > 0 && messages.length > 0) {
       getMessages(chat.id, { limit: 50 }).then(apiMessages => {
         if (apiMessages && apiMessages.length > 0) {
-          const mapped = apiMessages.map(mapApiMsg);
+          const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
           const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
           if (latest) lastSyncTimestampRef.current = latest;
           setMessages(prev => safeMergeMessages(prev, mapped));
@@ -322,7 +335,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       if (isActive && chat.id && messages.length > 0) {
         getMessages(chat.id, { limit: 50 }).then(apiMessages => {
           if (apiMessages && apiMessages.length > 0) {
-            const mapped = apiMessages.map(mapApiMsg);
+            const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
             const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
             if (latest) lastSyncTimestampRef.current = latest;
             setMessages(prev => safeMergeMessages(prev, mapped));
@@ -343,7 +356,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     try {
       const older = await getMessages(chat.id, { limit: 50, before: oldestTs });
       if (older && older.length > 0) {
-        const mapped = older.map(mapApiMsg);
+        const mapped = older.map(mapApiMsg).filter(Boolean) as Message[];
         messageRepo.saveMessages(chat.id, mapped);
         setMessages(prev => safeMergeMessages(prev, mapped));
         if (older.length < 50) setHasMoreOlder(false);
@@ -439,8 +452,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const handleMessageEvent = (payload: MessageEventPayload) => {
     if (payload.event === 'INSERT') {
       const raw = payload.raw;
-      if (raw.is_deleted) return;
-      const mapped: Message = mapApiMsg(raw);
+      const mapped: Message | null = mapApiMsg(raw);
+      if (!mapped) return;
       messageRepo.upsertMessage(chat.id, { ...mapped, synced: true, chatId: chat.id });
       if (raw.sender_id !== uid) {
         setMessages(prev => prev.map(m =>
@@ -522,12 +535,14 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         const exists = prev.some(m => m.id === updated.id);
         if (!exists) return prev;
         let changed = false;
+        let wasDeleted = false;
         const next = prev.map(m => {
           if (m.id !== updated.id) return m;
           let copy = { ...m };
           if (updated.is_deleted) {
             changed = true;
-            return null;
+            wasDeleted = true;
+            return { ...copy, type: "system" as const, text: "Mensaje eliminado", mediaUrl: undefined, posterUrl: undefined, is_deleted: true } as Message;
           }
           if (updated.status === "read" && m.status !== "read") {
             copy.status = "read"; changed = true;
@@ -558,9 +573,13 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           return copy;
         }).filter(Boolean) as Message[];
         if (changed) {
-          const updatedMsg = next.find(m => m.id === updated.id);
-          if (updatedMsg) {
-            messageRepo.upsertMessage(chat.id, updatedMsg);
+          if (wasDeleted) {
+            messageRepo.deleteMessage(chat.id, updated.id).catch(() => {});
+          } else {
+            const updatedMsg = next.find(m => m.id === updated.id);
+            if (updatedMsg) {
+              messageRepo.upsertMessage(chat.id, updatedMsg);
+            }
           }
           return next;
         }
@@ -599,7 +618,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const handleReconnect = (lastSyncTimestamp: string) => {
     getMessages(chat.id, { after: lastSyncTimestamp }).then(newMsgs => {
       if (newMsgs && newMsgs.length > 0) {
-        const mapped = newMsgs.map(mapApiMsg);
+        const mapped = newMsgs.map(mapApiMsg).filter(Boolean) as Message[];
         const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), lastSyncTimestamp);
         if (latest) lastSyncTimestampRef.current = latest;
         mergeServerMessages(mapped);

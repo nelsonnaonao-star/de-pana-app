@@ -26,6 +26,143 @@ interface CallOverlayProps {
 
 const EMOJIS = ["👍", "❤️", "🔥", "😮", "😂", "🎉"];
 
+// —— Vinculación de MediaStreams a <video> con limpieza explícita ——
+// El WebView de Android conserva el último frame en el <video> si jamás se
+// hace srcObject = null cuando el stream termina. Estos helpers garantizan:
+//  (1) no re-asignar srcObject en cada render (evita parpadeo/destrucción de
+//      tiles), (2) limpiar srcObject al terminar una video-track o al pasar el
+//      stream a null, y (3) detener listeners previos al re-vincular.
+
+const videoTrackCleanups = new WeakMap<HTMLVideoElement, () => void>();
+
+function detachStreamListeners(el: HTMLVideoElement) {
+  const cleanup = videoTrackCleanups.get(el);
+  if (cleanup) {
+    cleanup();
+    videoTrackCleanups.delete(el);
+  }
+}
+
+function refVideoTracks(stream: MediaStream) {
+  return stream.getVideoTracks();
+}
+
+function bindLocalStream(el: HTMLVideoElement, stream: MediaStream | null | undefined) {
+  const target = stream ?? null;
+  if (el.srcObject === target) return;
+  detachStreamListeners(el);
+  el.srcObject = target;
+  if (!target) return;
+  const onVideoEnded = () => {
+    if (el.srcObject === target) el.srcObject = null;
+  };
+  refVideoTracks(target).forEach((t) => t.addEventListener("ended", onVideoEnded));
+  videoTrackCleanups.set(el, () => {
+    refVideoTracks(target).forEach((t) => t.removeEventListener("ended", onVideoEnded));
+  });
+}
+
+function attachRemoteStream(el: HTMLVideoElement, stream: MediaStream | null | undefined) {
+  const target = stream ?? null;
+  if (el.srcObject === target) return;
+  detachStreamListeners(el);
+  el.srcObject = target;
+  if (!target) return;
+
+  // El WebView de Android SIEMPRE permite autoplay en mute; arranca el video
+  // al instante sin mostrar el placeholder gris de play. Después desmentamos
+  // de forma fiable (evento 'playing' + timeout + primer toque) para que el
+  // audio llegue igual. Unir 'playing' ANTES de play() evita la carrera que
+  // dejaba la llamada muda permanentemente.
+  const unmute = () => { el.muted = false; };
+  el.addEventListener('playing', unmute, { once: true });
+  el.muted = true;
+
+  const tryPlay = (attempts = 0) => {
+    el.play().catch(() => {
+      if (attempts > 10) {
+        el.muted = false;
+        document.addEventListener('touchstart', () => el.play().catch(() => {}), { once: true });
+        return;
+      }
+      setTimeout(() => tryPlay(attempts + 1), 250);
+    });
+  };
+  tryPlay();
+
+  setTimeout(() => { if (!el.paused) unmute(); }, 1500);
+  document.addEventListener('touchstart', () => setTimeout(unmute, 50), { once: true });
+
+  const onVideoEnded = () => {
+    if (el.srcObject === target) {
+      el.srcObject = null;
+      el.pause();
+    }
+  };
+  refVideoTracks(target).forEach((t) => t.addEventListener("ended", onVideoEnded));
+  videoTrackCleanups.set(el, () => {
+    refVideoTracks(target).forEach((t) => t.removeEventListener("ended", onVideoEnded));
+  });
+}
+
+function RemoteVideoTile({ stream, index }: { stream: MediaStream; index: number }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    attachRemoteStream(el, stream);
+    return () => {
+      if (el.srcObject === stream) el.srcObject = null;
+      detachStreamListeners(el);
+    };
+  }, [stream]);
+  return (
+    <div className="relative">
+      <video
+        ref={videoRef}
+        autoPlay playsInline
+        className="absolute inset-0 w-full h-full object-cover"
+      />
+      <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded-full text-[9px] font-semibold text-teal-300">#{index + 1}</div>
+    </div>
+  );
+}
+
+function GroupVideoGrid({ remoteList, localStream, participantCount }: {
+  remoteList: Array<[string, MediaStream]>;
+  localStream?: MediaStream | null;
+  participantCount: number;
+}) {
+  const total = 1 + remoteList.length;
+  const cols = total <= 1 ? 1 : total <= 2 ? 2 : total <= 4 ? 2 : 3;
+  const rows = Math.ceil(total / cols);
+
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const el = localVideoRef.current;
+    if (el) bindLocalStream(el, localStream);
+  }, [localStream]);
+
+  return (
+    <div className="absolute inset-0 w-full h-full z-0 bg-black grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}>
+      <div className="relative">
+        {localStream ? (
+          <video ref={localVideoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+        ) : (
+          <div className="absolute inset-0 bg-teal-800/10 flex items-center justify-center text-xs text-teal-300">Sin cámara</div>
+        )}
+        <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded-full text-[9px] font-semibold text-teal-300">Tú</div>
+      </div>
+      {remoteList.map(([peerId, stream], i) => (
+        <RemoteVideoTile key={peerId || i} stream={stream} index={i} />
+      ))}
+      <div className="absolute top-3 left-3 bg-black/50 text-[10px] px-2 py-1 rounded">
+        {participantCount} conectados
+      </div>
+    </div>
+  );
+}
+
 export default function CallOverlay({
   call,
   localStream,
@@ -106,60 +243,29 @@ export default function CallOverlay({
   }, [pendingReaction, showReaction]);
 
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+    if (localVideoRef.current) {
+      bindLocalStream(localVideoRef.current, localStream);
     }
   }, [localStream]);
 
-  const attachRemoteStream = useCallback((videoEl: HTMLVideoElement, stream: MediaStream) => {
-    if (videoEl.srcObject === stream) return;
-    videoEl.srcObject = stream;
-
-    // El WebView de Android SIEMPRE permite autoplay en mute; arranca el video
-    // al instante sin mostrar el placeholder gris de play. Después desmentamos
-    // de forma fiable (evento 'playing' + timeout + primer toque) para que el
-    // audio llegue igual. Unir 'playing' ANTES de play() evita la carrera que
-    // dejaba la llamada muda permanentemente.
-    const unmute = () => { videoEl.muted = false; };
-    videoEl.addEventListener('playing', unmute, { once: true });
-    videoEl.muted = true;
-
-    const tryPlay = (attempts = 0) => {
-      videoEl.play().catch(() => {
-        if (attempts > 10) {
-          // El WebView sigue bloqueando: sin mute el placeholder no se pinta;
-          // el audio se recupera con playing/timeout.
-          videoEl.muted = false;
-          document.addEventListener('touchstart', () => videoEl.play().catch(() => {}), { once: true });
-          return;
-        }
-        setTimeout(() => tryPlay(attempts + 1), 250);
-      });
-    };
-    tryPlay();
-
-    setTimeout(() => { if (!videoEl.paused) unmute(); }, 1500);
-    document.addEventListener('touchstart', () => setTimeout(unmute, 50), { once: true });
-  }, []);
-
   const remoteVideoCallback = useCallback((node: HTMLVideoElement | null) => {
     remoteVideoRef.current = node;
-    if (node && remoteStream) {
+    if (node) {
       attachRemoteStream(node, remoteStream);
     }
   }, [remoteStream, attachRemoteStream]);
 
   useEffect(() => {
     setIsRemotePlaying(false);
-    if (remoteVideoRef.current && remoteStream) {
+    if (remoteVideoRef.current) {
       attachRemoteStream(remoteVideoRef.current, remoteStream);
     }
   }, [remoteStream, attachRemoteStream]);
 
   const localVideoCallback = useCallback((node: HTMLVideoElement | null) => {
     localVideoRef.current = node;
-    if (node && localStream) {
-      node.srcObject = localStream;
+    if (node) {
+      bindLocalStream(node, localStream);
     }
   }, [localStream]);
 
@@ -216,44 +322,7 @@ export default function CallOverlay({
 
   // GROUP CALL video grid (max 4 participants: 1 local + up to 3 remotes)
   const remoteList = remoteStreamsMap ? Array.from(remoteStreamsMap.entries()) : [];
-  const isGroupVideo = ((call.isGroup || remoteList.length >= 2) && call.type === "video" && !call.isVideoOff && call.status === "connected");
-
-  const GroupVideoContent = () => {
-    const total = 1 + remoteList.length; // local + remotes
-    const cols = total <= 1 ? 1 : total <= 2 ? 2 : total <= 4 ? 2 : 3;
-    const rows = Math.ceil(total / cols);
-    return (
-      <div className="absolute inset-0 w-full h-full z-0 bg-black grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}>
-        {/* Local (self) */}
-        <div className="relative">
-          {localStream ? (
-            <video
-              ref={(node) => { if (node && localStream) { node.srcObject = null; node.srcObject = localStream; } }}
-              autoPlay playsInline muted
-              className="absolute inset-0 w-full h-full object-cover"
-            />
-          ) : (
-            <div className="absolute inset-0 bg-teal-800/10 flex items-center justify-center text-xs text-teal-300">Sin cámara</div>
-          )}
-          <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded-full text-[9px] font-semibold text-teal-300">Tú</div>
-        </div>
-        {/* Remotos */}
-        {remoteList.map(([peerId, stream], i) => (
-          <div key={peerId || i} className="relative">
-            <video
-              ref={(node) => { if (node && stream) attachRemoteStream(node, stream); }}
-              autoPlay playsInline
-              className="absolute inset-0 w-full h-full object-cover"
-            />
-            <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 bg-black/60 px-2 py-0.5 rounded-full text-[9px] font-semibold text-teal-300">#{i + 1}</div>
-          </div>
-        ))}
-        <div className="absolute top-3 left-3 bg-black/50 text-[10px] px-2 py-1 rounded">
-          {participantCount} conectados
-        </div>
-      </div>
-    );
-  };
+  const isGroupVideo = ((call.isGroup || remoteList.length >= 2) && remoteStreamsMap?.size > 0 && call.type === "video" && !call.isVideoOff && call.status === "connected");
 
   return (
     <div className="absolute inset-0 bg-black text-white z-[9999] flex flex-col justify-between overflow-hidden select-none">
@@ -278,7 +347,7 @@ export default function CallOverlay({
       )}
 
       {isGroupVideo ? (
-        <GroupVideoContent />
+        <GroupVideoGrid remoteList={remoteList} localStream={localStream} participantCount={participantCount} />
       ) : (call.type === "video" && !call.isVideoOff && call.status === "connected" ? (
         <div className="absolute inset-0 w-full h-full z-0 bg-black">
           <div className="absolute inset-0 flex items-center justify-center">

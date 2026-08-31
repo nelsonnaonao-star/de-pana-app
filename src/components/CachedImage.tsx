@@ -265,11 +265,9 @@ export default function CachedImage({
 
   if (!displaySrc) {
     if (initials) {
-      // Fallback de iniciales SIEMPRE visible (sin foto, URL rota o en carga):
-      // no alternar a gris/pulse evita el parpadeo del avatar.
       return (
         <div
-          className={`${className} bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center`}
+          className={`${className} overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center`}
           style={style}
         >
           <span className="text-white font-bold text-xs">{initials}</span>
@@ -278,23 +276,27 @@ export default function CachedImage({
     }
     return (
       <div
-        className={`${className} bg-slate-200 animate-pulse`}
+        className={`${className} bg-slate-200 animate-pulse min-h-[200px]`}
         style={style}
       />
     );
   }
 
   return (
-    <img
-      ref={imgRef}
-      src={displaySrc}
-      alt={alt}
+    <div
       className={className}
       style={style}
-      loading={loading}
-      onLoad={onLoad}
-      onError={handleError}
       onClick={onClick}
-    />
+    >
+      <img
+        ref={imgRef}
+        src={displaySrc}
+        alt={alt}
+        className="w-full h-full object-contain"
+        loading={loading}
+        onLoad={onLoad}
+        onError={handleError}
+      />
+    </div>
   );
 }

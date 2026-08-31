@@ -68,7 +68,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <Clock className="w-4 h-4 text-teal-300" />
-            <h3 className="text-xs font-black tracking-tight">Estados de Red On</h3>
+            <h3 className="text-xs font-black tracking-tight">Momentos en Wepa</h3>
           </div>
           <span className="text-[8px] bg-teal-400 text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
             Momentáneos (24h)

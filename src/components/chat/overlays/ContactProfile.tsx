@@ -86,7 +86,7 @@ export default function ContactProfile({ isOpen, profile, onClose }: ContactProf
                 </div>
                 <div className="min-w-0">
                   <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Bio</p>
-                  <p className="text-[13px] text-slate-600 leading-relaxed">{profile.bio}</p>
+                  <p className="text-[13px] text-slate-600 leading-relaxed">{profile.bio?.replace(/RED ON/g, "Wepa")}</p>
                 </div>
               </div>
             )}

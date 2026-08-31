@@ -4,11 +4,20 @@ import { normalizePhone } from "../utils/phone";
 import {
   Sparkles, Lock, User, Phone, Mail, AtSign, Eye, EyeOff, Smartphone, CheckCircle2, ArrowLeft, Send,
 } from "lucide-react";
+import BrandOrb from "./BrandOrb";
 
 const PHONE_RE = /^\+?[0-9]{0,15}$/;
 
+function getInitialMode(): "login" | "register" {
+  try {
+    return localStorage.getItem("redon_has_registered") ? "login" : "register";
+  } catch {
+    return "login";
+  }
+}
+
 export default function AuthScreen() {
-  const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
+  const [mode, setMode] = useState<"login" | "register" | "forgot">(getInitialMode);
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -50,7 +59,7 @@ export default function AuthScreen() {
       <div className="w-screen h-screen bg-[#070b13] flex items-center justify-center p-4">
         <div className="text-center space-y-4">
           <CheckCircle2 className="w-16 h-16 text-teal-400 mx-auto" />
-          <p className="text-white text-lg font-bold">¡Bienvenido a Red On!</p>
+          <p className="text-white text-lg font-bold">¡Bienvenido a WEPA!</p>
           <p className="text-slate-400 text-sm">Cargando tu información...</p>
         </div>
       </div>
@@ -64,10 +73,10 @@ export default function AuthScreen() {
 
       <div className="w-full max-w-md relative z-10">
         <div className="text-center mb-8">
-          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-teal-400 to-[#0a4d52] flex items-center justify-center mx-auto mb-4 shadow-lg shadow-teal-500/20">
-            <span className="text-2xl font-black text-white">R</span>
+          <div className="mx-auto mb-4 flex items-center justify-center">
+            <BrandOrb size={64} />
           </div>
-          <h1 className="text-3xl font-black text-white tracking-tight">Red On</h1>
+          <h1 className="text-3xl font-black text-white tracking-tight">WEPA</h1>
           <p className="text-sm text-slate-400 mt-1">Comunicaciones Seguras</p>
         </div>
 

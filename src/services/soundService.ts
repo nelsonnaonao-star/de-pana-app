@@ -92,6 +92,48 @@ export const stopSound = (): void => {
   activeAudiosRef.current.clear();
 };
 
+// ─── Group-specific sound ────────────────────────────────────────────
+const GROUP_SOUND_PREFIX = "redon_sound_group_";
+
+export const getGroupSoundId = (chatId: string): string | null => {
+  try {
+    return localStorage.getItem(`${GROUP_SOUND_PREFIX}${chatId}`);
+  } catch {
+    return null;
+  }
+};
+
+export const setGroupSoundId = (chatId: string, soundId: string | null): void => {
+  const key = `${GROUP_SOUND_PREFIX}${chatId}`;
+  try {
+    if (soundId) {
+      localStorage.setItem(key, soundId);
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch (e) {
+    logger.warn("[SoundService] setGroupSoundId localStorage failed", { error: e });
+  }
+  if (Capacitor.isNativePlatform()) {
+    try {
+      if (soundId) {
+        Preferences.set({ key, value: soundId }).catch(() => {});
+      } else {
+        Preferences.remove({ key }).catch(() => {});
+      }
+    } catch {}
+  }
+};
+
+/** Resuelve el sonido a reproducir para un chat: primero grupo, luego global. */
+export const resolveChatSoundId = (chatId: string | undefined | null): string => {
+  if (chatId) {
+    const groupSound = getGroupSoundId(chatId);
+    if (groupSound) return groupSound;
+  }
+  return getSoundId("message");
+};
+
 // Sincroniza la selección guardada en el almacenamiento nativo (Android SharedPreferences)
 export const syncSoundPrefsFromNative = async (): Promise<void> => {
   if (!Capacitor.isNativePlatform()) return;

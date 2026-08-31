@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Mic, Loader2 } from "lucide-react";
+import BrandOrb from "../BrandOrb";
 
 const PLAY_EVENT = "audio-message-play";
 
@@ -18,20 +19,7 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const INNER_RADIUS = 24;
 const SEEK_BAND_START = 25;
 
-const ORB_KEYFRAMES = `
-  @keyframes orb-morph-1 {
-    0%,100% { transform: translate(-5px,-3px) scale(1); }
-    50% { transform: translate(5px,3px) scale(1.15); }
-  }
-  @keyframes orb-morph-2 {
-    0%,100% { transform: translate(4px,-4px) scale(1.05); }
-    50% { transform: translate(-4px,4px) scale(0.9); }
-  }
-  @keyframes orb-morph-3 {
-    0%,100% { transform: translate(-3px,5px) scale(0.95); }
-    50% { transform: translate(3px,-5px) scale(1.1); }
-  }
-`;
+
 
 interface AudioMessagePlayerProps {
   audioUrl: string;
@@ -179,12 +167,6 @@ export default function AudioMessagePlayer({
   const textColor = isDarkBubble ? "rgba(255,255,255,0.9)" : "#0a4d52";
   const speedColor = isDarkBubble ? "rgba(255,255,255,0.7)" : "#0a4d52";
 
-  const blobBase = { position: "absolute" as const, borderRadius: "50%" };
-  const blobAnimation = (name: string, secs: number) => ({
-    animation: `${name} ${secs}s ease-in-out infinite`,
-    animationPlayState: (isPlaying ? "running" : "paused") as "running" | "paused",
-  });
-
   if (hasError) {
     return (
       <div className="flex items-center gap-2 p-1 min-w-[180px]">
@@ -196,7 +178,6 @@ export default function AudioMessagePlayer({
 
   return (
     <>
-      <style>{ORB_KEYFRAMES}</style>
       <div
         className="flex items-center gap-3 w-fit"
         style={{
@@ -242,54 +223,14 @@ export default function AudioMessagePlayer({
           </svg>
 
           <div
-            className="relative"
             style={{
               position: "absolute",
               inset: 6,
               borderRadius: "50%",
               overflow: "hidden",
-              background: "#0A2E28",
             }}
           >
-            <div
-              style={{
-                ...blobBase,
-                ...blobAnimation("orb-morph-1", 3.2),
-                width: 32,
-                height: 32,
-                left: 8,
-                top: 8,
-                background: "#5EB7FF",
-                filter: "blur(9px)",
-                opacity: 0.9,
-              }}
-            />
-            <div
-              style={{
-                ...blobBase,
-                ...blobAnimation("orb-morph-2", 2.6),
-                width: 24,
-                height: 24,
-                left: 12,
-                top: 12,
-                background: "#C65EFF",
-                filter: "blur(8px)",
-                opacity: 0.8,
-              }}
-            />
-            <div
-              style={{
-                ...blobBase,
-                ...blobAnimation("orb-morph-3", 3.8),
-                width: 20,
-                height: 20,
-                left: 14,
-                top: 14,
-                background: "#4ADE80",
-                filter: "blur(7px)",
-                opacity: 0.65,
-              }}
-            />
+            <BrandOrb size={ORB_SIZE - 12} animate={isPlaying} />
           </div>
 
           {isLoading && (

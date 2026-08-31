@@ -51,6 +51,28 @@ export type Message = {
 };
 
 function toMessage(row: any): Message {
+  const isDeleted = row.is_deleted || false;
+  if (isDeleted) {
+    return {
+      id: row.id,
+      chat_id: row.chat_id,
+      sender_id: row.sender_id,
+      text: "Mensaje eliminado",
+      type: "system" as const,
+      status: "sent" as const,
+      created_at: row.created_at,
+      edited: false,
+      forwarded: false,
+      has_image: false,
+      has_audio: false,
+      has_video: false,
+      has_document: false,
+      has_location: false,
+      is_animated: false,
+      is_ephemeral: false,
+      is_deleted: true,
+    };
+  }
   return {
     id: row.id,
     chat_id: row.chat_id,
@@ -252,6 +274,18 @@ export async function setEphemeralTimer(chatId: string, timer: number) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || "Error al configurar mensajes temporales");
+  }
+  return res.json();
+}
+
+export async function votePoll(messageId: string, pollOptions: any[]) {
+  const res = await authFetch(apiUrl("/api/messages/vote-poll"), {
+    method: "POST",
+    body: JSON.stringify({ message_id: messageId, poll_options: pollOptions }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al votar en encuesta");
   }
   return res.json();
 }

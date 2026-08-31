@@ -34,6 +34,7 @@ export interface Message {
   clientTempId?: string;
   isEphemeral?: boolean;
   ephemeralExpiresAt?: string;
+  is_deleted?: boolean;
 }
 
 export interface Chat {

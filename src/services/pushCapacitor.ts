@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { authFetch } from '../lib/api';
-import { playSound } from './soundService';
+import { playSound, resolveChatSoundId } from './soundService';
 import { logger } from '../lib/logger';
 
 const isNative = Capacitor.isNativePlatform();
@@ -118,7 +118,7 @@ try {
           // vuelva a sonar después de que ya se contestó). El sonido nativo lo
           // pone CallFcmService/IncomingCallActivity.
           window.dispatchEvent(new CustomEvent('incoming-call', {
-            detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio', callId: data.callId },
+            detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName, callType: data.callType || 'audio', callId: data.callId, roomId: data.roomId || '' },
           }));
           // Notification with buttons is handled by CallFcmService.java natively
         } else if (data?.type === 'message' && data?.chatId) {
@@ -152,7 +152,7 @@ try {
         if (!data) return;
         if (data.type === 'call' && data.chatId) {
           window.dispatchEvent(new CustomEvent('incoming-call', {
-            detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName || 'Llamada entrante', callType: data.callType || 'audio', callId: data.callId },
+            detail: { chatId: data.chatId, callerId: data.callerId, callerName: data.callerName || 'Llamada entrante', callType: data.callType || 'audio', callId: data.callId, roomId: data.roomId || '' },
           }));
         } else if (data.chatId) {
           window.dispatchEvent(new CustomEvent('open-chat', {

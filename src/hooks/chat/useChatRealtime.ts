@@ -64,7 +64,10 @@ export function useChatRealtime(
         filter: `chat_id=eq.${chatId}`,
       }, (payload: any) => {
         const raw = payload.new;
-        if (raw.is_deleted) return;
+        if (raw.is_deleted) {
+          onMessageEventRef.current({ event: 'INSERT', raw: { ...raw, text: 'Mensaje eliminado', type: 'system' } });
+          return;
+        }
         onMessageEventRef.current({ event: 'INSERT', raw });
       });
 

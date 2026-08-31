@@ -34,25 +34,61 @@ const MAX_W = 800;
 const MAX_H = 800;
 const TARGET_BYTES = 500 * 1024;
 
-async function compressToTarget(blob: Blob): Promise<Blob> {
-  const bitmap = await createImageBitmap(blob);
-  let w = bitmap.width;
-  let h = bitmap.height;
-  if (w > MAX_W || h > MAX_H) {
-    const ratio = Math.min(MAX_W / w, MAX_H / h);
-    w = Math.round(w * ratio);
-    h = Math.round(h * ratio);
+async function loadImageElement(blob: Blob): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("Image load failed"));
+      img.src = url;
+    });
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
   }
-  bitmap.close();
+}
+
+async function compressToTarget(blob: Blob): Promise<Blob> {
+  let w: number;
+  let h: number;
+  let drawImage: (ctx: CanvasRenderingContext2D, dw: number, dh: number) => Promise<void>;
+
+  try {
+    const bitmap = await createImageBitmap(blob);
+    w = bitmap.width;
+    h = bitmap.height;
+    if (w > MAX_W || h > MAX_H) {
+      const ratio = Math.min(MAX_W / w, MAX_H / h);
+      w = Math.round(w * ratio);
+      h = Math.round(h * ratio);
+    }
+    const bitmapRef = await createImageBitmap(blob);
+    drawImage = async (ctx, dw, dh) => {
+      ctx.drawImage(bitmapRef, 0, 0, dw, dh);
+      bitmapRef.close();
+    };
+    bitmap.close();
+  } catch {
+    const img = await loadImageElement(blob);
+    w = img.naturalWidth;
+    h = img.naturalHeight;
+    if (w > MAX_W || h > MAX_H) {
+      const ratio = Math.min(MAX_W / w, MAX_H / h);
+      w = Math.round(w * ratio);
+      h = Math.round(h * ratio);
+    }
+    drawImage = async (ctx, dw, dh) => {
+      ctx.drawImage(img, 0, 0, dw, dh);
+    };
+  }
 
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
 
-  const tempImg = await createImageBitmap(blob);
-  ctx.drawImage(tempImg, 0, 0, w, h);
-  tempImg.close();
+  await drawImage(ctx, w, h);
 
   for (let quality = 0.7; quality >= 0.2; quality -= 0.15) {
     const out = await new Promise<Blob>((resolve, reject) => {

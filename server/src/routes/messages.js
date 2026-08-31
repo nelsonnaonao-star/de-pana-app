@@ -715,4 +715,62 @@ router.post('/purge-ephemeral', async (req, res) => {
   }
 });
 
+// ─── Poll vote (via server to enforce chat membership) ────────
+router.post('/vote-poll', async (req, res) => {
+  try {
+    const { message_id, poll_options } = req.body;
+
+    if (!message_id || !poll_options) {
+      return res.status(400).json({ error: 'message_id y poll_options requeridos' });
+    }
+
+    // Validate poll_options is a valid JSON array string or array
+    let parsed;
+    if (typeof poll_options === 'string') {
+      try { parsed = JSON.parse(poll_options); } catch {
+        return res.status(400).json({ error: 'poll_options JSON inválido' });
+      }
+    } else {
+      parsed = poll_options;
+    }
+
+    if (!Array.isArray(parsed)) {
+      return res.status(400).json({ error: 'poll_options debe ser un array' });
+    }
+
+    // Fetch message to verify it exists and user is chat member
+    const { data: msg, error: fetchError } = await supabaseAdmin
+      .from('messages')
+      .select('id, chat_id, type')
+      .eq('id', message_id)
+      .single();
+
+    if (fetchError || !msg) {
+      return res.status(404).json({ error: 'Mensaje no encontrado' });
+    }
+
+    if (msg.type !== 'poll') {
+      return res.status(400).json({ error: 'El mensaje no es una encuesta' });
+    }
+
+    // Verify user is chat member
+    if (!(await isChatMember(msg.chat_id, req.userId))) {
+      return res.status(403).json({ error: 'No eres miembro de este chat' });
+    }
+
+    // Update poll_options via service_role (bypasses RLS triggers)
+    const { error: updateError } = await supabaseAdmin
+      .from('messages')
+      .update({ poll_options: JSON.stringify(parsed) })
+      .eq('id', message_id);
+
+    if (updateError) throw updateError;
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[MESSAGES] vote-poll error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

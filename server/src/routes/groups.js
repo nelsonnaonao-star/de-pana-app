@@ -131,6 +131,54 @@ router.get('/mute/:chat_id', async (req, res) => {
   }
 });
 
+// POST /api/groups/sound
+// Body: { chat_id: string, sound_id: string | null }
+// Guarda el sonido de notificación personalizado para un grupo.
+// null = volver al sonido global.
+router.post('/sound', async (req, res) => {
+  try {
+    const { chat_id, sound_id } = req.body;
+    if (!chat_id) {
+      return res.status(400).json({ ok: false, error: 'chat_id requerido' });
+    }
+
+    const { data: chat } = await supabaseAdmin
+      .from('chats')
+      .select('id, is_group, profile_id, admin_id')
+      .eq('id', chat_id)
+      .single();
+    if (!chat) {
+      return res.status(404).json({ ok: false, error: 'Chat no encontrado' });
+    }
+
+    const isDirectParticipant = chat.profile_id === req.userId || chat.admin_id === req.userId;
+    const { data: participant } = await supabaseAdmin
+      .from('chat_participants')
+      .select('profile_id')
+      .eq('chat_id', chat_id)
+      .eq('profile_id', req.userId)
+      .maybeSingle();
+    if (!isDirectParticipant && !participant && req.userRole !== 'service_role') {
+      return res.status(403).json({ ok: false, error: 'No eres miembro de este grupo' });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('chats')
+      .update({ notification_sound: sound_id || null, updated_at: new Date().toISOString() })
+      .eq('id', chat_id);
+
+    if (error) {
+      console.error('[GROUPS] sound update error:', error);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+
+    res.json({ ok: true, notification_sound: sound_id || null });
+  } catch (err) {
+    console.error('[GROUPS] sound error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POST /api/groups/add-participants
 // Insert multiple participants into a group chat using service_role (bypasses RLS)
 // Body: { chat_id: string, member_ids: string[] }

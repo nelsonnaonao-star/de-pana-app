@@ -50,7 +50,7 @@ export default function SimulatorTabHeader({
 
           <div className="relative z-10 flex justify-between items-center mb-3.5 pointer-events-auto">
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-extrabold tracking-tight text-white drop-shadow-md">Messages</h1>
+              <h1 className="text-2xl font-extrabold tracking-tight text-white drop-shadow-md">WEPA</h1>
             </div>
           </div>
 
@@ -69,7 +69,7 @@ export default function SimulatorTabHeader({
 
       {currentScreen === "states" && (
         <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Estados Red On</h3>
+          <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Momentos en Wepa</h3>
           <p className="text-[10px] text-teal-100/85">Visualiza y responde a estados</p>
         </div>
       )}

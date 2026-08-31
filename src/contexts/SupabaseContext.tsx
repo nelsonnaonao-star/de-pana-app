@@ -60,6 +60,7 @@ const LAST_USER_KEY = "redon_last_user";
 function saveLastUser(userId: string) {
   try {
     localStorage.setItem(LAST_USER_KEY, JSON.stringify({ id: userId }));
+    localStorage.setItem("redon_has_registered", "1");
   } catch (e) {
     logger.warn("[SupabaseContext] saveLastUser failed", { error: e, userId });
   }

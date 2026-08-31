@@ -164,7 +164,7 @@ export async function register(
     username: cleanUsername,
     phone_number: cleanPhone,
     avatar_url: "",
-    bio: "Disponible en RED ON",
+    bio: "Disponible en Wepa",
     ...(cleanEmail ? { real_email: cleanEmail } : {}),
   });
 
@@ -188,7 +188,7 @@ export async function register(
       username: cleanUsername,
       phone: cleanPhone,
       avatar: "",
-      bio: "Disponible en RED ON",
+      bio: "Disponible en Wepa",
       realEmail: cleanEmail,
     },
   };

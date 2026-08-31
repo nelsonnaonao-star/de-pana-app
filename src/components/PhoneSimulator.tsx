@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { SplashScreen } from "@capacitor/splash-screen";
 import { useDebounce } from "../hooks/useDebounce";
 import CachedImage from "./CachedImage";
 import ChatListSkeleton from "./ChatListSkeleton";
@@ -42,7 +41,7 @@ import BiometricLockScreen from "./BiometricLockScreen";
 
 import { WebRTCService } from "../services/webrtc";
 import { WebRTCGroupService, isGroupCallAtLimit } from "../services/rtc-group";
-import { startCall as apiStartCall, updateCallRating, updateCallStatus } from "../services/calls";
+import { startCall as apiStartCall, updateCallRating, updateCallStatus, expireObsoleteCallRows } from "../services/calls";
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Preferences } from '@capacitor/preferences';
@@ -216,20 +215,8 @@ export default function PhoneSimulator({
     }
   }, [user, profile]);
 
-  // Hide native splash only after Supabase session resolves and DOM paints
-  useEffect(() => {
-    if (!loading) {
-      requestAnimationFrame(() => {
-        SplashScreen.hide().catch(() => {});
-      });
-    }
-  }, [loading]);
-
-  // Fallback: force-hide splash after 10s max (problematic devices)
-  useEffect(() => {
-    const t = setTimeout(() => SplashScreen.hide().catch(() => {}), 10000);
-    return () => clearTimeout(t);
-  }, []);
+  // Native splash is now managed centrally in App.tsx via FullSplash.
+  // This component no longer calls SplashScreen.hide().
 
   // Android back button handler — registered ONCE, reads state from refs (no race condition)
   useEffect(() => {
@@ -510,6 +497,19 @@ export default function PhoneSimulator({
   // condiciones se descarta (fail-closed): así un push antiguo, un registro
   // 'ringing' colgado o los "extras" de un intent viejo nunca producen una
   // llamada fantasma al recuperar la conexión.
+  // Dedup SÍNCRONO por callId (calls.id): Realtime y FCM pueden entregar la MISMA
+  // llamada. Solo el primer evento que la "reclama" continúa; el segundo retorna
+  // antes de consultar DB o hacer setActiveCall. Se ejecuta antes de cualquier
+  // await para cerrar la carrera (TOCTOU) entre los dos canales.
+  const claimIncomingCall = useCallback((callId?: string): boolean => {
+    if (!callId || callId.startsWith('call_')) return false;
+    const now = Date.now();
+    const seenAt = seenIncomingCallsRef.current.get(callId);
+    if (seenAt && now - seenAt < 5 * 60 * 1000) return false;
+    seenIncomingCallsRef.current.set(callId, now);
+    return true;
+  }, []);
+
   const incomingCallStillValid = useCallback(async (callId?: string, startedAt?: string): Promise<boolean> => {
     if (!callId || callId.startsWith('call_')) return false;
     const now = Date.now();
@@ -517,8 +517,6 @@ export default function PhoneSimulator({
       const t = new Date(startedAt).getTime();
       if (!isNaN(t) && now - t > RING_TTL_MS) return false;
     }
-    const seenAt = seenIncomingCallsRef.current.get(callId);
-    if (seenAt && now - seenAt < 5 * 60 * 1000) return false;
     try {
       const { data } = await supabase
         .from("calls")
@@ -533,7 +531,6 @@ export default function PhoneSimulator({
         updateCallStatus(callId, 'missed').catch((e) => logger.warn('[WEBRTC SIGNALING] Failed to mark stale call missed', { error: e, callId }));
         return false;
       }
-      seenIncomingCallsRef.current.set(callId, now);
       return true;
     } catch (e) {
       logger.warn('[WEBRTC SIGNALING] Incoming call validation failed (skipping to avoid phantom)', { error: e, callId });
@@ -1260,6 +1257,12 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           logger.warn('[WEBRTC SIGNALING] Ignoring call with status', { status: call.status });
           return;
         }
+        // Dedup síncrono por callId: solo el primer evento (Realtime o FCM)
+        // para esta llamada continúa; el duplicado retorna sin reclasificar.
+        if (!claimIncomingCall(call.id)) {
+          logger.info('[WEBRTC SIGNALING] Duplicate incoming call (Realtime) skipped', { callId: call.id });
+          return;
+        }
         if (activeCallRef.current) {
           logger.warn('[WEBRTC SIGNALING] Already in a call, ignoring incoming call');
           return;
@@ -1288,22 +1291,18 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           return;
         }
         if (activeCallRef.current) return;
-        let isGroupChat = !!chatsRef.current.find((c) => c.id === call.chat_id)?.isGroup;
-        // Si el chat no es grupo pero ya hay otra call activa en el mismo chat_id,
-        // es una invitación a sala existente → tratar como grupo.
-        if (!isGroupChat && call.chat_id) {
-          try {
-            const { data: otherCalls } = await supabase
-              .from("calls")
-              .select("id")
-              .eq("chat_id", call.chat_id)
-              .in("status", ["ringing", "accepted", "ongoing"])
-              .neq("id", call.id)
-              .limit(1);
-            if (otherCalls && otherCalls.length > 0) isGroupChat = true;
-          } catch (e) {
-            logger.warn('[WEBRTC SIGNALING] Failed to check for existing calls on chat', { error: e, chatId: call.chat_id });
-          }
+        // FASE A: NUNCA clasificar por filas hermanas del mismo chat_id. La
+        // sesión actual es SOLO esta llamada (call.id). Una 1:1 nueva queda
+        // siempre isGroup=false; una invitación a sala grupal solo se reconoce
+        // porque el CHAT es grupo.
+        // FASE B: marcador explícito `calls.room_id` (fila creada para la
+        // transición/invitación grupal). Sin inferencia de filas hermanas: un
+        // 1:1 real tiene room_id null -> isGroup sigue false.
+        const isGroupChat = !!chatsRef.current.find((c) => c.id === call.chat_id)?.isGroup || !!call.room_id;
+        // Limpieza defensiva: cualquier sesión obsoleta (>2min) del mismo chat
+        // donde YO soy participante se cierra (nunca la llamada actual).
+        if (call.chat_id) {
+          expireObsoleteCallRows(user.id, call.chat_id, call.id).catch(() => {});
         }
         logger.info('[WEBRTC SIGNALING] Setting activeCall from Realtime', { callerName, status: 'incoming', isGroupChat });
         playIncomingRingtone();
@@ -1318,7 +1317,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           isVideoOff: false,
           isGroup: isGroupChat,
           targetUserId: call.caller_id,
-          roomId: call.chat_id || undefined,
+          roomId: call.room_id || call.chat_id || undefined,
         });
       })
       .on('postgres_changes', {
@@ -1333,7 +1332,6 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         if (!endedStatuses.includes(call.status)) return;
         if (prev?.status === call.status) return;
         if (!activeCallRef.current || activeCallRef.current.id !== call.id) return;
-        if (activeCallRef.current.status !== 'incoming') return;
         logger.info('[WEBRTC SIGNALING] Call ended while incoming — auto-dismissing', { status: call.status });
         stopIncomingRingtone();
         callWasConnectedRef.current = false;
@@ -1376,6 +1374,12 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       }
 
       if (chatId && d?.callerId && !activeCallRef.current) {
+        // Dedup síncrono por callId: si Realtime ya procesó esta llamada (o
+        // viceversa), FCM retorna sin reclasificar ni volver a setActiveCall.
+        if (incomingCallId && !claimIncomingCall(incomingCallId)) {
+          logger.info('[WEBRTC SIGNALING] Duplicate incoming call (FCM) skipped', { callId: incomingCallId });
+          return;
+        }
         // Válida la llamada (status 'ringing' + reciente). Si FCM entrega un push
         // atrasado/antiguo (típico al recuperar la conexión) se descarta y la app
         // no "enloquece" con llamadas fantasma.
@@ -1386,22 +1390,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         }
         logger.info('[WEBRTC SIGNALING] Setting activeCall from FCM', { callerName: d.callerName, callId: incomingCallId });
         answeredCallRef.current = false;
-        let isGroupChatFcm = !!chatsRef.current.find((c) => c.id === chatId)?.isGroup;
-        // Si el chat no es grupo pero ya hay otra call activa en el mismo chat_id,
-        // es una invitación a sala existente → tratar como grupo.
-        if (!isGroupChatFcm && chatId) {
-          try {
-            const { data: otherCalls } = await supabase
-              .from("calls")
-              .select("id")
-              .eq("chat_id", chatId)
-              .in("status", ["ringing", "accepted", "ongoing"])
-              .neq("id", incomingCallId)
-              .limit(1);
-            if (otherCalls && otherCalls.length > 0) isGroupChatFcm = true;
-          } catch (e) {
-            logger.warn('[WEBRTC SIGNALING] Failed to check for existing calls on chat (FCM)', { error: e, chatId });
-          }
+        // FASE A: la sesión actual es SOLO esta llamada; isGroup depende del
+        // tipo de chat, nunca de filas hermanas del chat_id.
+        // FASE B: además, el marcador explícito `roomId` del push (invitación
+        // grupal) fuerza isGroup=true aunque el chat sea 1:1.
+        const isGroupChatFcm = !!chatsRef.current.find((c) => c.id === chatId)?.isGroup || !!d?.roomId;
+        if (chatId) {
+          expireObsoleteCallRows(user.id, chatId, incomingCallId).catch(() => {});
         }
         playIncomingRingtone();
         setActiveCall({
@@ -1415,7 +1410,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           isVideoOff: false,
           isGroup: isGroupChatFcm,
           targetUserId: d.callerId,
-          roomId: chatId,
+          roomId: d?.roomId || chatId,
         });
       } else if (chatId && d?.callerId && activeCallRef.current && activeCallRef.current.status === 'incoming') {
         const currentId = activeCallRef.current.id;
@@ -1538,6 +1533,153 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     }
   }, [externalMessageTrigger, currentScreen, selectedChatId, onClearExternalMessageTrigger]);
 
+  // FASE B — transición explícita 1:1 -> grupo.
+  // - Guard por room: una sola transición por dispositivo por room (Set de roomIds).
+  // - Se dispara: (a) localmente al invitar (el emisor no espera su propio
+  //   broadcast), y (b) al recibir `member_invited`. C entra directo con
+  //   isGroup=true y su onAccept nunca pasa por aquí.
+  // - Token de cancelación: si la llamada 1:1 termina mientras transiciona
+  //   (cleanupCall/endGroupCall ponen pendingTransitionRef=null), el flujo
+  //   aborta y nunca recrea un grupo huérfano.
+  const transitionedForRoomRef = useRef<Set<string>>(new Set());
+  const pendingTransitionRef = useRef<string | null>(null);
+  const endGroupCallRef = useRef<() => void>(() => {});
+  // Guard idempotente para aceptar una llamada GRUPAL entrante por callId:
+  // el accept puede re-dispararse (Realtime + FCM / broadcast duplicado) y sin
+  // esto crearía una SEGUNDA WebRTCGroupService, suscripción y announceJoin.
+  // Se limpia cuando la llamada grupal termina (endGroupCall/cleanupCall).
+  const acceptedGroupCallIdsRef = useRef<Set<string>>(new Set());
+
+  // Reintento periódico de member_invited: el broadcast es EFIMERO (ack:false,
+  // sin replay). Si B (el participante ya establecido en 1:1) no está suscrito
+  // al canal call-room-update en el instante exacto del envío, pierde el aviso
+  // y nunca transiciona al modo grupal (queda huérfano). Por eso se reenvía
+  // cada INVITE_RETRY_INTERVAL_MS hasta que B aparece en la sala grupal
+  // (hasParticipant) o la llamada termina (cleanupCall / endGroupCall).
+  const inviteRetryRef = useRef<{ roomChannel: ReturnType<typeof supabase.channel>; timer: ReturnType<typeof setInterval> | null } | null>(null);
+  const INVITE_RETRY_INTERVAL_MS = 3500;
+  const stopInviteRetry = useCallback(() => {
+    const current = inviteRetryRef.current;
+    if (!current) return;
+    if (current.timer) clearInterval(current.timer);
+    supabase.removeChannel(current.roomChannel);
+    inviteRetryRef.current = null;
+  }, []);
+
+  const transitionToGroupCall = useCallback((roomId: string) => {
+    console.log(`[GTRANS] transition requested roomId=${roomId}`);
+    if (!user || pendingTransitionRef.current) {
+      console.log(`[GTRANS] transition skipped (pending transition active) roomId=${roomId}`);
+      return;
+    }
+    if (transitionedForRoomRef.current.has(roomId)) {
+      console.log(`[GTRANS] transition skipped already transitioned roomId=${roomId}`);
+      return;
+    }
+    const current = activeCallRef.current;
+    if (!current || current.isGroup || (current.roomId || current.id) !== roomId) {
+      console.log(`[GTRANS] transition aborted: no active call / already group / roomId mismatch roomId=${roomId}`);
+      return;
+    }
+    pendingTransitionRef.current = roomId;
+    const cancelled = () => pendingTransitionRef.current !== roomId;
+    // Guard de sesión para los callbacks de stream: activo mientras ESTA sala
+    // siga siendo la llamada activa. NO usar `cancelled()` aquí: el finally
+    // deja pendingTransitionRef en null y cancelled() devolvería true para
+    // siempre, descartando onRemoteStream/onParticipantLeft de todos los que
+    // se unen después de que termina la transición.
+    const sessionAlive = () => {
+      const call = activeCallRef.current;
+      return !!call && (call.roomId || call.id) === roomId;
+    };
+    const abort = (webrtc: WebRTCGroupService | null) => { webrtc?.cleanup(); };
+
+    void (async () => {
+      try {
+        console.log(`[GTRANS] transition started roomId=${roomId}`);
+        console.log(`[GTRANS] A/B transitioning 1:1->group (callId=${current.id}); releasing 1:1 transport AFTER group camera is ready`);
+        // NOTA UX: NO se ponen remoteStream/localStream a null aquí. El video 1:1
+        // (aunque quede congelado tras el cleanup) sigue siendo el fallback visual
+        // hasta que isGroup=true active GroupVideoGrid. Así se evita la pantalla
+        // gris/spinner y el parpadeo durante la transición (~3s de async).
+
+        // Crear WebRTCGroupService igual que hace C en onAccept
+        console.log(`[GTRANS] A/B creating WebRTCGroupService roomId=${roomId} user=${user.id.slice(0, 8)}`);
+        const webrtc = new WebRTCGroupService(roomId, user.id);
+        groupCallRef.current = webrtc;
+        console.log(`[GTRANS] group service created roomId=${roomId}`);
+
+        webrtc.onReaction = (peerId: string, emoji: string) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
+
+        webrtc.onRemoteStream = (peerId: string, stream: MediaStream) => {
+          if (!sessionAlive()) {
+            console.log(`[GTRANS] A/B onRemoteStream dropped (session ended/room changed) peer=${peerId}`);
+            return;
+          }
+          console.log(`[GTRANS] A/B onRemoteStream from peer ${peerId}`);
+          setGroupRemoteStreams((prev) => {
+            const next = new Map(prev);
+            next.set(peerId, stream);
+            setGroupParticipantCount((c) => Math.max(c, next.size));
+            return next;
+          });
+        };
+
+        webrtc.onParticipantLeft = (peerId: string) => {
+          if (!sessionAlive()) {
+            console.log(`[GTRANS] A/B onParticipantLeft dropped (session ended/room changed) peer=${peerId}`);
+            return;
+          }
+          console.log(`[GTRANS] A/B onParticipantLeft: ${peerId}`);
+          setGroupRemoteStreams((prev) => {
+            const next = new Map(prev);
+            next.delete(peerId);
+            return next;
+          });
+          setGroupParticipantCount((c) => Math.max(0, c - 1));
+        };
+
+        webrtc.onCallEnded = () => endGroupCallRef.current();
+
+        console.log(`[GTRANS] A/B starting local stream (before 1:1 teardown)`);
+        await webrtc.startLocalStream(true, current.type === "video");
+        if (cancelled()) { abort(webrtc); return; }
+        setGroupLocalStream(webrtc.getLocalStream());
+        console.log(`[GTRANS] A/B group camera acquired (videoTracks=${webrtc.getLocalStream()?.getVideoTracks().length ?? 0}), releasing 1:1 WebRTCService`);
+        // Liberar el transporte 1:1 SOLO después de que el stream grupal quede
+        // confirmado: evita re-capturar a ciegas sobre una cámara recién
+        // apagada y descarta la track "live" sin frames (el tile local nunca
+        // queda en negro). Si la captura grupal falla, el 1:1 sigue vivo.
+        webrtcRef.current?.cleanup();
+        webrtcRef.current = null;
+
+        console.log(`[GTRANS] A/B subscribing to room`);
+        await webrtc.subscribeToRoom();
+        if (cancelled()) { abort(webrtc); return; }
+        console.log(`[GTRANS] A/B subscribed, announcing join roomId=${roomId}`);
+        console.log(`[GTRANS] subscribed roomId=${roomId}`);
+        console.log(`[GTRANS] announceJoin roomId=${roomId}`);
+        await webrtc.announceJoinUntilConnected();
+        if (cancelled()) { abort(webrtc); return; }
+        console.log(`[GTRANS] A/B announceJoinUntilConnected done, peers=${webrtc.getParticipantsCount()}`);
+
+        setGroupParticipantCount(webrtc.getParticipantsCount());
+        setActiveCall((prev) => prev && (prev.roomId || prev.id) === roomId ? { ...prev, isGroup: true, status: "connected" } : null);
+        // SOLO aquí, cuando GroupVideoGrid ya está activo (isGroup=true), se
+        // desvinculan los streams 1:1. Ya no hay renderer 1:1 mostrándolos.
+        setRemoteStream(null);
+        setLocalStream(null);
+        transitionedForRoomRef.current.add(roomId);
+        console.log(`[GTRANS] A/B transition complete, isGroup=true`);
+      } catch (err) {
+        logger.error("[GRUPOCALL] Transition 1:1->group failed", { error: err });
+        setGroupCallError("Error al cambiar a llamada grupal");
+      } finally {
+        if (pendingTransitionRef.current === roomId) pendingTransitionRef.current = null;
+      }
+    })();
+  }, [user]);
+
   // Señal de aviso + transición real: escuchar broadcasts cuando hay llamada activa.
   // Cuando alguien invita a un nuevo participante a la misma sala, A y B transicionan
   // de WebRTCService (1:1) a WebRTCGroupService (grupo) en el mismo roomId.
@@ -1553,77 +1695,10 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     channel.on("broadcast", { event: "room-update" }, (payload) => {
       const d = payload.payload as Record<string, unknown> | undefined;
       if (d?.type === "member_invited" && typeof d.invitedName === "string") {
-        console.log(`[GTRANS] A/B received member_invited for ${d.invitedName}, roomId=${roomId}, activeCallId=${activeCallRef.current?.id}, isGroup=${activeCallRef.current?.isGroup}`);
+        console.log(`[GTRANS] member_invited received for ${d.invitedName}, roomId=${roomId}, activeCallId=${activeCallRef.current?.id}, isGroup=${activeCallRef.current?.isGroup}`);
         toast(`Agregando a ${d.invitedName} a la llamada...`, { icon: "📞" });
-        // Transición real 1:1 -> grupo
-        void (async () => {
-          if (!user) return;
-          const current = activeCallRef.current;
-          if (!current || current.isGroup) {
-            console.log(`[GTRANS] Transition aborted: no active call or already group`);
-            return;
-          }
-          const currentRoomId = current.roomId || current.id;
-          if (!currentRoomId) {
-            console.log(`[GTRANS] Transition aborted: no roomId`);
-            return;
-          }
-
-          console.log(`[GTRANS] A/B transitioning 1:1->group: cleaning WebRTCService, callId=${current.id}`);
-          // Limpiar WebRTCService 1:1 existente
-          webrtcRef.current?.cleanup();
-          webrtcRef.current = null;
-          setRemoteStream(null);
-          setLocalStream(null);
-
-          // Crear WebRTCGroupService igual que hace C en onAccept
-          try {
-            console.log(`[GTRANS] A/B creating WebRTCGroupService roomId=${currentRoomId} user=${user.id.slice(0,8)}`);
-            const webrtc = new WebRTCGroupService(currentRoomId, user.id);
-            groupCallRef.current = webrtc;
-
-            webrtc.onReaction = (peerId: string, emoji: string) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
-
-            webrtc.onRemoteStream = (peerId: string, stream: MediaStream) => {
-              console.log(`[GTRANS] A/B onRemoteStream from peer ${peerId}`);
-              setGroupRemoteStreams((prev) => {
-                const next = new Map(prev);
-                next.set(peerId, stream);
-                setGroupParticipantCount((c) => Math.max(c, next.size));
-                return next;
-              });
-            };
-
-            webrtc.onParticipantLeft = (peerId: string) => {
-              console.log(`[GTRANS] A/B onParticipantLeft: ${peerId}`);
-              setGroupRemoteStreams((prev) => {
-                const next = new Map(prev);
-                next.delete(peerId);
-                return next;
-              });
-              setGroupParticipantCount((c) => Math.max(0, c - 1));
-            };
-
-            webrtc.onCallEnded = () => endGroupCall();
-
-            console.log(`[GTRANS] A/B starting local stream`);
-            await webrtc.startLocalStream(true, current.type === "video");
-            setGroupLocalStream(webrtc.getLocalStream());
-
-            console.log(`[GTRANS] A/B subscribing to room`);
-            await webrtc.subscribeToRoom();
-            console.log(`[GTRANS] A/B subscribed, announcing join`);
-            await webrtc.announceJoin();
-            console.log(`[GTRANS] A/B announceJoin done, peers=${webrtc.getParticipantsCount()}`);
-
-            setGroupParticipantCount(webrtc.getParticipantsCount());
-            setActiveCall((prev) => prev ? { ...prev, isGroup: true, status: "connected" } : null);
-            console.log(`[GTRANS] A/B transition complete, isGroup=true`);
-          } catch (err) {
-            logger.error("[GRUPOCALL] Transition 1:1->group failed", { error: err });
-            setGroupCallError("Error al cambiar a llamada grupal");
-          }
-        })();
+        // Transición real 1:1 -> grupo (callback central, una vez por room)
+        void transitionToGroupCall(roomId);
       }
     });
     channel.subscribe();
@@ -1683,6 +1758,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     setShowAddMember(false);
     setAddMemberContacts([]);
     setInvitingContactId(null);
+    // Cancela transición 1:1->grupo pendiente y resetea el guard por room:
+    // si la sesión terminó, una llamada NUEVA en el mismo chat puede transicionar
+    // de nuevo (Prueba 3: 1:1 tras una grupal).
+    pendingTransitionRef.current = null;
+    transitionedForRoomRef.current.clear();
+    acceptedGroupCallIdsRef.current.clear();
+    stopInviteRetry();
     setActiveCall(null);
     setCallSignalPoor(false);
     callWasConnectedRef.current = false;
@@ -1843,7 +1925,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       setGroupLocalStream(webrtc.getLocalStream());
 
       await webrtc.subscribeToRoom();
-      await webrtc.announceJoin();
+      await webrtc.announceJoinUntilConnected();
       setGroupParticipantCount(webrtc.getParticipantsCount());
 
       setActiveCall({
@@ -1876,9 +1958,17 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     setGroupLocalStream(null);
     setGroupRemoteStreams(new Map());
     setGroupParticipantCount(0);
+    pendingTransitionRef.current = null;
+    transitionedForRoomRef.current.clear();
+    acceptedGroupCallIdsRef.current.clear();
+    stopInviteRetry();
     setActiveCall(null);
     setGroupCallError(null);
   }, [setActiveCall]);
+
+  // Permite que transitionToGroupCall (declarado antes) llame a endGroupCall sin
+  // violar el TDZ; se actualiza en cada render.
+  endGroupCallRef.current = endGroupCall;
 
   // Abre el selector de contactos para invitar a alguien a la videollamada en curso.
   const openAddMember = useCallback(async () => {
@@ -1937,27 +2027,61 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         callee_id: inviteeId,
         type: "video",
         chat_id: roomId,
+        room_id: roomId,
       });
       logger.info("[GRUPOCALL] Invited contact to room", { contactName: contact.name, roomId, callId: dbCall?.id });
       toast.success(`${contact.name} invitado a la videollamada`);
       setShowAddMember(false);
-      // Señal a participantes existentes en la sala via broadcast
-      try {
-        const roomChannel = supabase.channel(`call-room-update:${roomId}`);
-        roomChannel.subscribe((status) => {
-          if (status === "SUBSCRIBED") {
-            roomChannel.send({
-              type: "broadcast",
-              event: "room-update",
-              payload: { type: "member_invited", invitedName: contact.name },
-            }).then(() => { supabase.removeChannel(roomChannel); });
-          } else {
-            supabase.removeChannel(roomChannel);
-          }
-        });
-      } catch (e) {
-        logger.warn("[GRUPOCALL] Broadcast invite signal failed", { error: e });
+      // Señal a participantes existentes en la sala via broadcast, con reintento
+      // periódico (ver comentario de INVITE_RETRY_INTERVAL_MS). El participante
+      // a confirmar es el peer pre-existente del 1:1 (active.targetUserId): cuando
+      // ese userId aparezca como peer en la sala grupal, B transicionó y ya no
+      // hace falta reenviar. C (el invitado nuevo) entra por la fila `calls` +
+      // FCM/realtime, no necesita este broadcast.
+      stopInviteRetry();
+      const peerToConfirm = active.targetUserId;
+      if (!peerToConfirm) {
+        logger.warn("[GRUPOCALL] member_invited retries skipped: no pre-existing peer to confirm", { roomId });
       }
+      const roomChannel = supabase.channel(`call-room-update:${roomId}`);
+      const sendInvite = () => {
+        roomChannel.send({
+          type: "broadcast",
+          event: "room-update",
+          payload: { type: "member_invited", invitedName: contact.name },
+        }).catch((e) => logger.warn("[GRUPOCALL] Broadcast invite signal failed", { error: e }));
+      };
+      const tick = () => {
+        const group = groupCallRef.current;
+        const callEnded = !activeCallRef.current;
+        if (callEnded) {
+          console.log(`[GRUPOCALL] invite retry stopped (call ended) roomId=${roomId}`);
+          stopInviteRetry();
+          return;
+        }
+        if (peerToConfirm && group?.hasParticipant(peerToConfirm)) {
+          console.log(`[GRUPOCALL] invite retry stopped (${peerToConfirm.slice(0, 8)} confirmed in room) roomId=${roomId}`);
+          stopInviteRetry();
+          return;
+        }
+        console.log(`[GRUPOCALL] member_invited retry roomId=${roomId}`);
+        sendInvite();
+      };
+      roomChannel.subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          console.log(`[GRUPOCALL] member_invited channel subscribed roomId=${roomId}`);
+          sendInvite();
+          const timer = setInterval(tick, INVITE_RETRY_INTERVAL_MS);
+          inviteRetryRef.current = { roomChannel, timer };
+        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          logger.warn("[GRUPOCALL] member_invited channel subscribe failed", { status, roomId });
+          supabase.removeChannel(roomChannel);
+        }
+      });
+      // El invitador NO espera su propio broadcast (self:false) ni la llegada de
+      // otras señales: inicia la transición 1:1->grupo localmente, con el mismo
+      // roomId. Si ya transicionó (guard) esto no hace nada.
+      void transitionToGroupCall(roomId);
       // Auto-descartar la invitación si nadie la acepta en 45s.
       if (dbCall?.id) {
         setTimeout(() => {
@@ -1983,7 +2107,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     } finally {
       setInvitingContactId(null);
     }
-  }, [user, groupParticipantCount]);
+  }, [user, groupParticipantCount, transitionToGroupCall, stopInviteRetry]);
 
   const startOutgoingCall = async (opts: { partnerId: string; name: string; avatar: string; chatId: string; type: "audio" | "video" }) => {
     const { partnerId, name: contactName, avatar: contactAvatar, chatId, type } = opts;
@@ -2005,6 +2129,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         });
         if (dbCall?.id) callId = dbCall.id;
         logger.info('[WEBRTC SIGNALING] Call inserted', { callId });
+        // Limpieza defensiva al ARRANCAR una sesión nueva: obsoletas del chat
+        // (nunca esta llamada) se cierran para que no contaminen el futuro.
+        expireObsoleteCallRows(user.id, chatId, callId).catch(() => {});
       } catch (e) {
         logger.warn('[WEBRTC SIGNALING] apiStartCall error', { error: e });
       }
@@ -2512,12 +2639,19 @@ onAccept={async () => {
             if (!user) return;
             if (activeCall.isGroup) {
               // Incoming group call: join room
+              const callId = activeCall.id;
+              if (acceptedGroupCallIdsRef.current.has(callId)) {
+                console.log(`[GTRANS] group accept duplicate skipped callId=${callId}`);
+                return;
+              }
+              acceptedGroupCallIdsRef.current.add(callId);
               const roomId = activeCall.roomId || activeCall.id.replace("group_", "");
               if (!roomId) { setGroupCallError("No se pudo unir a la sala"); return; }
               try {
                 console.log(`[GTRANS] C accepting group call: roomId=${roomId} user=${user.id.slice(0,8)} callId=${activeCall.id}`);
                 const webrtc = new WebRTCGroupService(roomId, user.id);
                 groupCallRef.current = webrtc;
+                console.log(`[GTRANS] group service created roomId=${roomId}`);
                 webrtc.onReaction = (peerId: string, emoji: string) => setPendingReaction({ id: Date.now() + Math.random(), emoji });
                 await webrtc.startLocalStream(true, activeCall.type === "video");
                 setGroupLocalStream(webrtc.getLocalStream());
@@ -2542,8 +2676,10 @@ onAccept={async () => {
                 webrtc.onCallEnded = () => endGroupCall();
                 await webrtc.subscribeToRoom();
                 console.log(`[GTRANS] C subscribed roomId=${roomId} user=${user.id.slice(0,8)}`);
-                await webrtc.announceJoin();
-                console.log(`[GTRANS] C announceJoin done, peers=${webrtc.getParticipantsCount()}`);
+                console.log(`[GTRANS] subscribed roomId=${roomId}`);
+                console.log(`[GTRANS] announceJoin roomId=${roomId}`);
+                await webrtc.announceJoinUntilConnected();
+                console.log(`[GTRANS] C announceJoinUntilConnected done, peers=${webrtc.getParticipantsCount()}`);
                 updateCallStatus(activeCall.id, 'accepted').catch((e) => logger.warn('[GRUPOCALL] Failed to mark invited call accepted', { error: e }));
                 setActiveCall((prev) => prev ? { ...prev, status: "connected" } : null);
               } catch (err) {
@@ -3422,7 +3558,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                             <Copy className="w-3.5 h-3.5 inline opacity-60" />
                           </button>
                           {registeredUser.bio && (
-                            <p className="text-[10px] text-teal-300/80 mt-0.5 italic max-w-[200px] mx-auto truncate">{registeredUser.bio}</p>
+                            <p className="text-[10px] text-teal-300/80 mt-0.5 italic max-w-[200px] mx-auto truncate">{registeredUser.bio?.replace(/RED ON/g, "Wepa")}</p>
                           )}
                           <div className="flex items-center justify-center gap-2 mt-1">
                             <button
@@ -3447,7 +3583,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                     <div className="flex-1 overflow-y-auto p-4 space-y-3.5 pb-20 scrollbar-thin">
                       
                       <div className="text-[11px] font-black text-slate-400 tracking-wider uppercase px-1">
-                        Ajustes de RED ON
+                        Ajustes de Wepa
                       </div>
 
                       {/* Settings Cards list */}
@@ -4285,12 +4421,12 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div>
                                 <h5 className="font-black text-slate-800 text-[11px] tracking-tight">Política de Privacidad</h5>
                                 <p className="text-slate-500 mt-1.5 leading-relaxed">
-                                  En <strong className="text-slate-700">RED ON</strong>, el control de tus datos personales es nuestra prioridad fundamental. Esta política describe cómo recopilamos, usamos, almacenamos y protegemos tu información cuando utilizas nuestra plataforma de mensajería, difusión de catálogos y servicios de emprendimiento.
+                                  En <strong className="text-slate-700">Wepa</strong>, el control de tus datos personales es nuestra prioridad fundamental. Esta política describe cómo recopilamos, usamos, almacenamos y protegemos tu información cuando utilizas nuestra plataforma de mensajería, difusión de catálogos y servicios de emprendimiento.
                                 </p>
                                 <ul className="mt-2 space-y-1.5 list-none">
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">•</span>
-                                    <span><strong className="text-slate-700">Información que recopilamos:</strong> Nombre, número telefónico, URL de avatar, identificador único de RED ON, datos de uso de la aplicación (chats, flyers creados, estados vistos) e información del dispositivo para garantizar la seguridad de la sesión.</span>
+                                    <span><strong className="text-slate-700">Información que recopilamos:</strong> Nombre, número telefónico, URL de avatar, identificador único de Wepa, datos de uso de la aplicación (chats, flyers creados, estados vistos) e información del dispositivo para garantizar la seguridad de la sesión.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">•</span>
@@ -4302,11 +4438,11 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">•</span>
-                                    <span><strong className="text-slate-700">Compartición con terceros:</strong> RED ON no vende, alquila ni comparte tu información personal con terceros con fines comerciales. Podemos divulgar información cuando la ley lo exija o para proteger la integridad de la plataforma y la seguridad de nuestros usuarios.</span>
+                                    <span><strong className="text-slate-700">Compartición con terceros:</strong> Wepa no vende, alquila ni comparte tu información personal con terceros con fines comerciales. Podemos divulgar información cuando la ley lo exija o para proteger la integridad de la plataforma y la seguridad de nuestros usuarios.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">•</span>
-                                    <span><strong className="text-slate-700">Privacidad de número:</strong> La función de ocultación de número (ID de RED ON) reemplaza tu línea telefónica real por un identificador público, protegiendo tu privacidad frente a contactos desconocidos en difusiones comerciales y canales públicos.</span>
+                                    <span><strong className="text-slate-700">Privacidad de número:</strong> La función de ocultación de número (ID de Wepa) reemplaza tu línea telefónica real por un identificador público, protegiendo tu privacidad frente a contactos desconocidos en difusiones comerciales y canales públicos.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">•</span>
@@ -4324,12 +4460,12 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               <div className="border-t border-slate-100 pt-3.5">
                                 <h5 className="font-black text-slate-800 text-[11px] tracking-tight">Términos de Servicio</h5>
                                 <p className="text-slate-500 mt-1.5 leading-relaxed">
-                                  Al acceder o utilizar <strong className="text-slate-700">RED ON</strong> (la "Plataforma"), aceptas cumplir con estos Términos de Servicio. Si no estás de acuerdo con alguna parte de los términos, no podrás usar la Plataforma.
+                                  Al acceder o utilizar <strong className="text-slate-700">Wepa</strong> (la "Plataforma"), aceptas cumplir con estos Términos de Servicio. Si no estás de acuerdo con alguna parte de los términos, no podrás usar la Plataforma.
                                 </p>
                                 <ul className="mt-2 space-y-1.5 list-none">
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">1.</span>
-                                    <span><strong className="text-slate-700">Aceptación de los términos:</strong> Al registrarte y usar RED ON, confirmas que eres mayor de 13 años (o la edad de consentimiento digital en tu país) y que aceptas estar legalmente vinculado por estos términos.</span>
+                                    <span><strong className="text-slate-700">Aceptación de los términos:</strong> Al registrarte y usar Wepa, confirmas que eres mayor de 13 años (o la edad de consentimiento digital en tu país) y que aceptas estar legalmente vinculado por estos términos.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">2.</span>
@@ -4337,27 +4473,27 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">3.</span>
-                                    <span><strong className="text-slate-700">Contenido generado por el usuario:</strong> Eres el único responsable de los mensajes, flyers, estados y cualquier contenido que publiques en RED ON. Al publicar, otorgas a la Plataforma una licencia limitada para almacenar y mostrar dicho contenido dentro de la aplicación. Conservas todos los derechos de propiedad intelectual sobre tu contenido.</span>
+                                    <span><strong className="text-slate-700">Contenido generado por el usuario:</strong> Eres el único responsable de los mensajes, flyers, estados y cualquier contenido que publiques en Wepa. Al publicar, otorgas a la Plataforma una licencia limitada para almacenar y mostrar dicho contenido dentro de la aplicación. Conservas todos los derechos de propiedad intelectual sobre tu contenido.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">4.</span>
-                                    <span><strong className="text-slate-700">Flyers y catálogos comerciales:</strong> Los emprendedores pueden crear y difundir flyers digitales. RED ON no garantiza resultados comerciales ni se hace responsable por transacciones realizadas fuera de la plataforma. Los flyers deben cumplir con las leyes de publicidad del país de origen del usuario.</span>
+                                    <span><strong className="text-slate-700">Flyers y catálogos comerciales:</strong> Los emprendedores pueden crear y difundir flyers digitales. Wepa no garantiza resultados comerciales ni se hace responsable por transacciones realizadas fuera de la plataforma. Los flyers deben cumplir con las leyes de publicidad del país de origen del usuario.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">5.</span>
-                                    <span><strong className="text-slate-700">Moderación y suspensión:</strong> RED ON se reserva el derecho de revisar, eliminar o suspender cualquier cuenta o contenido que infrinja estos términos, sin previo aviso y sin responsabilidad. Las decisiones de moderación son definitivas y vinculantes.</span>
+                                    <span><strong className="text-slate-700">Moderación y suspensión:</strong> Wepa se reserva el derecho de revisar, eliminar o suspender cualquier cuenta o contenido que infrinja estos términos, sin previo aviso y sin responsabilidad. Las decisiones de moderación son definitivas y vinculantes.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">6.</span>
-                                    <span><strong className="text-slate-700">Copias de seguridad:</strong> La función de copia de seguridad en la nube se proporciona "tal cual". RED ON no se hace responsable por la pérdida de datos debido a errores del servicio, eliminación accidental o modificaciones realizadas por el usuario. Recomendamos mantener copias locales periódicas.</span>
+                                    <span><strong className="text-slate-700">Copias de seguridad:</strong> La función de copia de seguridad en la nube se proporciona "tal cual". Wepa no se hace responsable por la pérdida de datos debido a errores del servicio, eliminación accidental o modificaciones realizadas por el usuario. Recomendamos mantener copias locales periódicas.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">7.</span>
-                                    <span><strong className="text-slate-700">Limitación de responsabilidad:</strong> RED ON no será responsable por daños indirectos, incidentales, especiales o consecuentes derivados del uso o la imposibilidad de uso de la Plataforma, incluyendo pérdida de datos, oportunidades comerciales o lucro cesante.</span>
+                                    <span><strong className="text-slate-700">Limitación de responsabilidad:</strong> Wepa no será responsable por daños indirectos, incidentales, especiales o consecuentes derivados del uso o la imposibilidad de uso de la Plataforma, incluyendo pérdida de datos, oportunidades comerciales o lucro cesante.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">8.</span>
-                                    <span><strong className="text-slate-700">Modificaciones:</strong> Nos reservamos el derecho de modificar estos términos en cualquier momento. Los cambios serán notificados dentro de la aplicación y entrarán en vigor 15 días después de su publicación. El uso continuado de RED ON después de ese período constituye la aceptación de los nuevos términos.</span>
+                                    <span><strong className="text-slate-700">Modificaciones:</strong> Nos reservamos el derecho de modificar estos términos en cualquier momento. Los cambios serán notificados dentro de la aplicación y entrarán en vigor 15 días después de su publicación. El uso continuado de Wepa después de ese período constituye la aceptación de los nuevos términos.</span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">9.</span>
@@ -4365,7 +4501,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">10.</span>
-                                    <span><strong className="text-slate-700">Contacto legal:</strong> Para consultas sobre estos términos, puedes escribir a legal@redon.app. Para soporte técnico general, utiliza la función "Soporte RED ON" disponible en la sección de Ayuda dentro de la aplicación.</span>
+                                    <span><strong className="text-slate-700">Contacto legal:</strong> Para consultas sobre estos términos, puedes escribir a legal@redon.app. Para soporte técnico general, utiliza la función "Soporte Wepa" disponible en la sección de Ayuda dentro de la aplicación.</span>
                                   </li>
                                 </ul>
                                 <p className="text-slate-400 mt-2 text-[7.5px] italic">Última actualización: Julio 2026.</p>

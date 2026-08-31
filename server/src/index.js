@@ -90,6 +90,15 @@ async function main() {
     message: { error: 'Demasiadas solicitudes. Intenta de nuevo en unos minutos.' },
   });
 
+  // Webhook rate limiter (Supabase Database Webhooks → server-to-server)
+  const webhookLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Webhook rate limit exceeded' },
+  });
+
   // Strict rate limiter for auth endpoints (brute-force protection)
   const strictLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -115,10 +124,10 @@ async function main() {
   app.use('/api/turn', globalLimiter, turnRoutes);
   app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);
 
-  // FCM: webhook is public (authenticated via secret header)
-  // FCM: register/send require JWT auth
+  // FCM: webhook uses webhookLimiter (no JWT auth — Supabase server-to-server)
+  // FCM: register/send require JWT auth + globalLimiter
   app.use('/api/fcm', (req, res, next) => {
-    if (req.path === '/webhook') return next();
+    if (req.path === '/webhook') return webhookLimiter(req, res, next);
     globalLimiter(req, res, next);
   }, (req, res, next) => {
     if (req.path === '/webhook') return next();

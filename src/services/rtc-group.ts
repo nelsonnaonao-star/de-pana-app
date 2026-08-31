@@ -31,6 +31,19 @@ export class WebRTCGroupService {
   private iceServers: RTCConfiguration["iceServers"] | null = null;
   private subscribed = false;
   private currentFacingMode: "user" | "environment" = "user";
+  // Presencia periódica: el announceJoin es un broadcast EFIMERO (ack:false,
+  // sin replay). Un solo envío se pierde si el otro lado no está suscrito en
+  // ese instante. Por eso TODOS los participantes (el que llega y los que ya
+  // están) re-anuncian su presencia cada announceIntervalMs MIENTRAS la sala
+  // esté activa: la ventana de oportunidad deja de ser ~8s y pasa a ser toda
+  // la duración de la llamada. Se detiene en cleanup().
+  private announceTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly announceIntervalMs = 3500;
+  private pendingIce: Map<string, { candidates: RTCIceCandidateInit[]; expiresAt: number }> = new Map();
+  // Creación en vuelo por peerId: garantiza UNA sola PeerConnection por
+  // (roomId + peerId). Solo el primer llamador inicia fetchIceServers()/new PC;
+  // los llamadores concurrentes esperan exactamente esta misma Promise.
+  private pendingPeerCreations: Map<string, Promise<RTCPeerConnection | null>> = new Map();
 
   onRemoteStream: ((userId: string, stream: MediaStream) => void) | null = null;
   onParticipantJoined: ((userId: string) => void) | null = null;
@@ -89,10 +102,15 @@ export class WebRTCGroupService {
       console.log(`[GJOIN] rx signal type=${signal.type} from=${signal.from.slice(0, 8)} to=${signal.to ? signal.to.slice(0, 8) : "-"} peers=${this.peerConns.size}`);
 
       switch (signal.type) {
-        case "join":
-          console.log(`[GJOIN] JOIN handler from=${signal.from.slice(0, 8)} existingPC=${this.peerConns.has(signal.from)}`);
-          await this.createPeerConnection(signal.from);
+        case "join": {
+          // Anti-glare determinista por par: el uid lexicográficamente MENOR
+          // genera el offer; el mayor espera y responde. Evita ofertas cruzadas
+          // (crítico en la transición A-B y con C).
+          const iAmOfferer = this.userId < signal.from;
+          console.log(`[GJOIN] JOIN handler from=${signal.from.slice(0, 8)} existingPC=${this.peerConns.has(signal.from)} iAmOfferer=${iAmOfferer}`);
+          await this.createPeerConnection(signal.from, iAmOfferer);
           break;
+        }
         case "offer":
           if (signal.to && signal.to !== this.userId) return;
           await this.receiveOffer(signal.from, signal.sdp!);
@@ -171,12 +189,81 @@ export class WebRTCGroupService {
     this.onReady?.();
   }
 
+  // El join broadcast es efímero (el oyente puede no estar suscrito aún, p.ej.
+  // C aceptando antes de que A/B hayan entrado al canal). En vez de rendirse
+  // tras N intentos en ~8s, Lanza un bucle PERIODICO de presencia que sigue
+  // re-anunciando el join durante TODA la llamada: el que se une lo anuncia,
+  // pero los que YA están también re-anuncian que siguen ahí. Así, aunque el
+  // anuncio inicial del recién llegado se pierda, uno de los ya conectados lo
+  // alcanza en su siguiente tick (y viceversa).
+  async announceJoinUntilConnected(opts?: { intervalMs?: number }): Promise<void> {
+    this.startAnnounceLoop(opts?.intervalMs);
+  }
+
+  startAnnounceLoop(intervalMs?: number): void {
+    const interval = intervalMs ?? this.announceIntervalMs;
+    if (this.announceTimer || !this.subscribed || !this.channel) return;
+    const tick = async () => {
+      if (!this.subscribed || !this.channel) return;
+      try {
+        await this.announceJoin();
+      } catch (err) {
+        console.warn("[RTCGroup] periodic announce failed:", err);
+      }
+    };
+    void tick();
+    this.announceTimer = setInterval(tick, interval);
+  }
+
+  hasParticipant(userId: string): boolean {
+    return this.peerConns.has(userId);
+  }
+
+  // Única puerta de creación de PC por peer. Usa pendingPeerCreations para
+  // que varios JOIN/OFFER concurrentes NO creen PCs duplicadas: la primera
+  // llamada lanza la creación, el resto espera esa misma Promise.
   private async createPeerConnection(peerId: string, sendOffer = true): Promise<RTCPeerConnection | null> {
+    // 1) Ya creada y guardada → devolver la existente.
     const existing = this.peerConns.get(peerId);
     if (existing) {
-      console.log(`[GJOIN] PC exists for ${peerId.slice(0, 8)} — reuse (sendOffer=${sendOffer})`);
+      console.log(`[MESH-PC] existing reused peer=${peerId.slice(0, 8)} sendOffer=${sendOffer}`);
       return existing;
     }
+
+    // 2) Creación en curso para ese peer → esperar exactamente esa misma Promise.
+    const pending = this.pendingPeerCreations.get(peerId);
+    if (pending) {
+      console.log(`[MESH-PC] pending creation reused peer=${peerId.slice(0, 8)} sendOffer=${sendOffer}`);
+      try {
+        return await pending;
+      } catch (err) {
+        console.error(`[MESH-PC] creation failed (pending wait) peer=${peerId.slice(0, 8)}:`, err);
+        return null;
+      }
+    }
+
+    // 3) Solo la primera llamada inicia fetchIceServers() y crea la PC.
+    console.log(`[MESH-PC] create requested peer=${peerId.slice(0, 8)} sendOffer=${sendOffer}`);
+    const creation = this.buildPeerConnection(peerId, sendOffer);
+    this.pendingPeerCreations.set(peerId, creation);
+
+    try {
+      const pc = await creation;
+      if (pc) console.log(`[MESH-PC] creation completed peer=${peerId.slice(0, 8)}`);
+      return pc;
+    } catch (err) {
+      // 6) Falla: limpiar el pending entry y permitir un nuevo intento posterior.
+      console.error(`[MESH-PC] creation failed peer=${peerId.slice(0, 8)}:`, err);
+      return null;
+    } finally {
+      // 5) Al terminar (bien o mal), eliminar el registro de creación pendiente.
+      this.pendingPeerCreations.delete(peerId);
+    }
+  }
+
+  // Construcción real de la PC (solo la ejecuta el primer llamador).
+  // La PC se guarda en peerConns SOLO aquí, una única vez por peer.
+  private async buildPeerConnection(peerId: string, sendOffer: boolean): Promise<RTCPeerConnection> {
     if (!sendOffer) console.log(`[GJOIN] PC create for ${peerId.slice(0, 8)} (answerer, no offer)`);
 
     const servers = await this.fetchIceServers();
@@ -264,16 +351,20 @@ export class WebRTCGroupService {
 
   private async receiveOffer(from: string, sdp: string): Promise<void> {
     console.log(`[GJOIN] offer RX from=${from.slice(0, 8)} existingPC=${this.peerConns.has(from)}`);
-    let pc = this.peerConns.get(from);
-    if (!pc) {
-      await this.createPeerConnection(from, false);
-      pc = this.peerConns.get(from);
-      if (!pc) return;
+    let pc = await this.createPeerConnection(from, false);
+    if (!pc) return;
+
+    // Idempotencia: si la PC ya aplicó un remote description (offer anterior),
+    // es un offer duplicado (broadcast re-entregado / PCs duplicadas del orígen).
+    if (pc.currentRemoteDescription) {
+      console.log(`[MESH-PC] duplicate offer ignored peer=${from.slice(0, 8)}`);
+      return;
     }
 
     try {
       const offer = JSON.parse(sdp) as RTCSessionDescriptionInit;
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await this.flushPendingIceCandidates(from);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       await this.sendSignal({
@@ -295,22 +386,57 @@ export class WebRTCGroupService {
       console.warn("[RTCGroup] receiveAnswer: no PC for", from);
       return;
     }
+    // Idempotencia: la PC ya tiene remote description (answer aplicado antes).
+    if (pc.currentRemoteDescription) {
+      console.log(`[MESH-PC] duplicate answer ignored peer=${from.slice(0, 8)}`);
+      return;
+    }
     try {
       const answer = JSON.parse(sdp) as RTCSessionDescriptionInit;
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      await this.flushPendingIceCandidates(from);
     } catch (err) {
       console.error("[RTCGroup] receiveAnswer error:", err);
     }
   }
 
+  // Los ICE candidates pueden llegar antes de que exista la PC (o antes del
+  // remote description). Se guardan por `from` y se aplican apenas la PC esté
+  // en condiciones — no se descartan silenciosamente por timing.
+  private bufferIceCandidate(peerId: string, candidate: RTCIceCandidateInit) {
+    const now = Date.now();
+    const entry = this.pendingIce.get(peerId);
+    if (entry && entry.expiresAt > now) {
+      if (entry.candidates.length >= 60) return;
+      entry.candidates.push(candidate);
+    } else {
+      this.pendingIce.set(peerId, { candidates: [candidate], expiresAt: now + 45000 });
+    }
+  }
+
+  private async flushPendingIceCandidates(peerId: string) {
+    const entry = this.pendingIce.get(peerId);
+    if (!entry) return;
+    const pc = this.peerConns.get(peerId);
+    if (!pc || !pc.currentRemoteDescription) return;
+    for (const c of entry.candidates) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (err) {
+        console.warn("[RTCGroup] buffered ICE apply failed:", err);
+      }
+    }
+    this.pendingIce.delete(peerId);
+  }
+
   private async addIceCandidate(from: string, candidate: string, sdpMid: string | null, sdpMLineIndex: number | null) {
+    const init: RTCIceCandidateInit = { candidate, sdpMid, sdpMLineIndex };
     const pc = this.peerConns.get(from);
-    if (!pc) {
-      console.warn(`[GJOIN] ICE RX DROPPED from=${from.slice(0, 8)} — no PC (peers=${[...this.peerConns.keys()].map(k => k.slice(0, 8)).join(",")})`);
+    if (!pc || !pc.currentRemoteDescription) {
+      console.warn(`[GJOIN] ICE RX buffered from=${from.slice(0, 8)} pc=${!!pc} hasRemote=${!!pc?.currentRemoteDescription} (peers=${[...this.peerConns.keys()].map(k => k.slice(0, 8)).join(",")})`);
+      this.bufferIceCandidate(from, init);
       return;
     }
     try {
-      await pc.addIceCandidate(new RTCIceCandidate({ candidate, sdpMid, sdpMLineIndex }));
+      await pc.addIceCandidate(new RTCIceCandidate(init));
     } catch (err) {
       console.error("[RTCGroup] addIceCandidate error:", err);
     }
@@ -322,6 +448,8 @@ export class WebRTCGroupService {
       pc.close();
       this.peerConns.delete(peerId);
     }
+    this.pendingIce.delete(peerId);
+    this.pendingPeerCreations.delete(peerId);
   }
 
   private removeRemoteStream(peerId: string) {
@@ -512,6 +640,10 @@ export class WebRTCGroupService {
   }
 
   cleanup() {
+    if (this.announceTimer) {
+      clearInterval(this.announceTimer);
+      this.announceTimer = null;
+    }
     this.stopFilterPipeline();
     this.rawVideoTrack = null;
     this.activeFilterCss = "";
@@ -522,6 +654,8 @@ export class WebRTCGroupService {
     });
     this.peerConns.clear();
     this.remoteStreams.clear();
+    this.pendingIce.clear();
+    this.pendingPeerCreations.clear();
     this.subscribed = false;
     this.channel?.unsubscribe();
     this.channel = null;

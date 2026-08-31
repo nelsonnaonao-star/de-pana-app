@@ -11,6 +11,7 @@ export type Call = {
   ended_at?: string;
   duration: number;
   chat_id?: string;
+  room_id?: string;
 };
 
 export async function getCalls(userId: string): Promise<Call[]> {
@@ -49,6 +50,10 @@ export async function startCall(call: Partial<Call>): Promise<Call> {
       started_at: new Date().toISOString(),
       duration: 0,
       chat_id: call.chat_id || null,
+      // FASE B: solo se manda room_id en invitaciones/transiciones grupales.
+      // Un 1:1 normal omite la columna -> no depende de que la migración esté
+      // aplicada y no cambia la clasificación.
+      ...(call.room_id ? { room_id: call.room_id } : {}),
     })
     .select()
     .single();
@@ -71,6 +76,31 @@ export async function updateCallRating(callId: string, rating: number) {
     .update({ rating })
     .eq("id", callId);
   if (error) throw error;
+}
+
+// Sesiones más viejas que esto y aún en ringing/accepted/ongoing donde EL
+// USUARIO es caller o callee se consideran obsoletas (un ring válido dura
+// RING_TTL_MS ~60s; cualquier "sesión" anterior a este umbral y sin session id
+// propio ya no puede pertenecer a la llamada actual).
+const OBSOLETE_CALL_AGE_MS = 120000;
+
+export async function expireObsoleteCallRows(userId: string, chatId?: string, currentCallId?: string) {
+  if (!chatId) return;
+  const threshold = new Date(Date.now() - OBSOLETE_CALL_AGE_MS).toISOString();
+  let query = supabase
+    .from("calls")
+    .update({ status: "ended", ended_at: new Date().toISOString() })
+    .eq("chat_id", chatId)
+    .in("status", ["ringing", "accepted", "ongoing"])
+    .lt("started_at", threshold)
+    .or(`caller_id.eq.${userId},callee_id.eq.${userId}`);
+  if (currentCallId) {
+    query = query.neq("id", currentCallId);
+  }
+  const { error } = await query;
+  if (error) {
+    console.warn("[CALLS] expireObsoleteCallRows failed:", error.message);
+  }
 }
 
 export async function endCall(callId: string) {

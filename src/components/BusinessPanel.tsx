@@ -378,7 +378,7 @@ export default function BusinessPanel({
   // Click on "Chatear con el negocio"
   const handleChatAction = (flyer: BusinessFlyer) => {
     onIncrementClick(flyer.id);
-    const initialText = `¡Hola! Me interesó tu anuncio en Red On Negocios: "${flyer.isGenerated ? flyer.productName : flyer.businessName}". ¿Está disponible?`;
+    const initialText = `¡Hola! Me interesó tu anuncio en Wepa Negocios: "${flyer.isGenerated ? flyer.productName : flyer.businessName}". ¿Está disponible?`;
     onStartBusinessChat(flyer.businessName, flyer.flyerUrl || flyer.ownerAvatar, initialText, flyer.id, flyer.contactPhone || "");
   };
 
@@ -460,7 +460,7 @@ export default function BusinessPanel({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <Compass className="w-4 h-4 text-teal-300" />
-            <h3 className="text-xs font-black tracking-tight">Red On Negocios</h3>
+            <h3 className="text-xs font-black tracking-tight">Wepa Negocios</h3>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="text-[8px] bg-emerald-500 text-white font-bold px-2 py-0.5 rounded-full uppercase tracking-wider animate-pulse">
@@ -1257,7 +1257,7 @@ export default function BusinessPanel({
               <Check className="w-8 h-8 text-emerald-500" />
             </div>
             <h3 className="text-lg font-black text-slate-900">Publicación Exitosa</h3>
-            <p className="text-xs text-slate-500">Tu flyer ya está visible en Red On Negocios</p>
+            <p className="text-xs text-slate-500">Tu flyer ya está visible en Wepa Negocios</p>
           </div>
         </div>
       )}

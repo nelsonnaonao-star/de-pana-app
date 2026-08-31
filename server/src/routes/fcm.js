@@ -216,6 +216,17 @@ router.post('/webhook', async (req, res) => {
     return res.status(200).json({ ok: true, ignored: 'invalid shape' });
   }
 
+  // Whitelist: only allow known type/table combinations from Supabase Database Webhooks
+  const allowedWebhookEvents = [
+    { type: 'INSERT', table: 'messages' },
+    { type: 'INSERT', table: 'calls' },
+    { type: 'UPDATE', table: 'calls' },
+    { type: 'INSERT', table: 'chat_participants' },
+  ];
+  if (!allowedWebhookEvents.some(e => e.type === type && e.table === table)) {
+    return res.status(200).json({ ok: true, ignored: 'unexpected type/table' });
+  }
+
   if (!supabase) {
     return res.status(200).json({ ok: false, error: 'Supabase not configured' });
   }
@@ -420,7 +431,7 @@ router.post('/webhook', async (req, res) => {
     return res.json({ ok: true });
 
   } else if (table === 'calls') {
-    const { id: recordId, chat_id, caller_id, callee_id, call_type } = record;
+    const { id: recordId, chat_id, caller_id, callee_id, call_type, room_id } = record;
 
     if (type === 'UPDATE') {
       const oldStatus = old_record?.status;
@@ -512,6 +523,7 @@ router.post('/webhook', async (req, res) => {
                 callerId: caller_id, callerName,
                 callType: call_type || 'audio',
                 callId: recordId,
+                roomId: room_id || '',
               },
               android: {
                 priority: 'high', ttl: 86400000,
@@ -529,7 +541,7 @@ router.post('/webhook', async (req, res) => {
           const subscription = JSON.parse(t.token);
           await webpush.sendNotification(subscription, JSON.stringify({
             title: callerName, body: 'Llamada entrante...',
-            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callType: call_type || 'audio', callId: recordId },
+            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callType: call_type || 'audio', callId: recordId, roomId: room_id || '' },
             icon: '/icon.png', badge: '/badge.png', requireInteraction: true,
           }));
           results.web++;
