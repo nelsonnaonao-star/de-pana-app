@@ -54,26 +54,44 @@ export async function getChats(userId: string): Promise<Chat[]> {
 
   let deduped = Array.from(seen.values());
 
-  // Override 1:1 chat names with the partner's profile name
+  // Override 1:1 chat names: contacts.name → profiles.name → chats.name
   const partnerIds = deduped
     .filter(c => !c.is_group && c.profile_id && c.admin_id)
     .map(c => (c.profile_id === userId ? c.admin_id! : c.profile_id!));
   if (partnerIds.length > 0) {
+    const contactsResult = await supabase
+      .from("contacts")
+      .select("contact_user_id, name")
+      .eq("user_id", userId)
+      .in("contact_user_id", partnerIds);
+    const contactMap = new Map<string, string>();
+    if (contactsResult.data) {
+      for (const c of contactsResult.data) {
+        if (c.contact_user_id && c.name) {
+          contactMap.set(c.contact_user_id, c.name);
+        }
+      }
+    }
+
     const { data: profiles } = await supabase
       .from("profiles")
       .select("id, name, avatar, avatar_url, status")
       .in("id", partnerIds);
-    if (profiles) {
-      const partnerMap = new Map(profiles.map(p => [p.id, { name: p.name, avatar: p.avatar, avatar_url: p.avatar_url, status: p.status }]));
-      deduped = deduped.map(chat => {
-        const partnerId = chat.profile_id === userId ? chat.admin_id : chat.profile_id;
-        if (!chat.is_group && partnerId && partnerMap.has(partnerId)) {
-          const p = partnerMap.get(partnerId)!;
-          return { ...chat, name: p.name, avatar: p.avatar || p.avatar_url || "", is_online: p.status === "online" };
-        }
-        return chat;
-      });
-    }
+    const partnerMap = new Map(
+      (profiles ?? []).map(p => [p.id, { name: p.name, avatar: p.avatar, avatar_url: p.avatar_url, status: p.status }])
+    );
+    deduped = deduped.map(chat => {
+      const partnerId = chat.profile_id === userId ? chat.admin_id : chat.profile_id;
+      if (chat.is_group || !partnerId) return chat;
+      const savedName = contactMap.get(partnerId);
+      const profile = partnerMap.get(partnerId);
+      const finalName = savedName || profile?.name || chat.name;
+      return {
+        ...chat,
+        name: finalName,
+        ...(profile ? { avatar: profile.avatar || profile.avatar_url || "", is_online: profile.status === "online" } : {}),
+      };
+    });
   }
 
   return deduped;
