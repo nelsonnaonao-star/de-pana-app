@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useRef, useMemo, ReactNode } from "react";
+import React, { createContext, useContext, useEffect, useState, useRef, useMemo, useCallback, ReactNode } from "react";
 import { Network } from "@capacitor/network";
 import { App as CapacitorApp } from "@capacitor/app";
 
@@ -121,6 +121,7 @@ interface SupabaseContextType {
   refreshChats: () => Promise<void>;
   refreshContacts: (allowEmpty?: boolean) => Promise<void>;
   refreshCalls: () => Promise<void>;
+  removeChatFromContext: (chatId: string) => void;
   logout: () => Promise<void>;
 }
 
@@ -1072,6 +1073,15 @@ const refreshChats = async () => {
     chatRepo.saveChats(user.id, withMessages);
   };
 
+  const removeChatFromContext = useCallback((chatId: string) => {
+    setChats(prev => prev.filter(c => c.id !== chatId));
+    if (user) {
+      chatRepo.getChats(user.id).then(cached => {
+        chatRepo.saveChats(user.id, cached.filter(c => c.id !== chatId));
+      }).catch(() => {});
+    }
+  }, [user]);
+
   const refreshContacts = async (allowEmpty = false) => {
     if (!user) return;
     let cont = await getContacts(user.id);
@@ -1163,8 +1173,9 @@ const refreshChats = async () => {
     refreshChats,
     refreshContacts,
     refreshCalls,
+    removeChatFromContext,
     logout,
-  }), [user, profile, loading, chats, contacts, calls, passwordRecovery, completePasswordReset, refreshProfile, refreshChats, refreshContacts, refreshCalls, logout]);
+  }), [user, profile, loading, chats, contacts, calls, passwordRecovery, completePasswordReset, refreshProfile, refreshChats, refreshContacts, refreshCalls, removeChatFromContext, logout]);
 
   return (
     <SupabaseContext.Provider

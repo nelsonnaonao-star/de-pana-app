@@ -153,7 +153,7 @@ export default function PhoneSimulator({
   onSetShouldExit,
 }: PhoneSimulatorProps) {
   const animatedChatIdsRef = useRef(new Set<string>());
-  const { user, profile, contacts: appContacts, chats: supabaseChats, loading, refreshChats, refreshContacts, refreshProfile, logout } = useSupabase();
+  const { user, profile, contacts: appContacts, chats: supabaseChats, loading, refreshChats, refreshContacts, refreshProfile, removeChatFromContext, logout } = useSupabase();
 
   // Deduplicate contacts by contact_user_id (prefer entry with phone) or by name+phone
   const dedupedContacts = useMemo(() => {
@@ -2467,6 +2467,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     if (user?.id && !chatId.startsWith("chat_biz_") && !chatId.startsWith("chat_state_")) {
       try {
         await apiDeleteChat(chatId, user.id);
+        removeChatFromContext(chatId);
         deletedChatIdsRef.current.add(chatId);
         setChats(prev => prev.filter(c => c.id !== chatId));
         if (selectedChatId === chatId) {
@@ -2973,6 +2974,7 @@ try {
                 readReceipts={doubleCheck}
                 onForwardMessage={setForwardingMessage}
                 onChatDeleted={(chatId) => {
+                  removeChatFromContext(chatId);
                   deletedChatIdsRef.current.add(chatId);
                   setChats(prev => prev.filter(c => c.id !== chatId));
                   setSelectedChatId(null);
