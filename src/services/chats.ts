@@ -89,7 +89,9 @@ export async function getChats(userId: string): Promise<Chat[]> {
       return {
         ...chat,
         name: finalName,
-        ...(profile ? { avatar: profile.avatar || profile.avatar_url || "", is_online: profile.status === "online" } : {}),
+        ...(profile
+          ? { avatar: profile.avatar || profile.avatar_url || chat.avatar || "", is_online: profile.status === "online" }
+          : { avatar: chat.avatar || "" }),
       };
     });
   }
@@ -114,6 +116,7 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
       .from("chats")
       .select("*")
       .eq("is_group", false)
+      .is("deleted_at", null)
       .or(
         `and(profile_id.eq.${chat.profile_id},admin_id.eq.${chat.admin_id}),and(profile_id.eq.${chat.admin_id},admin_id.eq.${chat.profile_id})`
       )
@@ -164,24 +167,34 @@ export async function createChat(chat: Partial<Chat>): Promise<Chat> {
 }
 
 export async function deleteChat(chatId: string, userId: string) {
+  console.log("[DELETE-CHAT] Starting delete", { chatId, userId });
   try {
     const { authFetch, apiUrl } = await import("../lib/api");
-    const res = await authFetch(apiUrl(`/api/data/chats/${chatId}?userId=${userId}`), {
-      method: "DELETE",
-    });
+    const url = apiUrl(`/api/data/chats/${chatId}?userId=${userId}`);
+    console.log("[DELETE-CHAT] Calling server", { url, method: "DELETE" });
+    const res = await authFetch(url, { method: "DELETE" });
+    console.log("[DELETE-CHAT] Server response", { status: res.status, ok: res.ok });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || "Error al eliminar chat");
+      const errBody = await res.json().catch(() => ({ error: res.statusText }));
+      console.error("[DELETE-CHAT] Server error body", errBody);
+      throw new Error(errBody.error || "Error al eliminar chat");
     }
-    return res.json();
+    const result = await res.json();
+    console.log("[DELETE-CHAT] Server success", result);
+    return result;
   } catch (serverErr) {
-    logger.warn("[CHAT] Server delete failed, falling back to Supabase", { error: serverErr });
+    console.warn("[DELETE-CHAT] Server delete failed, falling back to Supabase", { error: serverErr });
     const { error } = await supabase
-      .from("chats")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", chatId);
-    if (error) throw error;
-    await supabase.from("chat_participants").delete().eq("chat_id", chatId);
+      .from("chat_clears")
+      .upsert(
+        { user_id: userId, chat_id: chatId, hidden: true, cleared_at: new Date().toISOString() },
+        { onConflict: "chat_id,user_id" }
+      );
+    if (error) {
+      console.error("[DELETE-CHAT] Supabase fallback also failed", { error });
+      throw error;
+    }
+    console.log("[DELETE-CHAT] Supabase fallback success");
     return { success: true };
   }
 }

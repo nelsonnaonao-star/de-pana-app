@@ -42,17 +42,15 @@ async function isChatMember(chatId, userId) {
   if (!chat) return false;
   if (chat.profile_id === userId || chat.admin_id === userId) return true;
 
-  if (chat.is_group) {
-    const { data: participant } = await supabaseAdmin
-      .from('chat_participants')
-      .select('profile_id')
-      .eq('chat_id', chatId)
-      .eq('profile_id', userId)
-      .maybeSingle();
-    return !!participant;
-  }
-
-  return false;
+  // Also check chat_participants (covers cases where the user is a participant
+  // but not directly in profile_id/admin_id columns, e.g. chats created via RPC)
+  const { data: participant } = await supabaseAdmin
+    .from('chat_participants')
+    .select('profile_id')
+    .eq('chat_id', chatId)
+    .eq('profile_id', userId)
+    .maybeSingle();
+  return !!participant;
 }
 
 async function sendPushToChat(chatId, senderId, senderName, text) {
@@ -295,7 +293,6 @@ router.post('/send', sendLimiter, async (req, res) => {
           last_message: sanitizedText || 'Multimedia',
           last_message_time: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-          deleted_at: null,
         })
         .eq('id', msg.chat_id);
     } catch (e) {

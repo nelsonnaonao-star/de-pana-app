@@ -805,6 +805,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
                 return prev;
               }
               logger.info("[SUPABASE] Prepending chat to list", { chatId });
+              // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
+              console.log("[NAME RESOLUTION - PARTICIPANT INSERT]", JSON.stringify({
+                chatId: (chatData as any).id,
+                rawChatName: (chatData as any).name,
+                profileId: (chatData as any).profile_id,
+                adminId: (chatData as any).admin_id,
+              }));
+              // ═══════════════ FIN TEMPORAL LOG ═══════════════
               return [chatData as Chat, ...prev];
             });
 
@@ -876,6 +884,21 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         // Refresh chats when user returns to the tab
         getChats(userId).then(fresh => {
           if (!fresh) return;
+          // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
+          for (const fc of fresh) {
+            if (!fc.is_group) {
+              const prevChat = chatsRef.current.find(c => c.id === fc.id);
+              console.log("[NAME RESOLUTION - VISIBILITY CHANGE]", JSON.stringify({
+                chatId: fc.id,
+                freshName: fc.name,
+                previousName: prevChat?.name || null,
+                profileId: fc.profile_id,
+                adminId: fc.admin_id,
+                nameChanged: prevChat && prevChat.name !== fc.name,
+              }));
+            }
+          }
+          // ═══════════════ FIN TEMPORAL LOG ═══════════════
           setChats(prev => {
             const merged = new Map<string, Chat>();
             for (const c of fresh) merged.set(c.id, c);
@@ -1053,15 +1076,13 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 const refreshChats = async () => {
     if (!user) return;
     const ch = await getChats(user.id);
-    // Con la red inestable un fetch puede devolver vacío por error temporal:
-    // nunca vaciar un chat-list/caché que ya tiene datos.
-    const wipeGuard = ch.length === 0 && chatsRef.current.length > 0;
-    if (wipeGuard) {
-      logger.warn("[SUPABASE] refreshChats returned empty — keeping cached chats");
-      return;
-    }
-    // Reconciliar: conserva los `messages` locales/pendientes del chat que se
-    // está viendo — el servidor no devuelve ese array.
+    // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
+    console.log("[NAME RESOLUTION - REFRESHCHATS]", JSON.stringify({
+      trigger: new Error().stack?.split("\n")[2]?.trim()?.slice(0, 80) || "unknown",
+      chatsReturned: ch.length,
+      chatNames: ch.filter(c => !c.is_group).map(c => ({ id: c.id, name: c.name, profile_id: c.profile_id, admin_id: c.admin_id })),
+    }));
+    // ═══════════════ FIN TEMPORAL LOG ═══════════════
     const withMessages = ch.map((fresh) => {
       const prev = chatsRef.current.find((p) => p.id === fresh.id) as (Chat & { messages?: unknown[] }) | undefined;
       if (Array.isArray(prev?.messages) && prev.messages.length > 0) {

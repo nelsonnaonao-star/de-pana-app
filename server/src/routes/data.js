@@ -303,6 +303,7 @@ router.delete('/chats/:chatId', async (req, res) => {
   try {
     const { chatId } = req.params;
     const userId = req.userId;
+    console.log('[DELETE-CHAT-SERVER] Request received', { chatId, userId, userRole: req.userRole });
     if (!chatId) return res.status(400).json({ error: 'chatId requerido' });
 
     const { data: chat, error: chatError } = await supabaseAdmin
@@ -310,27 +311,36 @@ router.delete('/chats/:chatId', async (req, res) => {
       .select('profile_id, admin_id')
       .eq('id', chatId)
       .maybeSingle();
+    console.log('[DELETE-CHAT-SERVER] Chat query result', { chat, chatError });
     if (chatError || !chat) return res.status(404).json({ error: 'Chat no encontrado' });
 
-    if (req.userId !== chat.profile_id && req.userId !== chat.admin_id && req.userRole !== 'service_role') {
-      return res.status(403).json({ error: 'No autorizado para eliminar este chat' });
+    const isDirectMember = req.userId === chat.profile_id || req.userId === chat.admin_id;
+    const isServiceRole = req.userRole === 'service_role';
+    console.log('[DELETE-CHAT-SERVER] Membership check', { isDirectMember, isServiceRole, profileId: chat.profile_id, adminId: chat.admin_id });
+
+    if (!isDirectMember && !isServiceRole) {
+      const { data: participant } = await supabaseAdmin
+        .from('chat_participants')
+        .select('profile_id')
+        .eq('chat_id', chatId)
+        .eq('profile_id', req.userId)
+        .maybeSingle();
+      console.log('[DELETE-CHAT-SERVER] Participant check result', { participant });
+      if (!participant) {
+        console.error('[DELETE-CHAT-SERVER] FORBIDDEN - user not a member', { userId, chatId });
+        return res.status(403).json({ error: 'No autorizado para eliminar este chat' });
+      }
     }
 
+    console.log('[DELETE-CHAT-SERVER] Upserting chat_clears...');
     await supabaseAdmin
-      .from('messages')
-      .update({ is_deleted: true })
-      .eq('chat_id', chatId);
+      .from('chat_clears')
+      .upsert(
+        { user_id: userId, chat_id: chatId, hidden: true, cleared_at: new Date().toISOString() },
+        { onConflict: 'chat_id,user_id' }
+      );
 
-    await supabaseAdmin
-      .from('chat_participants')
-      .delete()
-      .eq('chat_id', chatId);
-
-    await supabaseAdmin
-      .from('chats')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', chatId);
-
+    console.log('[DELETE-CHAT-SERVER] Success');
     res.json({ success: true });
   } catch (err) {
     console.error('[DATA] delete chat error:', err);
