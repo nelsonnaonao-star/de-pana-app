@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS messages (
   chat_id TEXT NOT NULL,
   sender_id TEXT,
   client_id TEXT,
+  owner_user_id TEXT,
   synced INTEGER DEFAULT 1,
   payload TEXT,
   created_at TEXT DEFAULT (datetime('now')),

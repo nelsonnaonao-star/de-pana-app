@@ -7,6 +7,10 @@ import { editMessage as apiEditMessage } from "../../messages";
 const CACHE_PREFIX = "redon_cache_msgs_";
 const MAX_CACHED = 200;
 
+// One-time cleanup flag: mark legacy messages without owner_user_id as synced
+// so they don't block the queue forever. Runs once per session.
+let legacyCleanupDone = false;
+
 // Edits encolados para mensajes cuyo temp aún no se reconcilió (se aplican en
 // reconcileTemp). Caché en memoria (fuente de verdad del proceso) + respaldo en
 // idb para sobrevivir a un reload entre medias. La caché elimina la carrera:
@@ -58,6 +62,7 @@ function toRow(msg: Message, chatId: string): Record<string, unknown> {
     chat_id: chatId,
     sender_id: msg.sender_id || msg.senderId || null,
     client_id: msg.client_id || msg.clientId || null,
+    owner_user_id: (msg as any).owner_user_id || null,
     payload: JSON.stringify(msg),
   };
 }
@@ -121,7 +126,7 @@ const INSERT_COLS = [
   "media_url","file_name","file_size","duration","reactions",
   "poll_question","poll_options","latitude","longitude","location_name",
   "status","forwarded","edited","synced","reply_to_id","reply_to_text",
-  "reply_to_sender","price","poster_url","local_video_url","chat_id","sender_id","client_id","payload",
+  "reply_to_sender","price","poster_url","local_video_url","chat_id","sender_id","client_id","owner_user_id","payload",
 ];
 
 const INSERT_PLACEHOLDERS = INSERT_COLS.map(() => "?").join(",");
@@ -218,13 +223,14 @@ export class MessageRepository {
     }
   }
 
-  async upsertMessage(chatId: string, message: Message): Promise<void> {
+  async upsertMessage(chatId: string, message: Message, ownerUserId?: string): Promise<void> {
     if (db.ready) {
       try {
+        const msgWithOwner = ownerUserId ? { ...message, owner_user_id: ownerUserId } : message;
         await db.executeSet([
           {
             statement: INSERT_SQL,
-            values: rowValues(message, chatId),
+            values: rowValues(msgWithOwner, chatId),
           },
         ]);
       } catch (e) {
@@ -234,7 +240,8 @@ export class MessageRepository {
     // Fallback local (idb): aunque SQLite no esté listo o la app se cierre
     // justo después de enviar, el mensaje no confirmado queda persistido y
     // visible al reabrir (envío en cola estilo WhatsApp).
-    await this.upsertLocal(chatId, message);
+    const msgForCache = ownerUserId ? { ...message, owner_user_id: ownerUserId } : message;
+    await this.upsertLocal(chatId, msgForCache);
   }
 
   private async upsertLocal(chatId: string, message: Message): Promise<void> {
@@ -315,13 +322,15 @@ export class MessageRepository {
     }
   }
 
-  async getAllUnsynced(): Promise<{ chatId: string; message: Message }[]> {
+  async getAllUnsynced(ownerUserId?: string): Promise<{ chatId: string; message: Message }[]> {
     let fromSqlite: { chatId: string; message: Message }[] | null = null;
     if (db.ready) {
       try {
-        const rows = await db.query(
-          "SELECT * FROM messages WHERE synced = 0 ORDER BY raw_created_at ASC"
-        );
+        const query = ownerUserId
+          ? "SELECT * FROM messages WHERE synced = 0 AND owner_user_id = ? ORDER BY raw_created_at ASC"
+          : "SELECT * FROM messages WHERE synced = 0 ORDER BY raw_created_at ASC";
+        const params = ownerUserId ? [ownerUserId] : [];
+        const rows = await db.query(query, params);
         fromSqlite = rows.map((r) => ({
           chatId: (r.chat_id as string) || "",
           message: fromRow(r),
@@ -329,6 +338,18 @@ export class MessageRepository {
       } catch (e) {
         logger.warn("[MessageRepo] getAllUnsynced SQLite error", { error: e });
       }
+    }
+
+    // One-time cleanup: mark legacy messages without owner_user_id as synced
+    // so they don't block the queue forever. These are messages from before the
+    // owner_user_id field was added — they can't be sent safely.
+    if (db.ready && ownerUserId && !legacyCleanupDone) {
+      legacyCleanupDone = true;
+      try {
+        await db.run(
+          "UPDATE messages SET synced = 1 WHERE synced = 0 AND (owner_user_id IS NULL OR owner_user_id = '')"
+        );
+      } catch { /* ignore */ }
     }
     // Barrer los cachés locales (idb) buscando synced = false. Es la red de
     // seguridad: si el temp solo llegó a idb (SQLite no listo al enviar), el
@@ -342,6 +363,7 @@ export class MessageRepository {
         if (!Array.isArray(raw)) continue;
         for (const m of raw) {
           if (m && m.synced === false) {
+            if (ownerUserId && (m as any).owner_user_id && (m as any).owner_user_id !== ownerUserId) continue;
             fromIdb.push({ chatId: key.slice(CACHE_PREFIX.length), message: m });
           }
         }
@@ -370,6 +392,34 @@ export class MessageRepository {
       } catch (e) {
         logger.warn("[MessageRepo] markSynced error", { error: e });
       }
+    }
+  }
+
+  // ─── Audio blob persistence for offline voice note retries ─────────
+  private static AUDIO_BLOB_PREFIX = "redon_audio_";
+
+  async saveAudioBlob(msgId: string, blob: Blob): Promise<void> {
+    try {
+      await setItem(`${MessageRepository.AUDIO_BLOB_PREFIX}${msgId}`, blob);
+    } catch (e) {
+      logger.warn("[MessageRepo] saveAudioBlob error", { error: e });
+    }
+  }
+
+  async getAudioBlob(msgId: string): Promise<Blob | null> {
+    try {
+      return await getItem<Blob>(`${MessageRepository.AUDIO_BLOB_PREFIX}${msgId}`) ?? null;
+    } catch (e) {
+      logger.warn("[MessageRepo] getAudioBlob error", { error: e });
+      return null;
+    }
+  }
+
+  async deleteAudioBlob(msgId: string): Promise<void> {
+    try {
+      await removeItem(`${MessageRepository.AUDIO_BLOB_PREFIX}${msgId}`);
+    } catch (e) {
+      logger.warn("[MessageRepo] deleteAudioBlob error", { error: e });
     }
   }
 

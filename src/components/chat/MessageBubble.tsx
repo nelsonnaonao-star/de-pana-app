@@ -863,6 +863,7 @@ export default React.memo(function MessageBubble({
               {msg.status === "sent" && "✓"}
               {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
               {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
+              {msg.status === "error" && <span className="text-red-400">⚠️</span>}
               {!msg.status && "✓"}
             </span>
           )}

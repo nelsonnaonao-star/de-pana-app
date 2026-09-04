@@ -91,12 +91,6 @@ SET search_path = public
 AS $$
   SELECT c.* FROM public.chats c
   WHERE c.deleted_at IS NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM public.chat_clears cc
-    WHERE cc.chat_id = c.id
-      AND cc.user_id = auth.uid()
-      AND cc.hidden = true
-  )
   AND (
     c.profile_id = auth.uid()
     OR c.admin_id = auth.uid()
@@ -146,7 +140,6 @@ AS $$
   SELECT * FROM (
     SELECT m.* FROM public.messages m
     WHERE m.chat_id = chat_uuid
-    AND (m.is_deleted = false OR m.is_deleted IS NULL)
     AND EXISTS (
       SELECT 1 FROM public.chats c
       WHERE c.id = chat_uuid

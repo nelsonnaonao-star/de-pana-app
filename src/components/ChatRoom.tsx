@@ -270,11 +270,32 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       setHasMoreOlder(true);
 
       // 1. Load cached messages immediately (offline-first)
-      messageRepo.getMessages(chat.id).then(cached => {
-        if (cached.length > 0) {
+      messageRepo.getMessages(chat.id).then(async cached => {
+        // Filter out messages older than cleared_at (frontera de historial)
+        let filtered = cached;
+        if (uid) {
+          try {
+            const { data: clearData } = await supabase
+              .from("chat_clears")
+              .select("cleared_at")
+              .eq("chat_id", chat.id)
+              .eq("user_id", uid)
+              .maybeSingle();
+            if (clearData?.cleared_at) {
+              filtered = cached.filter(m => {
+                const ts = m.rawCreatedAt || m.timestamp || "";
+                return ts > clearData.cleared_at;
+              });
+            }
+          } catch {
+            // If query fails, use unfiltered cache (best effort)
+          }
+        }
+
+        if (filtered.length > 0) {
           // Merge consciente: elimina tems optimistas viejos (relojito) cuando la
           // caché ya tiene la fila confirmada, y no duplica por id.
-          setMessages(prev => safeMergeMessages(prev, cached));
+          setMessages(prev => safeMergeMessages(prev, filtered));
           setHasMoreOlder(true);
         }
 
@@ -290,7 +311,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             if (apiMessages.length < 50) setHasMoreOlder(false);
             console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
           } else {
-            if (cached.length === 0) setHasMoreOlder(false);
+            if (filtered.length === 0) setHasMoreOlder(false);
             console.log('[CHAT] ⚠️ getMessages returned 0 messages');
           }
         }).catch((err) => {

@@ -89,7 +89,10 @@ export async function getContacts(userId: string): Promise<Contact[]> {
           // perfil: si el perfil no tiene foto, el contacto no debe mostrar
           // ninguna (impide mostrar fotos viejas/ajenas estampadas en la fila).
           avatar: profile ? ((profile as any)?.avatar_url || "") : (c.avatar || ""),
-          name: (profile as any)?.name || c.name,
+          // El nombre personalizado guardado por el usuario tiene prioridad
+          // absoluta sobre profiles.name. Solo se usa profiles.name como
+          // fallback si el usuario nunca guardó un nombre para este contacto.
+          name: c.name || (profile as any)?.name || "",
         };
       });
     }

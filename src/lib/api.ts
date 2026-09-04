@@ -20,7 +20,20 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
     ...(options.headers as Record<string, string> || {}),
   };
 
-  const { data: { session } } = await supabase.auth.getSession();
+  let { data: { session } } = await supabase.auth.getSession();
+
+  // Capacitor/Android: getSession() a veces retorna null aunque la sesión
+  // exista en Preferences (la carga es async y puede no haber completado).
+  // En ese caso, refreshSession() fuerza la re-lectura de storage + refresh.
+  if (!session?.access_token) {
+    try {
+      const { data: { session: refreshed } } = await supabase.auth.refreshSession();
+      if (refreshed?.access_token) {
+        session = refreshed;
+      }
+    } catch (_e) { /* no session available */ }
+  }
+
   if (session?.access_token) {
     headers['Authorization'] = `Bearer ${session.access_token}`;
   }

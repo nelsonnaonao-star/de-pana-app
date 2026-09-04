@@ -12,7 +12,7 @@ interface BottomTabBarProps {
 const TABS = [
   { id: "chats", label: "Chats", icon: MessageSquareMore },
   { id: "contacts", label: "Contactos", icon: Users },
-  { id: "states", label: "Estados", icon: CircleDotDashed },
+  { id: "states", label: "Momentos", icon: CircleDotDashed },
   { id: "rates", label: "Tasas", icon: TrendingUp },
   { id: "business", label: "Negocio", icon: Briefcase },
   { id: "profile", label: "Perfil", icon: CircleUser },

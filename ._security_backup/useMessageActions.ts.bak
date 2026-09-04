@@ -2,13 +2,14 @@ import { MutableRefObject, FormEvent, useRef } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Chat, Message } from "../../types";
-import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction, votePoll } from "../../services/messages";
+import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction } from "../../services/messages";
 import { uploadChatMedia } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
 import { cacheVideoBlob } from "../../services/videoCache";
 import { revokeCachedMedia } from "../../services/mediaCache";
+import { supabase } from "../../lib/supabase";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
-import { inFlightMessageIds, syncService } from "../../services/sync/SyncService";
+import { inFlightMessageIds } from "../../services/sync/SyncService";
 import toast from "react-hot-toast";
 
 function formatFileSize(bytes: number): string {
@@ -167,7 +168,7 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
         onSendMessage(newMsg);
         pendingSendIdsRef.current.add(tempId);
         inFlightMessageIds.add(tempId);
-        await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid }, uid);
+        await messageRepo.upsertMessage(chatId, { ...newMsg, clientId, sender_id: uid });
 
         try {
           const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -280,12 +281,6 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
       }
     } catch (e) {
       console.error("[CHAT] Error al enviar mensaje:", e);
-      // Encolar en SyncService para reintento automático con persistencia
-      try {
-        await syncService.queueMessage(chatId, { ...newMsg, clientId, sender_id: uid }, uid);
-      } catch (qErr) {
-        console.error("[CHAT] SyncService queue failed:", qErr);
-      }
     } finally {
       pendingSendIdsRef.current.delete(tempId);
       inFlightMessageIds.delete(tempId);
@@ -443,13 +438,13 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
           };
           setMessages(prev => [...prev, sendingMsg]);
           onSendMessage(sendingMsg);
-          messageRepo.upsertMessage(chatId, sendingMsg, uid);
+          messageRepo.upsertMessage(chatId, sendingMsg);
 pendingSendIdsRef.current.add(tempId);
     inFlightMessageIds.add(tempId);
 
           const url = await uploadChatMedia(fileBlob, "image");
           const mediaUpdated = { ...sendingMsg, mediaUrl: url };
-          await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdCamera, sender_id: uid }, uid);
+          await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdCamera, sender_id: uid });
           setMessages(prev => {
             if (!prev.some(m => m.id === tempId)) return prev;
             return prev.map(m => m.id === tempId ? mediaUpdated : m);
@@ -583,7 +578,7 @@ pendingSendIdsRef.current.add(tempId);
             cacheVideoBlob(url, localBlob).catch(() => {});
           }
           const mediaUpdated = { ...sendingMsg, mediaUrl: url, posterUrl };
-          await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdFile, sender_id: uid }, uid);
+          await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdFile, sender_id: uid });
           setMessages(prev => {
             if (!prev.some(m => m.id === tempId)) return prev;
             return prev.map(m => m.id === tempId ? mediaUpdated : m);
@@ -735,7 +730,11 @@ pendingSendIdsRef.current.add(tempId);
     });
 
     if (updatedPollOptions) {
-      votePoll(messageId, updatedPollOptions).catch(err => console.error("[ChatRoom] update poll options failed:", err));
+      Promise.resolve(supabase
+        .from("messages")
+        .update({ poll_options: JSON.stringify(updatedPollOptions) })
+        .eq("id", messageId)
+      ).then(() => {}).catch(err => console.error("[ChatRoom] update poll options failed:", err));
     }
   };
 
@@ -891,9 +890,7 @@ pendingSendIdsRef.current.add(tempId);
     onSendMessage(newMsg);
     pendingSendIdsRef.current.add(tempId);
     inFlightMessageIds.add(tempId);
-    await messageRepo.upsertMessage(chatId, newMsg, uid);
-    // Persistir blob en IDB para reintentos offline (ANTES del upload)
-    await messageRepo.saveAudioBlob(tempId, blob);
+    await messageRepo.upsertMessage(chatId, newMsg);
 
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(t => t.stop());
@@ -918,10 +915,8 @@ pendingSendIdsRef.current.add(tempId);
       );
       const url = await Promise.race([uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video"), uploadTimeout]);
       console.log("[VOICE] upload OK", { url });
-      // Upload exitoso: limpiar blob de IDB (ya no se necesita para reintentos)
-      await messageRepo.deleteAudioBlob(tempId);
       const mediaUpdated = { ...newMsg, mediaUrl: url };
-      await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId, sender_id: uid }, uid).catch(() => {});
+      await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId, sender_id: uid }).catch(() => {});
       setMessages(prev => {
         if (!prev.some(m => m.id === tempId)) return prev;
         return prev.map(m => m.id === tempId ? mediaUpdated : m);
@@ -976,12 +971,6 @@ pendingSendIdsRef.current.add(tempId);
     } catch (err) {
       console.error("[CHAT] Upload recording error:", err);
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
-      // Encolar en SyncService para reintento automático (upload + message creation)
-      try {
-        await syncService.queueMessage(chatId, { ...newMsg, clientId, sender_id: uid }, uid);
-      } catch (qErr) {
-        console.error("[CHAT] SyncService queue failed for voice:", qErr);
-      }
     } finally {
       console.log("[VOICE] finishVoiceNote finalizado", { tempId, quedaSending: false });
       pendingSendIdsRef.current.delete(tempId);

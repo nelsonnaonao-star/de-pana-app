@@ -740,15 +740,37 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "profiles" },
         (payload) => {
-          const updated = payload.new as { id: string; status: string };
+          const updated = payload.new as {
+            id: string;
+            status: string;
+            avatar_url?: string | null;
+            avatar?: string | null;
+            name?: string | null;
+          };
           setChats((prev) =>
             prev.map((c) => {
               if (c.is_group) return c;
               const partnerId = c.profile_id === userId ? c.admin_id : c.profile_id;
               if (partnerId === updated.id) {
-                return { ...c, is_online: updated.status === "online" };
+                return {
+                  ...c,
+                  is_online: updated.status === "online",
+                  avatar: updated.avatar_url || updated.avatar || "",
+                  name: updated.name || c.name,
+                };
               }
               return c;
+            })
+          );
+          setContacts((prev) =>
+            prev.map((c) => {
+              if (c.contact_user_id !== updated.id) return c;
+              return {
+                ...c,
+                avatar: updated.avatar_url || updated.avatar || "",
+                // Solo sobrescribir nombre si el usuario NO guardó uno personalizado
+                name: c.name || updated.name || "",
+              };
             })
           );
         }

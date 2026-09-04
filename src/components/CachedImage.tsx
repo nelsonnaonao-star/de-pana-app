@@ -178,9 +178,11 @@ export default function CachedImage({
     let cancelled = false;
 
     (async () => {
+      console.log("[CACHEDIMG-DEBUG] src recibido:", src, "isCapacitor:", isCapacitor);
       const cached = await getCachedFile(fileName);
       if (cancelled) return;
       if (cached) {
+        console.log("[CACHEDIMG-DEBUG] filesystem cache HIT:", fileName);
         memoryCache.set(src, cached);
         setDisplaySrc(cached);
         setHasError(false);
@@ -189,6 +191,7 @@ export default function CachedImage({
       // Verificar la URL ANTES de renderizarla: si está rota, el fallback verde
       // se mantiene y no se llega a montar un <img> que falle.
       const dataUrl = await fetchAsDataUrl(src);
+      console.log("[CACHEDIMG-DEBUG] resultado fetchAsDataUrl:", dataUrl ? "OK (length=" + dataUrl.length + ")" : "NULL/FALLO");
       if (cancelled) return;
       if (dataUrl) {
         const base64 = dataUrl.split(",")[1] || "";
@@ -276,27 +279,23 @@ export default function CachedImage({
     }
     return (
       <div
-        className={`${className} bg-slate-200 animate-pulse min-h-[200px]`}
+        className={`${className} bg-slate-200 animate-pulse`}
         style={style}
       />
     );
   }
 
   return (
-    <div
+    <img
+      ref={imgRef}
+      src={displaySrc}
+      alt={alt}
       className={className}
       style={style}
+      loading={loading}
+      onLoad={onLoad}
+      onError={handleError}
       onClick={onClick}
-    >
-      <img
-        ref={imgRef}
-        src={displaySrc}
-        alt={alt}
-        className="w-full h-full object-contain"
-        loading={loading}
-        onLoad={onLoad}
-        onError={handleError}
-      />
-    </div>
+    />
   );
 }

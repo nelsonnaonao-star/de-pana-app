@@ -931,6 +931,9 @@ export default function PhoneSimulator({
   // Load Supabase chats when available (dedup already done in getChats service)
   useEffect(() => {
     if (supabaseChats.length > 0 && user) {
+      supabaseChats.filter((sc: any) => !deletedChatIdsRef.current.has(sc.id) && sc.avatar).forEach((sc: any) => {
+        console.log("[MAPEO-DEBUG] chat:", sc.name, "avatar recibido:", sc.avatar);
+      });
       const mapped = supabaseChats
         .filter((sc: any) => !deletedChatIdsRef.current.has(sc.id))
         .map((sc: any) => ({
@@ -964,6 +967,18 @@ export default function PhoneSimulator({
         isGroup: sc.is_group || false,
         messages: [],
       }));
+      // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
+      for (const m of mapped) {
+        const currentLocal = chats.find((c: any) => c.id === m.id);
+        console.log("[NAME RESOLUTION - PHONESIMULATOR]", JSON.stringify({
+          chatId: m.id,
+          incomingContextName: m.name,
+          currentLocalName: currentLocal?.name || null,
+          profileId: (m as any).partnerUserId,
+          adminId: user?.id,
+        }));
+      }
+      // ═══════════════ FIN TEMPORAL LOG ═══════════════
       setChats(mapped as Chat[]);
       setChatsLoaded(true);
     }
@@ -1153,7 +1168,31 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       } else if (event === "UPDATE") {
         setChats(prev => {
           const idx = prev.findIndex(c => c.id === chat.id);
-          if (idx === -1) return prev;
+          if (idx === -1) {
+            // Chat not in list — might be hidden via chat_clears.
+            // Only unhide if the new message is AFTER cleared_at (frontera permanente).
+            const newRawTime = chat.last_message_time || "";
+            if (newRawTime && user?.id) {
+              supabase.from("chat_clears")
+                .select("cleared_at")
+                .eq("chat_id", chat.id)
+                .eq("user_id", user.id)
+                .maybeSingle()
+                .then(({ data }) => {
+                  const clearedAt = data?.cleared_at;
+                  // Unhide only if there's a message AFTER the clear boundary
+                  if (!clearedAt || newRawTime > clearedAt) {
+                    // Never modify cleared_at — only change hidden
+                    supabase.from("chat_clears")
+                      .update({ hidden: false })
+                      .eq("chat_id", chat.id)
+                      .eq("user_id", user.id)
+                      .then(() => refreshChats());
+                  }
+                });
+            }
+            return prev;
+          }
           const existing = prev[idx];
           const newRawTime = chat.last_message_time || "";
           const isNewMessage = newRawTime && newRawTime !== (existing as any).lastMessageTimeRaw;
@@ -3148,13 +3187,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                       let currentTranslate = 0;
                       let isDragging = false;
 
-                      // Never show my OWN avatar on a 1:1 chat tile. The chats.row avatar
-                      // can be (incorrectly) stamped with the creator's avatar by the sender,
-                      // which previously made the tile render my photo instead of the partner's.
-                      const ownAvatarUrl = profile?.avatar || profile?.avatar_url || registeredUser?.avatar || "";
-                      const isOwnAvatar = !!chat.avatar && !!ownAvatarUrl &&
-                        (chat.avatar === ownAvatarUrl || chat.avatar === registeredUser?.avatar);
-                      const displayAvatar = (!chat.isGroup && isOwnAvatar) ? "" : chat.avatar;
+                      const displayAvatar = chat.avatar;
 
                       const onTouchStart = (e: React.TouchEvent) => {
                         cancelLongPress();
@@ -3249,34 +3282,36 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                                 document.addEventListener('mouseup', onMouseUp);
                               }
                             }}
-                            className={`relative flex items-start gap-3.5 p-2.5 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer ${shouldAnimate ? 'animate-fade-in' : ''} bg-white z-10 ${
+                            className={`relative flex items-start gap-4 px-2.5 py-2 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer ${shouldAnimate ? 'animate-fade-in' : ''} bg-white z-10 ${
                               isSwiped ? 'shadow-lg' : ''
                             }`}
                             style={isSwiped ? { transform: 'translateX(80px)' } : undefined}
                           >
-                            <div className="relative shrink-0">
-                              <div className={`p-[1px] rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden border border-slate-200 transition-transform hover:rotate-12 duration-500 ${chat.isGroup ? "border-purple-500" : chat.status === "online" ? "border-emerald-500" : ""}`}>
-                                {displayAvatar ? (
-                                  <CachedImage src={displayAvatar} alt={chat.name} className="w-14 h-14 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] object-cover" loading="lazy" />
-                                ) : chat.isGroup ? (
-                                  <div className="w-14 h-14 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
-                                    <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                                      <circle cx="9" cy="7" r="4" />
-                                      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                                      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                                    </svg>
-                                  </div>
-                                ) : (
-                                  <div className="w-14 h-14 rounded-[8px_8px_8px_0px/8px_8px_8px_10px] overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
-                                    <span className="text-white font-black text-sm">
-                                      {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
-                                    </span>
-                                  </div>
-                                )}
+                            <div className="relative shrink-0" style={{ width: 62, height: 62 }}>
+                              <div style={{ borderRadius: '62% 38% 55% 45% / 45% 55% 40% 60%', background: 'conic-gradient(from 0deg, #5EB7FF, #C65EFF, #4ADE80, #5EB7FF)', padding: 2 }}>
+                                <div className={`rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden ${chat.isGroup ? "border-2 border-purple-500" : chat.status === "online" ? "border-2 border-emerald-500" : ""}`} style={{ width: 56, height: 56 }}>
+                                  {displayAvatar ? (
+                                    <CachedImage src={displayAvatar} alt={chat.name} className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover" loading="lazy" />
+                                  ) : chat.isGroup ? (
+                                    <div className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
+                                      <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                                        <circle cx="9" cy="7" r="4" />
+                                        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                                      </svg>
+                                    </div>
+                                  ) : (
+                                    <div className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                                      <span className="text-white font-black text-base">
+                                        {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                               {!chat.isGroup && chat.status === "online" && (
-                                <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white z-10"></span>
+                                <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white z-10"></span>
                               )}
                             </div>
                             
@@ -3453,10 +3488,10 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                             src={registeredUser.avatar}
                             alt="Profile"
                             onClick={() => !isUploadingAvatar && setShowMyAvatarLightbox(true)}
-                            className={`w-32 h-32 rounded-[16px] mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
+                            className={`w-32 h-32 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
                           />
                         ) : (
-                          <div className="w-32 h-32 rounded-[16px] mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/25 shadow-xl ring-4 ring-white/10 flex items-center justify-center">
+                          <div className="w-32 h-32 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/25 shadow-xl ring-4 ring-white/10 flex items-center justify-center">
                             <User className="w-14 h-14 text-white" />
                           </div>
                         )}

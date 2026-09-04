@@ -61,7 +61,7 @@ export default function FabMenu({ showActionMenu, setShowActionMenu, setCurrentS
       {/* FAB Button */}
       <button
         onClick={() => setShowActionMenu(!showActionMenu)}
-        className="absolute right-4 bottom-16 z-30 w-14 h-14 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-[8px_8px_8px_0px/8px_8px_8px_10px] flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
+        className="absolute right-4 bottom-16 z-30 w-16 h-16 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-[62%_38%_55%_45%/45%_55%_40%_60%] flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
         title="Agregar contacto"
       >
         <Plus className={`w-5 h-5 transition-transform duration-300 ${showActionMenu ? "rotate-45" : ""}`} />

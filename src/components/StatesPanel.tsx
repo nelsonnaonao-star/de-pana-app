@@ -95,11 +95,11 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
                 className="flex flex-col items-center gap-1 min-w-[70px] cursor-pointer"
               >
                 <div className="relative">
-                  <div className="w-[68px] h-[76px] rounded-[8px_8px_8px_0px/8px_8px_8px_10px] ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50 object-cover overflow-hidden">
+                  <div className="w-[68px] h-[68px] rounded-[62%_38%_55%_45%/45%_55%_40%_60%] ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50 object-cover overflow-hidden">
                     {myStories.length > 0 ? (
                       <CachedImage
                         src={myUserStateRepresentation.userAvatar}
-                        alt="Mi estado"
+                        alt="Mi momento"
                         className="w-full h-full object-cover"
                       />
                     ) : (
@@ -110,7 +110,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
                   </div>
                 </div>
                 <span className="text-[10px] font-medium text-gray-700 text-center truncate w-full">
-                  Mi estado
+                  Mi momento
                 </span>
               </div>
 
@@ -141,11 +141,11 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
             <div className="flex flex-col items-center justify-center mt-10">
             <button
               onClick={() => setShowCreateMenu(true)}
-              className="w-16 h-16 bg-emerald-600 text-white rounded-2xl shadow-lg flex flex-col items-center justify-center hover:bg-emerald-500 transition-transform active:scale-95 transition-all cursor-pointer"
+              className="w-[68px] h-[68px] bg-emerald-600 text-white rounded-[62%_38%_55%_45%/45%_55%_40%_60%] ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50 shadow-lg flex flex-col items-center justify-center hover:bg-emerald-500 transition-transform active:scale-95 transition-all cursor-pointer"
             >
               <Plus className="w-8 h-8" />
             </button>
-            <span className="text-sm font-medium text-slate-500 mt-3">Crear Estado</span>
+            <span className="text-[10px] font-medium text-gray-700 mt-3">Crear Momentos</span>
           </div>
 
           <div className="bg-teal-50/50 rounded-xl p-3 border border-teal-100 flex gap-2 items-start">

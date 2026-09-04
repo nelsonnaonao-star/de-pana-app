@@ -36,6 +36,7 @@ export interface QueuedMessage {
   message: any;
   retries: number;
   createdAt: number;
+  ownerUserId?: string;
 }
 
 class SyncService {
@@ -155,6 +156,10 @@ class SyncService {
   stop(): void {
     // Resetear el flag para que un posterior start() vuelva a levantar el timer.
     this.started = false;
+    this.cachedUid = null;
+    this.messageQueue = [];
+    this.lastAttemptAt.clear();
+    this.isNetworkRecovery = false;
     if (this.networkHandler) {
       try {
         this.networkHandler.remove();
@@ -295,7 +300,7 @@ class SyncService {
    * Encola un mensaje para envío inmediato con persistencia en SQLite.
    * Si falla, queda en cola local con retries y se reintenta automáticamente al volver la red.
    */
-  async queueMessage(chatId: string, message: any): Promise<void> {
+  async queueMessage(chatId: string, message: any, ownerUserId?: string): Promise<void> {
     const tempId = message.id;
     const queued: QueuedMessage = {
       tempId,
@@ -303,10 +308,11 @@ class SyncService {
       message: { ...message, status: "sending", synced: false },
       retries: 0,
       createdAt: Date.now(),
+      ownerUserId,
     };
 
     // 1. Persistir inmediatamente en SQLite (synced = false)
-    await messageRepo.upsertMessage(chatId, { ...message, status: "sending", synced: false });
+    await messageRepo.upsertMessage(chatId, { ...message, status: "sending", synced: false }, ownerUserId);
     
     // 2. Añadir a cola en memoria para reintento rápido
     this.messageQueue.push(queued);
@@ -413,7 +419,11 @@ class SyncService {
 
     try {
       // 1. Procesar mensajes no sincronizados de SQLite (cola legacy)
-      const pending = await messageRepo.getAllUnsynced();
+      // Usar cachedUid síncrono (ya establecido en el primer login) en vez de
+      // await getCurrentUid() que hace un fetch a Supabase y puede colgar el
+      // timer si la red está lenta, causando pantalla blanca.
+      const currentUid = this.cachedUid || undefined;
+      const pending = await messageRepo.getAllUnsynced(currentUid);
       const recovery = this.isNetworkRecovery;
       dbg("processQueue: pending unsynced count=", pending.length);
       if (pending.length > 0) {
@@ -422,8 +432,31 @@ class SyncService {
           try {
             // Saltar media blob: no existe fuera de la sesión y su reintento
             // corrompería el mensaje (envío sin audio/imagen).
+            // EXCEPCIÓN: voice_note/audio → intentar re-upload desde IDB.
             const blobField = item.message.mediaUrl || item.message.localVideoUrl || item.message.posterUrl;
-            if (typeof blobField === "string" && blobField.startsWith("blob:")) continue;
+            if (typeof blobField === "string" && blobField.startsWith("blob:")) {
+              const isVoice = item.message.type === "voice_note" || item.message.type === "audio";
+              if (isVoice) {
+                const audioBlob = await messageRepo.getAudioBlob(item.message.id);
+                if (audioBlob) {
+                  try {
+                    const httpsUrl = await uploadChatMedia(audioBlob, "voice");
+                    const updatedMsg = { ...item.message, mediaUrl: httpsUrl };
+                    await messageRepo.upsertMessage(item.chatId, updatedMsg);
+                    item.message = updatedMsg;
+                    dbg("processQueue: voice blob re-uploaded", item.message.id, "->", httpsUrl.slice(0, 60));
+                  } catch (uploadErr) {
+                    logger.warn("[SyncService] voice blob re-upload failed, will retry", { error: uploadErr });
+                    continue;
+                  }
+                } else {
+                  dbg("processQueue: voice blob not found in IDB, skip", item.message.id);
+                  continue;
+                }
+              } else {
+                continue;
+              }
+            }
             // La UI YA está enviando este mensaje ahora mismo: reintentarlo
             // crearía un duplicado (el servidor desplegado no deduplica).
             if (inFlightMessageIds.has(item.message.id)) {
@@ -496,12 +529,14 @@ class SyncService {
     }
     // Los mensajes pendientes en cola pueden haberse guardado sin sender_id
     // (payloads de builds anteriores o caché idb desactualizada). El servidor
-    // rechaza con "chat_id y sender_id requeridos" y la cola queda muerta.
-    // El mensaje local SIEMPRE es del usuario actual: completar con su uid.
-    const senderId =
-      (msg.sender_id as string) ||
-      (msg.senderId as string) ||
-      (await this.getCurrentUid());
+    // rechaza con "chat_id y sender_id requeridos". Si falta sender_id,
+    // SKIP en vez de impersonar al usuario actual (previene corrupción de
+    // identidad cuando la cola tiene mensajes de otra sesión).
+    const senderId = (msg.sender_id as string) || (msg.senderId as string);
+    if (!senderId) {
+      dbg("sendSingle: skip message without sender_id", msg.id);
+      return null;
+    }
     let imageUrl: string | undefined;
     let audioUrl: string | undefined;
     let videoUrl: string | undefined;
