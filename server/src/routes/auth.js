@@ -27,6 +27,12 @@ const profileLimiter = rateLimit({
   message: { error: 'Demasiadas solicitudes.' },
 });
 
+const emailRecoveryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3,
+  message: { error: 'Demasiados intentos. Espera 15 minutos.' },
+});
+
 function generateCode() {
   return String(randomInt(100000, 1000000));
 }
@@ -101,6 +107,63 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
   } catch (err) {
     console.error('[SMS-RECOVERY] Error:', err);
     res.status(500).json({ error: 'Error interno al enviar el código' });
+  }
+});
+
+// ─── Email Password Recovery ───────────────────────────────────────
+
+router.post('/send-reset-email', emailRecoveryLimiter, async (req, res) => {
+  try {
+    const { identifier } = req.body;
+    if (!identifier) return res.status(400).json({ error: 'Identificador requerido' });
+
+    const cleanId = sanitizeInput(identifier);
+    if (cleanId.length < 2) return res.status(400).json({ error: 'Identificador inválido' });
+
+    let profile = null;
+    const isPhone = /^\d{4,}$/.test(cleanId);
+
+    if (isPhone) {
+      const { data } = await supabaseAdmin
+        .from('profiles')
+        .select('id, real_email, username')
+        .eq('phone_digits', cleanId)
+        .limit(1);
+      profile = data?.[0];
+    } else {
+      const cleanUsername = cleanId.replace(/^@/, '');
+      const { data } = await supabaseAdmin
+        .from('profiles')
+        .select('id, real_email, username')
+        .eq('username', cleanUsername)
+        .limit(1);
+      profile = data?.[0];
+    }
+
+    const genericMessage = 'Si la cuenta existe, recibirás instrucciones para recuperar tu contraseña.';
+
+    if (!profile || !profile.real_email) {
+      await new Promise(r => setTimeout(r, 300));
+      return res.json({ message: genericMessage });
+    }
+
+    const { error: linkError } = await supabaseAdmin.auth.admin.generateLink({
+      type: 'recovery',
+      email: profile.real_email,
+    });
+
+    if (linkError) {
+      console.error('[EMAIL-RECOVERY] generateLink error:', linkError);
+      return res.json({ message: genericMessage });
+    }
+
+    const [local, domain] = profile.real_email.split('@');
+    const masked = local[0] + '***@' + domain;
+
+    res.json({ message: genericMessage, maskedEmail: masked });
+  } catch (err) {
+    console.error('[EMAIL-RECOVERY] Error:', err);
+    res.status(500).json({ error: 'Error al procesar la solicitud.' });
   }
 });
 

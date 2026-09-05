@@ -195,49 +195,19 @@ export async function register(
 }
 
 export async function resetPassword(identifier: string) {
-  const input = identifier.toLowerCase().trim().replace(/^@/, "");
-  const cleanDigits = input.replace(/\D/g, "");
-  let email = `${input}@redon.app`;
-  let userFound = false;
-
-  try {
-    const query = input.length > 0 && cleanDigits !== input
-      ? `username.eq.${input},phone_digits.eq.${cleanDigits}`
-      : `username.eq.${input}`;
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("username, real_email")
-      .or(query)
-      .single();
-
-    if (profile) {
-      userFound = true;
-      email = profile.real_email ? profile.real_email : `${profile.username}@redon.app`;
-    }
-  } catch (e) {
-    logger.warn("[AUTH] Profile lookup failed during reset", { error: e });
-  }
-
-  if (!userFound) throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
-
-  if (!email.includes("@") || email.endsWith("@redon.app")) {
-    throw new Error(
-      "Esta cuenta no tiene un correo de recuperación registrado. " +
-      "Contacta al soporte de RED ON para recuperar tu acceso."
-    );
-  }
-
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${apiUrl("/reset-password")}`,
+  const res = await authFetch(apiUrl("/api/auth/send-reset-email"), {
+    method: "POST",
+    body: JSON.stringify({ identifier }),
   });
 
-  if (error) {
-    if (error.message.includes("Email not found")) throw new Error("No encontramos una cuenta con ese usuario o teléfono.");
-    throw new Error("Error al enviar el correo de recuperación: " + error.message);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Error al enviar el correo de recuperación.");
   }
 
-  toast.success("Correo de recuperación enviado");
-  return { email };
+  const data = await res.json();
+  toast.success(data.message);
+  return { maskedEmail: data.maskedEmail };
 }
 
 export async function signOut() {
