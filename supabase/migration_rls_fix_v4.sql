@@ -95,7 +95,7 @@ CREATE POLICY "messages_update_member"
   ON messages FOR UPDATE
   TO authenticated
   USING (public.is_chat_member(chat_id, auth.uid()))
-  WITH CHECK (true);
+  WITH CHECK (public.is_chat_member(chat_id, auth.uid()));
 
 
 -- ============================================================

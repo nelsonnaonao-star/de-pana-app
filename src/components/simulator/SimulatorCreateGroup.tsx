@@ -14,6 +14,7 @@ interface SimulatorCreateGroupProps {
   onToggleMute: () => void;
   isAdminOnly: boolean;
   onToggleAdminOnly: () => void;
+  isCreating?: boolean;
   onCreateGroup: () => void;
 }
 
@@ -30,6 +31,7 @@ export default function SimulatorCreateGroup({
   onToggleMute,
   isAdminOnly,
   onToggleAdminOnly,
+  isCreating,
   onCreateGroup,
 }: SimulatorCreateGroupProps) {
   const filteredContacts = contacts.filter(
@@ -146,9 +148,10 @@ export default function SimulatorCreateGroup({
 
           <button
             onClick={onCreateGroup}
-            className="w-full py-2.5 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-xl text-xs font-bold transition-colors"
+            disabled={isCreating}
+            className={`w-full py-2.5 text-white rounded-xl text-xs font-bold transition-colors ${isCreating ? "bg-teal-700 cursor-not-allowed" : "bg-[#0a4d52] hover:bg-[#10646a]"}`}
           >
-            Crear Grupo
+            {isCreating ? "Creando…" : "Crear Grupo"}
           </button>
         </div>
       )}

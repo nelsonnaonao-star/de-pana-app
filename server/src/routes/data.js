@@ -230,6 +230,96 @@ router.post('/create-chat', async (req, res) => {
   }
 });
 
+// POST /api/data/create-group
+// Crea un chat grupal completo (chats + chat_participants) con service_role.
+// El creador autenticado SIEMPRE queda como admin y como participante.
+// Body: { name: string, member_ids: string[], only_admins_can_post?: boolean }
+router.post('/create-group', async (req, res) => {
+  try {
+    const { name, member_ids, only_admins_can_post } = req.body || {};
+
+    const groupName = sanitizeInput(name || '') || 'Nuevo grupo';
+    if (!Array.isArray(member_ids) || member_ids.length === 0) {
+      return res.status(400).json({ error: 'Se requiere al menos un participante' });
+    }
+    if (member_ids.length > 250) {
+      return res.status(400).json({ error: 'Demasiados participantes (máximo 250)' });
+    }
+
+    // El admin SIEMPRE es el usuario autenticado (nunca se confía en el body).
+    const adminId = req.userId;
+
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const ids = Array.from(new Set(
+      (member_ids || []).filter((id) => typeof id === 'string' && uuidRe.test(id))
+    ));
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'Participantes inválidos' });
+    }
+
+    // Solo se insertan ids de perfiles existentes (evita FK rotos y participantes fantasma).
+    const { data: profiles } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .in('id', ids);
+    if (!profiles || profiles.length === 0) {
+      return res.status(400).json({ error: 'Participantes inválidos o inexistentes' });
+    }
+
+    const { data: adminProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('id', adminId)
+      .maybeSingle();
+    if (!adminProfile) {
+      return res.status(400).json({ error: 'Tu perfil no existe' });
+    }
+
+    const now = new Date().toISOString();
+    const { data: chat, error: chatError } = await supabaseAdmin
+      .from('chats')
+      .insert({
+        name: groupName,
+        is_group: true,
+        avatar: '',
+        avatar_color: 'bg-teal-500',
+        phone: '',
+        username: '',
+        bio: '',
+        profile_id: adminId,
+        admin_id: adminId,
+        is_online: true,
+        unread_count: 0,
+        created_at: now,
+        updated_at: now,
+      })
+      .select()
+      .single();
+    if (chatError) throw chatError;
+
+    // Participantes: SIEMPRE el creador + los validados (sin duplicados).
+    const memberProfileIds = (profiles || []).map((p) => p.id);
+    const participantRows = Array.from(new Set([adminId, ...memberProfileIds]))
+      .map((profile_id) => ({ chat_id: chat.id, profile_id }));
+
+    const { error: participantsError } = await supabaseAdmin
+      .from('chat_participants')
+      .upsert(participantRows, { onConflict: 'chat_id,profile_id', ignoreDuplicates: true });
+
+    if (participantsError) {
+      // No dejar un grupo incompleto: limpiar el chat recién creado.
+      console.error('[DATA] create-group participants error, rolling back chat:', participantsError);
+      await supabaseAdmin.from('chats').delete().eq('id', chat.id).catch((e) => console.error('[DATA] create-group rollback delete failed:', e?.message));
+      throw participantsError;
+    }
+
+    res.json({ ok: true, chat, participants: participantRows.length });
+  } catch (err) {
+    console.error('[DATA] create-group error:', err);
+    res.status(500).json({ error: 'Error al crear el grupo' });
+  }
+});
+
 router.post('/add-contact', async (req, res) => {
   try {
     const contact = req.body;

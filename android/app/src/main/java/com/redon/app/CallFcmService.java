@@ -24,6 +24,7 @@ public class CallFcmService extends FirebaseMessagingService {
     private static final String TAG = "CallFcmService";
     private static final String CHANNEL_CALLS = "redon-calls";
     private static final String CHANNEL_MESSAGES = "redon-messages";
+    private static final String CHANNEL_GROUPS = "redon-groups";
     private static final String REPLY_ACTION = "com.redon.app.REPLY_MESSAGE";
 
     // Almacenamiento compartido creado por el plugin @capacitor/preferences
@@ -115,6 +116,29 @@ public class CallFcmService extends FirebaseMessagingService {
         String channelId = callChannelId(soundId);
         ensureChannel(channelId, "Llamadas", rawNameFor("call", soundId),
             new long[]{0, 500, 300, 500, 300, 500}, "Notificaciones de llamadas entrantes");
+        return channelId;
+    }
+
+    // Canal fijo para eventos de GRUPO (agregado al grupo / mensajes dentro de grupo).
+    // Usa siempre el asset group_created.mp3 para distinguirse del sonido 1:1.
+    private String resolveGroupChannel() {
+        ensureChannel(CHANNEL_GROUPS, "Grupos", "group_created",
+            new long[]{0, 300, 200, 300}, "Notificaciones de grupos");
+        return CHANNEL_GROUPS;
+    }
+
+    // Es un evento de grupo si el push lo marca explícitamente (is_group) o si el
+    // tipo es group_added (inherentemente grupal).
+    private boolean isGroupNotification(RemoteMessage message) {
+        if ("group_added".equals(message.getData().get("type"))) return true;
+        return "true".equals(message.getData().get("is_group"));
+    }
+
+    // Decisión única de sonido para notificaciones no-call: 1:1 usa el canal de
+    // mensajes normal (preferencia del usuario), grupo usa el canal redon-groups.
+    private String channelFor(RemoteMessage message) {
+        String channelId = isGroupNotification(message) ? resolveGroupChannel() : resolveMessageChannel();
+        Log.d(TAG, "channelFor -> " + channelId + " (type=" + message.getData().get("type") + ", is_group=" + message.getData().get("is_group") + ")");
         return channelId;
     }
 
@@ -309,7 +333,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         int notificationId = (chatId != null ? chatId.hashCode() : (int) System.currentTimeMillis());
 
-        String messageChannel = resolveMessageChannel();
+        String messageChannel = channelFor(message);
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction("OPEN_CHAT");
@@ -377,7 +401,7 @@ public class CallFcmService extends FirebaseMessagingService {
 
         int notificationId = (chatId != null ? chatId.hashCode() : (int) System.currentTimeMillis());
 
-        String messageChannel = resolveMessageChannel();
+        String messageChannel = channelFor(message);
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction("OPEN_CHAT");

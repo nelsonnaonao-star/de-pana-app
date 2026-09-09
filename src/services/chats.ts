@@ -250,63 +250,28 @@ export async function createGroupChat(
   memberIds: string[],
   onlyAdminsCanPost?: boolean
 ): Promise<Chat> {
-  const { data, error } = await supabase
-    .from("chats")
-    .insert({
+  // La creación grupal se hace en el servidor (service_role, con RLS intacta en
+  // la BD) y es atómica: chats + chat_participants. Nunca INSERT directo del
+  // cliente. Si algo falla, el servidor responde error y el try/catch de la UI
+  // lo muestra — no queda un grupo incompleto ni un error silencioso.
+  const res = await authFetch(apiUrl("/api/data/create-group"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
       name,
-      is_group: true,
-      avatar: "",
-      avatar_color: "bg-teal-500",
-      phone: "",
-      username: "",
-      bio: "",
-      profile_id: creatorId,
-      admin_id: creatorId,
-      is_online: true,
-      unread_count: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-
-  // Add all members to chat_participants
-  const allMemberIds = [...new Set([creatorId, ...memberIds])].filter(Boolean);
-  const participantRows = allMemberIds.map(profile_id => ({
-    chat_id: data.id,
-    profile_id,
-  }));
-
-  // Client-side upsert FIRST (reliable — works with or without RLS)
-  const { error: upsertErr } = await supabase.from("chat_participants").upsert(
-    participantRows.map(({ chat_id, profile_id }) => ({ chat_id, profile_id })),
-    { onConflict: "chat_id,profile_id", ignoreDuplicates: true }
-  );
-  if (upsertErr) {
-    logger.error("[CHATS] Failed to upsert participants", { error: upsertErr });
-  } else {
-    logger.info("[CHATS] Participants inserted", { count: allMemberIds.length });
+      member_ids: memberIds,
+      only_admins_can_post: onlyAdminsCanPost,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || "Error al crear grupo");
   }
-
-  // Then try server endpoint as a safety net (bypasses RLS in case policies get stricter)
-  try {
-    const { authFetch } = await import("../lib/api");
-    const resp = await authFetch(apiUrl("/api/groups/add-participants"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: data.id, member_ids: allMemberIds }),
-    });
-    const result = await resp.json();
-    if (!result.ok) {
-      logger.warn("[CHATS] Server add-participants responded but not ok", { result });
-    }
-  } catch (fetchErr) {
-    logger.warn("[CHATS] Server endpoint unavailable (ignored)", { error: fetchErr?.message });
+  const result = await res.json();
+  if (!result?.ok || !result?.chat) {
+    throw new Error(result?.error || "Error al crear grupo");
   }
-
-  return data as Chat;
+  return result.chat as Chat;
 }
 
 export async function addGroupMember(chatId: string, profileId: string) {
@@ -404,12 +369,49 @@ export function subscribeToChats(userId: string, callback: (event: "INSERT" | "U
       .on(
         "postgres_changes",
         {
-          event: "*",
+          event: "UPDATE",
           schema: "public",
           table: "chats",
           filter: `admin_id=eq.${userId}`,
         },
         (payload) => callback(payload.eventType as any, payload.new as Chat)
+      )
+      // No-leídos de grupos: el realtime de `chats` solo llega a
+      // profile_id/admin_id (creador), así que los demás miembros nunca
+      // recibían UPDATEs. El servidor escribe un ping por (chat, usuario)
+      // en chat_unread_pings al enviar un mensaje grupal; lo traducimos a
+      // un UPDATE de chat para que el mismo handler los cuente como no-leídos.
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "chat_unread_pings",
+          filter: `user_id=eq.${userId}`,
+        },
+        async (payload) => {
+          const ping = payload.new as { chat_id: string; body?: string; sent_at?: string };
+          const { data: chat } = await supabase
+            .from("chats")
+            .select("*")
+            .eq("id", ping.chat_id)
+            .maybeSingle();
+          if (chat) {
+            callback("UPDATE", {
+              ...chat,
+              last_message: ping.body && ping.body !== "Multimedia" ? ping.body : (chat.last_message || ""),
+              last_message_time: ping.sent_at || (chat.last_message_time || ""),
+            } as Chat);
+          }
+          // Limpieza: el ping ya fue procesado; borrarlo evita crecimiento infinito.
+          try {
+            await supabase
+              .from("chat_unread_pings")
+              .delete()
+              .eq("id", (payload.new as any).id)
+              .eq("user_id", userId);
+          } catch {}
+        }
       )
       .on(
         "postgres_changes",

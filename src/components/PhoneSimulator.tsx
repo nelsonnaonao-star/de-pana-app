@@ -549,6 +549,7 @@ export default function PhoneSimulator({
   // Long-press context menu state
   const [contextMenuChat, setContextMenuChat] = useState<Chat | null>(null);
   const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [blockConfirmChat, setBlockConfirmChat] = useState<Chat | null>(null);
   const contextMenuChatRef = useRef<Chat | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -565,6 +566,7 @@ export default function PhoneSimulator({
   const [groupNameInput, setGroupNameInput] = useState("");
   const [groupMuted, setGroupMuted] = useState(false);
   const [groupAdminOnly, setGroupAdminOnly] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(false);
 
   // Search input filter
   const [searchQuery, setSearchQuery] = useState("");
@@ -930,7 +932,8 @@ export default function PhoneSimulator({
 
   // Load Supabase chats when available (dedup already done in getChats service)
   useEffect(() => {
-    if (supabaseChats.length > 0 && user) {
+    console.log(`[RACE-T5] EFFECT 932 FIRED: supabaseChats=${supabaseChats.length} user=${user?.id?.slice(0,8)} selectedChatId=${selectedChatId}`);
+    if (user && !loading) {
       supabaseChats.filter((sc: any) => !deletedChatIdsRef.current.has(sc.id) && sc.avatar).forEach((sc: any) => {
         console.log("[MAPEO-DEBUG] chat:", sc.name, "avatar recibido:", sc.avatar);
       });
@@ -962,7 +965,10 @@ export default function PhoneSimulator({
         })(),
         lastMessageTimeRaw: sc.last_message_time || "",
         updated_at: sc.updated_at || sc.last_message_time || "",
-        unreadCount: sc.unread_count || 0,
+        unreadCount: (() => {
+          const localChat = chats.find((c: any) => c.id === sc.id);
+          return localChat?.unreadCount ?? sc.unread_count ?? 0;
+        })(),
         partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
         isGroup: sc.is_group || false,
         messages: [],
@@ -979,10 +985,24 @@ export default function PhoneSimulator({
         }));
       }
       // ═══════════════ FIN TEMPORAL LOG ═══════════════
-      setChats(mapped as Chat[]);
+      const containsSelected = mapped.some((m: any) => m.id === selectedChatId);
+      console.log(`[RACE-T5] EFFECT 932 replacing chats: supabaseChats=${supabaseChats.length} mapped=${mapped.length} | selectedChatId=${selectedChatId} | containsSelected=${containsSelected} | BEFORE chats.length=${chats.length}`);
+      // FIX-A: If selectedChatId isn't in mapped yet (race: Supabase hasn't
+      // propagated the locally-created chat), preserve the current entry
+      // temporarily. It will be replaced by the proper server version once
+      // supabaseChats includes it (next effect cycle).
+      let finalChats = mapped as Chat[];
+      if (!containsSelected && selectedChatId) {
+        const preservedChat = chats.find((c: any) => c.id === selectedChatId);
+        if (preservedChat) {
+          console.log(`[RACE-T5a] FIX-A: preserving selected chat ${selectedChatId} (name=${(preservedChat as any).name}) temporarily`);
+          finalChats = [preservedChat, ...finalChats];
+        }
+      }
+      setChats(finalChats);
       setChatsLoaded(true);
     }
-  }, [supabaseChats, user, clearedAtMap]);
+  }, [supabaseChats, user, clearedAtMap, loading]);
 
   // Cargar TODOS los chat_clears del usuario de una sola vez (sin N+1)
   useEffect(() => {
@@ -1049,7 +1069,7 @@ export default function PhoneSimulator({
 
   const handleOpenSupportChat = async () => {
     const existing = chats.find(c =>
-      c.name.toLowerCase().includes("soporte") && c.name.toLowerCase().includes("red on")
+      c.name.toLowerCase().includes("soporte") && c.name.toLowerCase().includes("wepa")
     );
     if (existing) {
       setSelectedChatId(existing.id);
@@ -1057,7 +1077,7 @@ export default function PhoneSimulator({
     } else if (user) {
       try {
         const newChat = await createChatInSupabase({
-          name: "Soporte RED ON 🛡️",
+          name: "Soporte WEPA 🛡️",
           avatar: "",
           profile_id: user.id,
           admin_id: user.id,
@@ -1067,7 +1087,7 @@ export default function PhoneSimulator({
             if (prev.some(c => c.id === newChat.id)) return prev;
             return [{
               id: newChat.id,
-              name: "Soporte RED ON 🛡️",
+              name: "Soporte WEPA 🛡️",
               avatar: "",
               status: "online" as const,
               lastMessage: "",
@@ -1103,6 +1123,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   const persistMsgTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // Última vez que el canal chats-for incrementó unread de un chat (dedup con FCM)
   const lastRealtimeUnreadRef = useRef<Record<string, number>>({});
+  // Último timestamp de mensaje ya contado como no-leído por canal (dedup por
+  // mensaje entre realtime chats, chat_unread_pings y FCM — evita doble cuenta).
+  const lastHandledMsgRef = useRef<Record<string, string>>({});
 
   // Persistencia ligera de un mensaje entrante con el chat cerrado: RPC
   // get_user_messages limit 1 + upsertMessage (dedup por id). Compartida por el
@@ -1154,17 +1177,21 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     if (!user) return;
     const sub = subscribeToChats(user.id, async (event, chat) => {
       if (event === "INSERT") {
+        console.log(`[RACE-T2] Realtime INSERT chat.id=${chat.id} chat.name=${chat.name} | chats.length=${chats.length} | selectedChatId=${selectedChatId}`);
         // New chat — resolve the partner's avatar/name (never use the raw row avatar,
         // which may have been stamped with the *creator's* own avatar by the sender).
         const full = await getChatWithPartner(chat.id, user.id);
+        console.log(`[RACE-T2b] getChatWithPartner returned: ${full ? `id=${full.id} name=${full.name}` : 'null'} | calling setChats + refreshChats`);
         if (!full) return;
         setChats(prev => {
           const existing = prev.find(c => c.id === full.id);
           if (existing) return prev;
           return [full as any, ...prev].sort(sortChats);
         });
-        // Also sync context
-        refreshChats();
+        // FIX-B: refreshChats() removed — already handled by setChats above.
+        // Keeping it here would trigger effect 932 which replaces the full chats state
+        // before Supabase has propagated the new chat, causing activeChat=undefined (white screen).
+        console.log(`[RACE-T3] INSERT handler: skipped refreshChats() for chat.id=${chat.id} — setChats already added it`);
       } else if (event === "UPDATE") {
         setChats(prev => {
           const idx = prev.findIndex(c => c.id === chat.id);
@@ -1233,6 +1260,11 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           // Someone else sent a message while we're not viewing — increment unread
           const clearedAt = clearedAtMapRef.current[chat.id];
           const isCleared = clearedAt && newRawTime && newRawTime <= clearedAt;
+          // La misma llegada puede venir por varios canales (realtime por
+          // profile_id/admin_id del creador, ping chat_unread_pings, FCM).
+          // Si el timestamp ya se contó, actualiza metadata pero no suma de nuevo.
+          const alreadyHandled = lastHandledMsgRef.current[chat.id] === newRawTime;
+          lastHandledMsgRef.current[chat.id] = newRawTime;
           const updated = [...prev];
           updated[idx] = {
             ...existing,
@@ -1249,7 +1281,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
                   })()
                 : existing.lastMessageTime,
             lastMessageTimeRaw: newRawTime,
-            unreadCount: isCleared ? 0 : (existing.unreadCount + 1),
+            unreadCount: isCleared ? 0 : (alreadyHandled ? existing.unreadCount : existing.unreadCount + 1),
             updated_at: chat.updated_at,
           };
           db.run("UPDATE chats SET updated_at = ? WHERE id = ?", [chat.updated_at, chat.id]);
@@ -1467,6 +1499,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       if (d?.chatId) {
         setSelectedChatId(d.chatId);
         setCurrentScreen('chat_room');
+        setChats(prev => prev.map(c => (c.id === d.chatId ? { ...c, unreadCount: 0 } : c)));
       }
     };
     const handleNewMessage = (e: Event) => {
@@ -1496,8 +1529,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           const idx = prev.findIndex(chat => chat.id === d.chatId);
           if (idx === -1) return prev;
           const updated = [...prev];
+          const alreadyHandled = !!d.ts && lastHandledMsgRef.current[d.chatId] === d.ts;
           const realtimeRecently = Date.now() - (lastRealtimeUnreadRef.current[d.chatId] || 0) < 10000;
-          if (!realtimeRecently) {
+          if (!isChatOpen && !alreadyHandled && !realtimeRecently) {
             updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
           }
           if (d.body) updated[idx].lastMessage = d.body;
@@ -1747,6 +1781,27 @@ const lastSentAtRef = useRef<Record<string, number>>({});
 
   // activeChat derived from chats + selectedChatId
   const activeChat = chats.find((c) => c.id === selectedChatId);
+  const prevActiveChatRef = useRef(activeChat);
+  useEffect(() => {
+    if (currentScreen === "chat_room" && selectedChatId) {
+      const was = prevActiveChatRef.current;
+      const now = activeChat;
+      if (was && !now) {
+        console.log(`[RACE-T7] activeChat LOST: was=${was.id} now=UNDEFINED | selectedChatId=${selectedChatId} chats.length=${chats.length}`);
+      } else if (!was && now) {
+        console.log(`[RACE-T7] activeChat FOUND: id=${now.id} | selectedChatId=${selectedChatId} chats.length=${chats.length}`);
+      }
+    }
+    prevActiveChatRef.current = activeChat;
+  }, [activeChat, currentScreen, selectedChatId, chats.length]);
+  if (selectedChatId && currentScreen === "chat_room") {
+    const found = !!activeChat;
+    const chatIds = chats.map(c => c.id);
+    if (!found || chatIds.length !== (window as any).__lastRaceChatsLen) {
+      console.log(`[RACE-T6] activeChat=${found ? activeChat!.id : 'UNDEFINED'} | selectedChatId=${selectedChatId} | chats.length=${chats.length} | chatIds=[${chatIds.slice(0,5).join(',')}...]`);
+      (window as any).__lastRaceChatsLen = chatIds.length;
+    }
+  }
 
   const handleSendMessageInRoom = (newMsg: Message) => {
     if (!selectedChatId) return;
@@ -2338,13 +2393,16 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   }, [chats]);
 
   const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }): Promise<string | null> => {
+    const T0 = Date.now();
     const displayName = profile.contactName || profile.name;
     const existing = getChatByPartnerId(profile.id);
     if (existing) {
+      console.log(`[RACE-T0] handleStartChatFromSynced EXISTING chat ${existing.id} chats=${chats.length} selectedChatId=${selectedChatId} (+${Date.now()-T0}ms)`);
       setSelectedChatId(existing.id);
       setCurrentScreen("chat_room");
       return existing.id;
     }
+    console.log(`[RACE-T0] handleStartChatFromSynced creating NEW chat for partner ${profile.id} (+${Date.now()-T0}ms)`);
     try {
       const chat = await createChatInSupabase({
         name: displayName,
@@ -2353,6 +2411,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         admin_id: user?.id || "",
       });
       if (chat?.id) {
+        console.log(`[RACE-T0b] chat CREATED id=${chat.id} (+${Date.now()-T0}ms) — adding to local chats, setting selectedChatId + chat_room`);
         setChats(prev => {
           if (prev.some(c => c.id === chat.id)) return prev;
           return [{
@@ -2417,7 +2476,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   };
 
   const handleCreateGroup = async () => {
-    if (!user || selectedGroupMembers.length < 1) return;
+    if (!user || selectedGroupMembers.length < 1 || creatingGroup) return;
+    setCreatingGroup(true);
     try {
       const memberProfiles = appContacts
         .filter(c => selectedGroupMembers.includes(c.id || c.contact_user_id || ""))
@@ -2435,19 +2495,24 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         })
         .filter(Boolean);
       const groupChat = await createGroupChat(finalGroupName, user.id, memberIds, groupAdminOnly);
-      refreshChats();
       setSelectedGroupMembers([]);
       setGroupSearchQuery("");
       setGroupNameInput("");
       setGroupMuted(false);
       setGroupAdminOnly(false);
+      try {
+        await refreshChats();
+      } catch (refreshErr) {
+        // El grupo ya existe; si el refetch falla, el siguiente polling lo trae.
+        logger.warn("[GROUP] refresh after create failed", { error: refreshErr });
+      }
       if (groupChat?.id) {
         setChats(prev => {
           if (prev.some(c => c.id === groupChat.id)) return prev;
           return [{
             id: groupChat.id,
-            name: finalGroupName,
-            avatar: "",
+            name: groupChat.name || finalGroupName,
+            avatar: groupChat.avatar || "",
             status: "online" as const,
             lastMessage: "",
             lastMessageTime: "",
@@ -2459,8 +2524,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         setSelectedChatId(groupChat.id);
         setCurrentScreen("chat_room");
       }
-} catch (e) {
+      toast.success("Grupo creado correctamente");
+    } catch (e) {
+      console.error("[GROUP] Error creating group", e);
       logger.error("[GROUP] Error creating group", { error: e });
+      toast.error(e instanceof Error ? e.message : "Error al crear el grupo");
+    } finally {
+      setCreatingGroup(false);
     }
   };
 
@@ -3124,6 +3194,7 @@ try {
                 onToggleMute={() => setGroupMuted(!groupMuted)}
                 isAdminOnly={groupAdminOnly}
                 onToggleAdminOnly={() => setGroupAdminOnly(!groupAdminOnly)}
+                isCreating={creatingGroup}
                 onCreateGroup={handleCreateGroup}
               />
               </LazyPanel>
@@ -3313,6 +3384,14 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                               {!chat.isGroup && chat.status === "online" && (
                                 <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white z-10"></span>
                               )}
+                              {!chat.isGroup && chat.partnerUserId && blockedUsers.some(u => u.id === chat.partnerUserId) && (
+                                <span className="absolute bottom-0 right-0 w-4 h-4 bg-rose-500 rounded-full border-2 border-white z-10 flex items-center justify-center">
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="w-2 h-2 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="12" cy="12" r="10" />
+                                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                                  </svg>
+                                </span>
+                              )}
                             </div>
                             
                             <div className="flex-1 min-w-0 pt-0.5">
@@ -3343,7 +3422,39 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                   <ChatListSkeleton count={8} />
                 )}
 
-                {filteredChats.length === 0 && chatsLoaded && (
+                {filteredChats.length === 0 && chatsLoaded && chats.length === 0 && (
+                  <div className="px-4 pb-3.5 flex-1 flex items-center justify-center">
+                    <div className="text-center flex flex-col items-center space-y-4 py-10">
+                      <div className="relative">
+                        <svg viewBox="0 0 120 120" className="w-28 h-28">
+                          <circle cx="60" cy="60" r="58" fill="#0a4d52" />
+                          <circle cx="60" cy="60" r="50" fill="#0e5f63" />
+                          <circle cx="60" cy="60" r="44" fill="#116d70" opacity="0.9" />
+                          <path d="M40 48h40v26a7 7 0 0 1-7 7H57l-11 12v-12h-6a7 7 0 0 1-7-7V48a0 0 0 0 1 0 0h7z" fill="white" opacity="0.95" />
+                          <circle cx="46" cy="61" r="2.6" fill="#0a4d52" />
+                          <circle cx="60" cy="61" r="2.6" fill="#0a4d52" />
+                          <circle cx="74" cy="61" r="2.6" fill="#0a4d52" />
+                        </svg>
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <span className="w-3 h-3 rounded-full bg-teal-300 border-2 border-white animate-ping" />
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm font-extrabold text-slate-900 tracking-tight">Bienvenido a WEPA</p>
+                        <p className="text-[11px] text-slate-500 leading-relaxed max-w-[220px]">
+                          Aún no tienes chats. Agrega a un pana y empieza a hablar.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setCurrentScreen("add_contact_manual")}
+                        className="mt-1 bg-gradient-to-r from-[#0a4d52] to-[#0e5f63] hover:from-[#0e5f63] hover:to-[#116d70] text-white text-xs font-bold px-5 py-2.5 rounded-full shadow-lg shadow-teal-900/20 transition-all active:scale-95 cursor-pointer"
+                      >
+                        Agregar contacto
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {filteredChats.length === 0 && chatsLoaded && chats.length > 0 && (
                   <div className="px-4 pb-3.5">
                     <div className="text-center py-12 text-slate-400 space-y-1">
                       <p className="text-xs font-semibold">No se encontraron chats</p>
@@ -3354,55 +3465,117 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                 </div>
                 </div>
 
-                {/* Context menu overlay */}
+                {/* Context menu overlay — fixed bottom banner */}
                 {contextMenuChat && contextMenuPos && (
-                  <>
-                    <div className="fixed inset-0 z-50" onClick={closeContextMenu} />
+                  <div
+                    className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+                    onClick={closeContextMenu}
+                  >
                     <div
-                      className="fixed z-50 bg-white rounded-xl shadow-lg border border-slate-200 py-1 min-w-[200px] animate-fade-in"
-                      style={{
-                        top: Math.min(contextMenuPos.y, window.innerHeight - 160),
-                        left: Math.min(contextMenuPos.x, window.innerWidth - 220),
-                      }}
+                      className="w-full bg-white rounded-t-2xl shadow-2xl p-5 pb-8 animate-slide-up"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <div className="px-3 py-2 border-b border-slate-100">
-                        <p className="text-[11px] font-bold text-slate-800 truncate">{contextMenuChat.name}</p>
-                      </div>
-                      <button
-                        onClick={() => handleClearMessages(contextMenuChat)}
-                        className="w-full flex items-center gap-3 px-3 py-2.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                          <rect x="4" y="6" width="16" height="14" rx="1" />
-                        </svg>
-                        Borrar mensajes
-                      </button>
-                      {!contextMenuChat.isGroup && contextMenuChat.partnerUserId && (
-                        <button
-                          onClick={() => handleBlockUser(contextMenuChat)}
-                          className="w-full flex items-center gap-3 px-3 py-2.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="10" />
-                            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                           </svg>
-                          Bloquear usuario
+                        </div>
+                        <p className="text-sm font-bold text-slate-800">
+                          ¿Eliminar chat con <span className="text-rose-600">{contextMenuChat.name}</span>?
+                        </p>
+                      </div>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={closeContextMenu}
+                          className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                        >
+                          No
                         </button>
+                        <button
+                          onClick={() => handleDeleteChat(contextMenuChat.id)}
+                          className="flex-1 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                        >
+                          Sí, eliminar
+                        </button>
+                      </div>
+                      {!contextMenuChat.isGroup && contextMenuChat.partnerUserId && (
+                        (() => {
+                          const isBlocked = blockedUsers.some(u => u.id === contextMenuChat.partnerUserId);
+                          return (
+                            <button
+                              onClick={() => { setBlockConfirmChat(contextMenuChat); setContextMenuChat(null); }}
+                              className="w-full text-center mt-3 text-[13px] font-semibold text-rose-400 hover:text-rose-600 transition-colors cursor-pointer"
+                            >
+                              {isBlocked ? `Desbloquear a ${contextMenuChat.name}` : `Bloquear a ${contextMenuChat.name}`}
+                            </button>
+                          );
+                        })()
                       )}
-                      <button
-                        onClick={() => handleDeleteChat(contextMenuChat.id)}
-                        className="w-full flex items-center gap-3 px-3 py-2.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="3 6 5 6 21 6" />
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                        Eliminar chat
-                      </button>
                     </div>
-                  </>
+                  </div>
                 )}
+
+                {/* Block/Unblock user confirmation banner */}
+                {blockConfirmChat && (() => {
+                  const isCurrentlyBlocked = blockedUsers.some(u => u.id === blockConfirmChat.partnerUserId);
+                  return (
+                    <div
+                      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+                      onClick={() => setBlockConfirmChat(null)}
+                    >
+                      <div
+                        className="w-full bg-white rounded-t-2xl shadow-2xl p-5 pb-8 animate-slide-up"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <circle cx="12" cy="12" r="10" />
+                              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                            </svg>
+                          </div>
+                          <p className="text-sm font-bold text-slate-800">
+                            {isCurrentlyBlocked
+                              ? <>¿Desbloquear a <span className="text-rose-600">{blockConfirmChat.name}</span>?</>
+                              : <>¿Bloquear a <span className="text-rose-600">{blockConfirmChat.name}</span>?</>
+                            }
+                          </p>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mb-4">
+                          {isCurrentlyBlocked
+                            ? "Podrá enviarte mensajes y ver tu perfil nuevamente."
+                            : "No podrá enviarte mensajes ni ver tu perfil."
+                          }
+                        </p>
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => setBlockConfirmChat(null)}
+                            className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                          >
+                            No
+                          </button>
+                          {isCurrentlyBlocked ? (
+                            <button
+                              onClick={() => { handleUnblock(blockConfirmChat.partnerUserId!, blockConfirmChat.name); setBlockConfirmChat(null); }}
+                              className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                            >
+                              Sí, desbloquear
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => { handleBlockUser(blockConfirmChat); setBlockConfirmChat(null); }}
+                              className="flex-1 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                            >
+                              Sí, bloquear
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                   {/* CHANNELS TAB */}
                 {currentScreen === "channels" && (
@@ -3809,7 +3982,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                             </div>
                             <div>
                               <div className="text-[13.5px] font-black text-slate-800">Ayuda y Preguntas</div>
-                              <div className="text-[11px] text-slate-400">RED ON FAQ, soporte en directo</div>
+                              <div className="text-[11px] text-slate-400">WEPA FAQ, soporte en directo</div>
                             </div>
                           </div>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
@@ -3840,7 +4013,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               className="py-2 px-1 bg-slate-50 hover:bg-slate-100 border border-slate-100 text-slate-700 font-bold text-[10.5px] rounded-lg text-center transition-all cursor-pointer"
                             >
                               <div className="font-extrabold">Términos de Servicio</div>
-                              <div className="text-[10.5px] text-slate-400 font-normal mt-0.5">Condiciones de uso de RED ON</div>
+                              <div className="text-[10.5px] text-slate-400 font-normal mt-0.5">Condiciones de uso de WEPA</div>
                             </button>
                           </div>
                         </div>
@@ -4428,7 +4601,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               </div>
 
                               <div className="space-y-2">
-                                <div className="text-[9.5px] font-black text-slate-400 uppercase tracking-wide">RED ON FAQ</div>
+                                <div className="text-[9.5px] font-black text-slate-400 uppercase tracking-wide">WEPA FAQ</div>
                                 
                                 <div className="space-y-1.5 text-[10px] text-slate-700 leading-relaxed">
                                   <details className="bg-slate-50 rounded-xl border border-slate-100 p-2 cursor-pointer group text-left">
@@ -4487,7 +4660,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">•</span>
-                                    <span><strong className="text-slate-700">Tus derechos:</strong> Puedes acceder, rectificar, cancelar u oponerte al tratamiento de tus datos personales en cualquier momento desde la sección de ajustes de cuenta o escribiendo a privacidad@redon.app.</span>
+                                    <span><strong className="text-slate-700">Tus derechos:</strong> Puedes acceder, rectificar, cancelar u oponerte al tratamiento de tus datos personales en cualquier momento desde la sección de ajustes de cuenta o escribiendo a privacidad@wepa.app.</span>
                                   </li>
                                 </ul>
                                 <p className="text-slate-400 mt-2 text-[7.5px] italic">Última actualización: Julio 2026.</p>
@@ -4538,7 +4711,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-teal-600 mt-0.5 shrink-0">10.</span>
-                                    <span><strong className="text-slate-700">Contacto legal:</strong> Para consultas sobre estos términos, puedes escribir a legal@redon.app. Para soporte técnico general, utiliza la función "Soporte Wepa" disponible en la sección de Ayuda dentro de la aplicación.</span>
+                                    <span><strong className="text-slate-700">Contacto legal:</strong> Para consultas sobre estos términos, puedes escribir a legal@wepa.app. Para soporte técnico general, utiliza la función "Soporte Wepa" disponible en la sección de Ayuda dentro de la aplicación.</span>
                                   </li>
                                 </ul>
                                 <p className="text-slate-400 mt-2 text-[7.5px] italic">Última actualización: Julio 2026.</p>

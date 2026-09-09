@@ -92,6 +92,27 @@ export const stopSound = (): void => {
   activeAudiosRef.current.clear();
 };
 
+// Sonido específico de "grupo creado": usa el mismo mecanismo que playSound(),
+// pero con un asset propio, sin tocar message/call ni el selector de sonidos.
+const GROUP_CREATED_SOUND_FILE = "/sounds/group_created.mp3";
+
+export const playGroupCreatedSound = (volume = 0.7): HTMLAudioElement | null => {
+  try {
+    stopSound();
+    const audio = new Audio(GROUP_CREATED_SOUND_FILE);
+    audio.loop = false;
+    audio.volume = volume;
+    audio.play().catch((e) => {
+      logger.warn("[SoundService] playGroupCreatedSound audio.play failed", { error: e });
+    });
+    activeAudiosRef.current.add(audio);
+    return audio;
+  } catch (e) {
+    logger.error("[SoundService] playGroupCreatedSound failed", { error: e });
+    return null;
+  }
+};
+
 // ─── Group-specific sound ────────────────────────────────────────────
 const GROUP_SOUND_PREFIX = "redon_sound_group_";
 

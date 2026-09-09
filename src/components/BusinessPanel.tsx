@@ -532,6 +532,27 @@ export default function BusinessPanel({
               />
             </div>
 
+            {/* Contextual banner: user hasn't published yet but feed has posts */}
+            {flyers.length > 0 && myFlyers.length === 0 && (
+              <button
+                onClick={() => setActiveSubTab("create")}
+                className="w-full flex items-center gap-2.5 bg-gradient-to-r from-[#0a4d52] to-[#0e5f63] text-white text-left px-3 py-2.5 rounded-xl shadow-sm hover:from-[#0e5f63] hover:to-[#116d70] transition-all active:scale-[0.99] cursor-pointer"
+              >
+                <span className="w-7 h-7 rounded-full bg-white/15 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[10px] font-bold leading-tight">
+                    ¡Publica tu negocio!
+                  </span>
+                  <span className="block text-[9px] opacity-80 leading-tight">
+                    Tu flyer aparecerá aquí junto a otros emprendedores.
+                  </span>
+                </span>
+                <Sparkles className="w-3.5 h-3.5 text-teal-200 shrink-0 animate-pulse" />
+              </button>
+            )}
+
             {/* List of Published flyers */}
             <div className="space-y-4">
               {filteredFlyers.map((flyer) => {
@@ -710,7 +731,37 @@ export default function BusinessPanel({
                 );
               })}
 
-              {filteredFlyers.length === 0 && (
+              {filteredFlyers.length === 0 && flyers.length === 0 && (
+                <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-teal-200 flex flex-col items-center space-y-4">
+                  <div className="relative w-20 h-20">
+                    <svg viewBox="0 0 120 120" className="w-20 h-20">
+                      <circle cx="60" cy="60" r="58" fill="#0a4d52" />
+                      <circle cx="60" cy="60" r="50" fill="#0e5f63" />
+                      <circle cx="60" cy="60" r="44" fill="#116d70" opacity="0.9" />
+                      <path d="M42 46h36v26a7 7 0 0 1-7 7H62L48 92V79h-6a7 7 0 0 1-7-7V46a0 0 0 0 1 0 0h7z" fill="white" opacity="0.95" />
+                      <circle cx="52" cy="59" r="2.4" fill="#0a4d52" />
+                      <circle cx="60" cy="59" r="2.4" fill="#0a4d52" />
+                      <circle cx="68" cy="59" r="2.4" fill="#0a4d52" />
+                    </svg>
+                  </div>
+                  <div className="space-y-1 px-6">
+                    <p className="text-sm font-extrabold text-slate-900">El feed está en blanco</p>
+                    <p className="text-[11px] text-slate-500 leading-relaxed">
+                      Sé el primero en mostrar tu negocio en WEPA. Publica tu primer flyer y compártelo con tu comunidad.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveSubTab("create")}
+                    className="bg-gradient-to-r from-[#0a4d52] to-[#0e5f63] hover:from-[#0e5f63] hover:to-[#116d70] text-white text-xs font-bold px-5 py-2.5 rounded-full shadow-lg shadow-teal-900/20 transition-all active:scale-95 cursor-pointer"
+                  >
+                    Publicar mi negocio
+                  </button>
+                  <p className="text-[9px] text-slate-400">
+                    Crea un flyer, súbelo o usa el generador. Es gratis.
+                  </p>
+                </div>
+              )}
+              {filteredFlyers.length === 0 && flyers.length > 0 && (
                 <div className="text-center py-10 bg-white rounded-2xl border border-dashed text-slate-400 space-y-1">
                   <p className="text-xs font-semibold">No hay publicaciones activas</p>
                   <p className="text-[10px]">Crea o busca con otros términos.</p>
@@ -1234,7 +1285,7 @@ export default function BusinessPanel({
                 <div className="text-center py-10 bg-white rounded-2xl border border-slate-100 text-slate-400 space-y-2">
                   <p className="text-xs font-semibold">Aún no has publicado ningún flyer</p>
                   <button
-                    onClick={() => setActiveSubTab("create")}
+                    onClick={() => handleSubTabPress("create")}
                     className="text-[10px] text-teal-400 hover:underline font-bold"
                   >
                     ¡Crea tu primer flyer ahora!

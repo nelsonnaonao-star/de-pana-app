@@ -105,7 +105,7 @@ export default function ChatHeader({
             <div className="min-w-0">
               <h3 className="text-xs font-bold leading-tight truncate max-w-[140px]">{chat.name}</h3>
               <span className="text-[10px] text-teal-200 block">
-                {partnerTyping ? "Escribiendo..." : isGroup ? "Grupo" : chat.status === "online" ? "En línea" : "Desconectado"}
+                {partnerTyping ? "Escribiendo..." : isGroup ? "Grupo" : chat.status === "online" ? "En línea" : ""}
               </span>
             </div>
           </div>

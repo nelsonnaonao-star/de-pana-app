@@ -324,6 +324,8 @@ export default function CallOverlay({
   const remoteList = remoteStreamsMap ? Array.from(remoteStreamsMap.entries()) : [];
   const isGroupVideo = ((call.isGroup || remoteList.length >= 2) && remoteStreamsMap?.size > 0 && call.type === "video" && !call.isVideoOff && call.status === "connected");
 
+  const hasRemoteVideo = !!remoteStream && remoteStream.getVideoTracks().length > 0;
+
   return (
     <div className="absolute inset-0 bg-black text-white z-[9999] flex flex-col justify-between overflow-hidden select-none">
 
@@ -397,6 +399,9 @@ export default function CallOverlay({
               autoPlay playsInline muted
               className="absolute inset-0 w-full h-full object-cover opacity-30"
             />
+          )}
+          {remoteStream && !hasRemoteVideo && (
+            <div className="absolute inset-0 bg-black z-[5]" />
           )}
           <div className="relative z-10">
             <span className="absolute inset-[-15px] rounded-full border border-teal-500/20 animate-pulse"></span>

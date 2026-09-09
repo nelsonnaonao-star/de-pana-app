@@ -90,7 +90,7 @@ async function sendPushToChat(chatId, senderId, senderName, text) {
           try {
             await getMessaging().send({
               token: t.token,
-              data: { title: senderName || 'RED ON', body: text || 'Nuevo mensaje', type: 'message', chatId, contactId: senderId },
+              data: { title: senderName || 'RED ON', body: text || 'Nuevo mensaje', type: 'message', chatId, contactId: senderId, is_group: chat.is_group ? 'true' : 'false', ts: new Date().toISOString() },
               android: { priority: 'high', ttl: 86400000 },
             });
           } catch {}
@@ -297,6 +297,42 @@ router.post('/send', sendLimiter, async (req, res) => {
         .eq('id', msg.chat_id);
     } catch (e) {
       console.error('[MESSAGES] chat update failed:', e.message);
+    }
+
+    // No-leídos realtime para miembros de grupo: el realtime de `chats`
+    // solo llega a profile_id/admin_id (= creador), así que para los demás
+    // participantes escribimos un ping por (chat, usuario) que cada miembro
+    // escucha vía realtime en la lista de chats (tabla chat_unread_pings).
+    try {
+      const msgNow = new Date().toISOString();
+      const { data: msgChat } = await supabaseAdmin
+        .from('chats')
+        .select('is_group')
+        .eq('id', msg.chat_id)
+        .maybeSingle();
+      if (msgChat?.is_group) {
+        const { data: pingTargets } = await supabaseAdmin
+          .from('chat_participants')
+          .select('profile_id')
+          .eq('chat_id', msg.chat_id)
+          .neq('profile_id', msg.sender_id);
+        const pingRows = (pingTargets || [])
+          .map((p) => ({
+            chat_id: msg.chat_id,
+            user_id: p.profile_id,
+            sender_id: msg.sender_id,
+            body: isEphemeral ? 'Mensaje temporal' : (sanitizedText || 'Multimedia'),
+            sent_at: msgNow,
+          }));
+        if (pingRows.length) {
+          const { error: pingErr } = await supabaseAdmin
+            .from('chat_unread_pings')
+            .insert(pingRows);
+          if (pingErr) console.error('[MESSAGES] chat_unread_pings insert failed:', pingErr.message);
+        }
+      }
+    } catch (e) {
+      console.error('[MESSAGES] chat_unread_pings block failed:', e.message);
     }
 
     try {

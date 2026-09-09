@@ -1,6 +1,6 @@
 import React from "react";
 import {
-  Plus, Play, Camera, ChevronLeft, Send, X, Flame, Sparkles,
+  Plus, Play, ChevronLeft, Send, X, Flame, Sparkles,
   Smile, Layout, Check, Heart, MessageCircle, Clock, Eye, Trash2,
   Video, Upload, Award, Info, User
 } from "lucide-react";
@@ -124,7 +124,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
                     <CachedImage
                       src={userState.userAvatar}
                       alt={userState.userName}
-                      className={`w-[68px] h-[76px] rounded-[8px_8px_8px_0px/8px_8px_8px_10px] object-cover ${
+                      className={`w-[68px] h-[68px] rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover ${
                         userState.hasUnseen
                           ? "ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50"
                           : "ring-1 ring-slate-300 ring-offset-1 ring-offset-slate-50"
@@ -141,16 +141,16 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
             <div className="flex flex-col items-center justify-center mt-10">
             <button
               onClick={() => setShowCreateMenu(true)}
-              className="w-[68px] h-[68px] bg-emerald-600 text-white rounded-[62%_38%_55%_45%/45%_55%_40%_60%] ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50 shadow-lg flex flex-col items-center justify-center hover:bg-emerald-500 transition-transform active:scale-95 transition-all cursor-pointer"
+              className="w-[92px] h-[92px] bg-[#0a4d52] text-white rounded-[62%_38%_55%_45%/45%_55%_40%_60%] ring-2 ring-[#0a4d52]/60 ring-offset-1 ring-offset-slate-50 shadow-lg flex flex-col items-center justify-center hover:bg-[#0e5f63] transition-transform active:scale-95 transition-all cursor-pointer"
             >
-              <Plus className="w-8 h-8" />
+              <Plus className="w-11 h-11" />
             </button>
-            <span className="text-[10px] font-medium text-gray-700 mt-3">Crear Momentos</span>
+            <span className="text-sm font-semibold text-gray-700 mt-3">Crear Momentos</span>
           </div>
 
-          <div className="bg-teal-50/50 rounded-xl p-3 border border-teal-100 flex gap-2 items-start">
+            <div className="bg-teal-50/50 rounded-xl p-3 border border-teal-100 flex gap-2 items-start">
               <Info className="w-4 h-4 text-[#10646a] shrink-0 mt-0.5" />
-              <p className="text-[8.5px] text-slate-500 leading-relaxed">
+              <p className="text-[10.5px] text-slate-500 leading-relaxed">
                 Los estados de Red On desaparecen automáticamente cada 24 horas. ¡El diseño es dinámico y soporta respuestas directas al chat privado del publicador!
               </p>
             </div>

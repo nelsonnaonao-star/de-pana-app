@@ -51,6 +51,8 @@ interface ChatRoomProps {
 }
 
 export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, onChatMessagesChanged, currentUserId, currentUserName, refetchTrigger, readReceipts = true, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
+  console.log(`[RACE-T1] ChatRoom RENDER chat.id=${chat.id} chat.name=${chat.name}`);
+  (window as any).__chatRoomMountTime = Date.now();
   const { user, profile, contacts, refreshContacts } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
@@ -265,7 +267,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
   // Fetch initial messages: cache-first, then network refresh
   useEffect(() => {
-    console.log('[CHAT] useEffect [chat.id] — chat.id:', chat.id);
+    console.log(`[RACE-T1] ChatRoom MOUNTED/EFFECT — chat.id=${chat.id} uid=${uid} messages=${messages.length} (+${Date.now() - (window as any).__chatRoomMountTime || '?'}ms from render)`);
     if (chat.id) {
       setHasMoreOlder(true);
 

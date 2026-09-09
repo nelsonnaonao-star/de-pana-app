@@ -52,12 +52,46 @@ async function fetchWithTimeout(url, timeoutMs = 5000) {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RedOnBot/1.0)' },
-      redirect: 'follow',
+      redirect: 'manual',
     });
     return res;
   } finally {
     clearTimeout(id);
   }
+}
+
+const MAX_REDIRECTS = 5;
+
+async function followRedirects(initialUrl, timeoutMs = 5000) {
+  let currentUrl = initialUrl;
+  let response;
+
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    response = await fetchWithTimeout(currentUrl, timeoutMs);
+
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      return response;
+    }
+
+    const location = response.headers.get('location');
+    if (!location) return response;
+
+    let redirectTarget;
+    try {
+      redirectTarget = new URL(location, currentUrl);
+    } catch {
+      return response;
+    }
+
+    if (!['http:', 'https:'].includes(redirectTarget.protocol)) return response;
+    if (isPrivateIP(redirectTarget.hostname)) {
+      throw new Error('SSRF blocked: redirect to private/internal host');
+    }
+
+    currentUrl = redirectTarget.href;
+  }
+
+  return response;
 }
 
 router.post('/', async (req, res) => {
@@ -82,7 +116,7 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const response = await fetchWithTimeout(url);
+    const response = await followRedirects(url);
     if (!response.ok) {
       return res.json({ url, title: '', description: '', image: '' });
     }

@@ -70,12 +70,11 @@ export async function fetchEmprendedorAccess(): Promise<EmprendedorAccessInfo> {
       expiresOn,
       checkedAt: Date.now(),
     };
+    console.log("[EMPRENDEDOR-DBG] RPC ok, data:", JSON.stringify(data), "→ active:", info.active);
     writeCache(info);
     return info;
   } catch (err) {
-    console.warn("[emprendedorAccess] Sin conexión, usando caché local:", err);
-    const cached = readCache();
-    if (cached && cached.active && !isExpired(cached.expiresOn)) return cached;
+    console.warn("[EMPRENDEDOR-DBG] RPC FAIL:", err);
     return { active: false, plan: null, expiresOn: null, checkedAt: Date.now() };
   }
 }

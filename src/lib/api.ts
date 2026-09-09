@@ -14,24 +14,50 @@ export function apiUrl(path: string): string {
 let lastRefreshFailureAt = 0;
 const REFRESH_FAILURE_COOLDOWN_MS = 45000;
 
+// Tiempo máximo para las operaciones de sesión de Supabase que ocurren
+// ANTES del fetch. Sin esto, getSession()/refreshSession() podrían dejar
+// authFetch() esperando indefinidamente (botón en "Enviando..." eterno).
+const SESSION_TIMEOUT_MS = 5000;
+
+function withSessionTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(fallback); },
+    );
+  });
+}
+
+const NO_SESSION_RESULT = { data: { session: null } } as const;
+
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
 
-  let { data: { session } } = await supabase.auth.getSession();
+  // getSession() nunca debe colgar el flujo: si expira el timeout se trata
+  // como "sin sesión" (válido para usuario no autenticado en recuperación).
+  let { data: { session } } = await withSessionTimeout(
+    supabase.auth.getSession(),
+    SESSION_TIMEOUT_MS,
+    NO_SESSION_RESULT,
+  );
 
   // Capacitor/Android: getSession() a veces retorna null aunque la sesión
   // exista en Preferences (la carga es async y puede no haber completado).
   // En ese caso, refreshSession() fuerza la re-lectura de storage + refresh.
+  // También este paso está sujeto a timeout para no bloquear el flujo.
   if (!session?.access_token) {
-    try {
-      const { data: { session: refreshed } } = await supabase.auth.refreshSession();
-      if (refreshed?.access_token) {
-        session = refreshed;
-      }
-    } catch (_e) { /* no session available */ }
+    const refreshedResult = await withSessionTimeout(
+      supabase.auth.refreshSession(),
+      SESSION_TIMEOUT_MS,
+      NO_SESSION_RESULT,
+    );
+    if (refreshedResult.data?.session?.access_token) {
+      session = refreshedResult.data.session;
+    }
   }
 
   if (session?.access_token) {

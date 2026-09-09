@@ -1,7 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { authFetch } from '../lib/api';
-import { playSound, resolveChatSoundId } from './soundService';
 import { logger } from '../lib/logger';
 
 const isNative = Capacitor.isNativePlatform();
@@ -134,13 +133,12 @@ try {
               documentName: data.documentName,
               mimeType: data.mimeType,
               msgType: data.msgType,
+              ts: data.ts || undefined,
             },
           }));
         } else if (data?.type === 'group_added' && data?.chatId) {
-          // Notificación al ser agregado a un grupo, con sonido para avisar
-          try { playSound("message", 0.7); } catch (e) {
-            logger.warn("[PushCapacitor] playSound message failed", { error: e });
-          }
+          // El sonido del grupo lo produce la notificación nativa (canal
+          // redon-groups, group_created.mp3) — NADA aquí para evitar doble sonido.
           window.dispatchEvent(new CustomEvent('group-added', {
             detail: { chatId: data.chatId, title: data.title, body: data.body },
           }));

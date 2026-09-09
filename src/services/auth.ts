@@ -130,13 +130,34 @@ export async function register(
   }
   if (cleanUsername.length < 2) throw new Error("El usuario debe tener al menos 2 caracteres");
 
-  const existing = await supabase
-    .from("profiles")
-    .select("id")
-    .or(`username.eq.${cleanUsername},phone_digits.eq.${cleanDigits}`)
-    .maybeSingle();
+  let duplicate = false;
+  try {
+    const res = await authFetch(apiUrl("/api/auth/check-duplicate"), {
+      method: "POST",
+      body: JSON.stringify({
+        username: cleanUsername,
+        phone: cleanDigits,
+      }),
+    });
 
-  if (existing.data) throw new Error("El usuario o teléfono ya está registrado");
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+
+      if (data?.duplicate) {
+        duplicate = true;
+      }
+    } else {
+      logger.warn("[REGISTER] check-duplicate falló", {
+        status: res.status,
+      });
+    }
+  } catch (err) {
+    logger.warn("[REGISTER] check-duplicate falló", {
+      error: err,
+    });
+  }
+
+  if (duplicate) throw new Error("El usuario o teléfono ya está registrado");
 
   const { data, error } = await supabase.auth.signUp({
     email: `${cleanUsername}@redon.app`,
@@ -208,6 +229,58 @@ export async function resetPassword(identifier: string) {
   const data = await res.json();
   toast.success(data.message);
   return { maskedEmail: data.maskedEmail };
+}
+
+export async function sendResetCode(email: string) {
+  const res = await authFetch(apiUrl("/api/auth/send-reset-code"), {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || "Error al enviar el código.");
+  }
+
+  return {
+    message: data.message,
+    maskedEmail: data.maskedEmail,
+    profileId: data.profileId,
+    expiresIn: data.expiresIn,
+  };
+}
+
+export async function verifyResetCode(profileId: string, code: string) {
+  const res = await authFetch(apiUrl("/api/auth/verify-reset-code"), {
+    method: "POST",
+    body: JSON.stringify({ profileId, code }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || "Código inválido o expirado.");
+  }
+
+  return { email: data.email };
+}
+
+export async function updatePasswordByCode(
+  profileId: string,
+  email: string,
+  code: string,
+  newPassword: string
+) {
+  const res = await authFetch(apiUrl("/api/auth/update-password"), {
+    method: "POST",
+    body: JSON.stringify({ profileId, email, code, newPassword }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || "Error al actualizar la contraseña.");
+  }
+
+  return { message: data.message };
 }
 
 export async function signOut() {

@@ -209,7 +209,21 @@ CREATE POLICY "messages_update_member"
         AND chat_participants.profile_id = auth.uid()
     )
   )
-  WITH CHECK (true);
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM chats
+      WHERE chats.id = messages.chat_id
+        AND (
+          chats.profile_id = auth.uid()
+          OR chats.admin_id = auth.uid()
+        )
+      )
+    OR EXISTS (
+      SELECT 1 FROM chat_participants
+      WHERE chat_participants.chat_id = messages.chat_id
+        AND chat_participants.profile_id = auth.uid()
+    )
+  );
 
 
 -- ─── CONTACTS ────────────────────────────────────────────────────
@@ -261,7 +275,10 @@ CREATE POLICY "calls_update_participant"
   ON calls FOR UPDATE
   TO authenticated
   USING (auth.uid() = caller_id OR auth.uid() = callee_id)
-  WITH CHECK (true);
+  WITH CHECK (
+    auth.uid() = caller_id
+    OR auth.uid() = callee_id
+  );
 
 
 -- ============================================================

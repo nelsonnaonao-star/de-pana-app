@@ -20,34 +20,17 @@ function getInitials(name: string): string {
 export default function ContactsList({ contacts, onSelectContact, onAddContact, onDeleteContact, onBack, currentUserId }: ContactsListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [menuContact, setMenuContact] = useState<Contact | null>(null);
-  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [inviteContact, setInviteContact] = useState<Contact | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuContact(null);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
 
   const handleContextMenu = (contact: Contact, e: React.MouseEvent) => {
     e.preventDefault();
     setMenuContact(contact);
-    setMenuPos({ x: e.clientX, y: e.clientY });
   };
 
   const handleTouchStart = (contact: Contact, e: React.TouchEvent) => {
-    const t = e.touches[0];
-    const x = Math.min(t.clientX, window.innerWidth - 190);
-    const y = Math.min(t.clientY, window.innerHeight - 90);
     longPressTimer.current = setTimeout(() => {
       setMenuContact(contact);
-      setMenuPos({ x: Math.max(0, x), y: Math.max(0, y) });
       longPressTimer.current = null;
     }, 500);
   };
@@ -204,20 +187,39 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
 
       {menuContact && (
         <div
-          ref={menuRef}
-          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1 min-w-[180px]"
-          style={{ left: menuPos.x, top: menuPos.y }}
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+          onClick={() => setMenuContact(null)}
         >
-          <button
-            onClick={() => {
-              onDeleteContact(menuContact.id);
-              setMenuContact(null);
-            }}
-            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+          <div
+            className="w-full bg-white rounded-t-2xl shadow-2xl p-5 pb-8 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
           >
-            <Trash2 className="w-4 h-4" />
-            Eliminar contacto
-          </button>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-500" />
+              </div>
+              <p className="text-sm font-bold text-slate-800">
+                ¿Eliminar a <span className="text-rose-600">{menuContact.name}</span>?
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setMenuContact(null)}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                No
+              </button>
+              <button
+                onClick={() => {
+                  onDeleteContact(menuContact.id);
+                  setMenuContact(null);
+                }}
+                className="flex-1 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Sí, eliminar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

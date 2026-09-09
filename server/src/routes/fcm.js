@@ -406,6 +406,7 @@ router.post('/webhook', async (req, res) => {
                   type: 'message',
                   chatId: chat_id,
                   contactId: sender_id,
+                  is_group: isGroup ? 'true' : 'false',
                   msgType: msgType || undefined,
                   fileUrl: file_url || undefined,
                   documentName: document_name || undefined,
@@ -592,6 +593,12 @@ router.post('/webhook', async (req, res) => {
       const title = 'Nuevo grupo';
       const body = `${adderName} te agregó a "${groupName}"`;
 
+      // El admin que agrega/crea NO recibe su propio aviso "te agregaron":
+      // el creador no debe escuchar el sonido de grupo al crear/agregar.
+      if (chatDetail?.admin_id && chatDetail.admin_id === profile_id) {
+        return res.json({ ok: true, sent: 0, reason: 'adder is admin' });
+      }
+
       const tokens = await getTokens(profile_id);
       if (!tokens.length) {
         return res.json({ ok: true, sent: 0, reason: 'no tokens' });
@@ -604,26 +611,18 @@ router.post('/webhook', async (req, res) => {
           const admin = await initFirebaseAdmin();
           if (admin) {
             try {
+              // Push data-only: el propio CallFcmService decide el canal/sonido
+              // y construye la notificación (patrón idéntico a los mensajes).
               await admin.messaging().send({
                 token: t.token,
-                notification: { title, body },
                 data: {
                   title, body,
                   badge: '1', notificationCount: '1',
                   type: 'group_added',
+                  is_group: 'true',
                   chatId: chat_id,
                 },
-                android: {
-                  priority: 'high', ttl: 86400000,
-                  notification: {
-                    channel_id: 'redon-messages',
-                    tag: chat_id || 'redon-group',
-                    click_action: 'OPEN_APP',
-                    notification_count: 1,
-                    visibility: 'public',
-                    sound: 'notificacion',
-                  },
-                },
+                android: { priority: 'high', ttl: 86400000 },
               });
               results.android++;
             } catch (err) {
@@ -637,7 +636,7 @@ router.post('/webhook', async (req, res) => {
             const subscription = JSON.parse(t.token);
             await webpush.sendNotification(subscription, JSON.stringify({
               title, body,
-              data: { type: 'group_added', chatId: chat_id },
+              data: { type: 'group_added', is_group: 'true', chatId: chat_id },
               icon: '/icon.png',
             }));
             results.web++;

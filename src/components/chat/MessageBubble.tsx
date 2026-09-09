@@ -423,9 +423,9 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
             <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
               {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
               {msg.status === "error" && <span className="text-red-400 font-bold">!</span>}
-              {msg.status === "sent" && "✓"}
-              {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
-              {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
+              {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
+              {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+              {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
             </span>
           )}
         </div>
@@ -611,10 +611,10 @@ export default React.memo(function MessageBubble({
               <span className={`text-[10px] leading-none ${msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"}`}>
                 {msg.status === "sending" && "🕒"}
                 {msg.status === "error" && <span className="text-red-400 font-bold">!</span>}
-                {msg.status === "sent" && "✓"}
-                {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
-                {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
-                {!msg.status && "✓"}
+                {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
+                {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+                {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+                {!msg.status && <span className="text-[13px] leading-none">✓</span>}
               </span>
             )}
           </div>
@@ -860,11 +860,11 @@ export default React.memo(function MessageBubble({
               msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"
             }`}>
               {msg.status === "sending" && "🕒"}
-              {msg.status === "sent" && "✓"}
-              {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
-              {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
+              {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
+              {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+              {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
               {msg.status === "error" && <span className="text-red-400">⚠️</span>}
-              {!msg.status && "✓"}
+              {!msg.status && <span className="text-[13px] leading-none">✓</span>}
             </span>
           )}
         </div>
@@ -1001,9 +1001,9 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
             {isMe && (
               <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
                 {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
-                {msg.status === "sent" && "✓"}
-                {msg.status === "delivered" && <span className="tracking-[-2px]">✓✓</span>}
-                {msg.status === "read" && <span className="tracking-[-2px]">✓✓</span>}
+                {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
+                {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+                {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
               </span>
             )}
           </div>

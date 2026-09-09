@@ -230,12 +230,20 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
             onClick={() => onStartChat(profile)}
             className="w-full bg-white rounded-xl p-3 flex items-center gap-3 hover:shadow-md hover:bg-slate-50 transition-all text-left cursor-pointer border border-transparent hover:border-slate-200"
           >
-            <div className="w-11 h-11 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shrink-0 shadow-sm flex items-center justify-center">
-              {profile.avatar_url ? (
-                <CachedImage src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-white font-black text-sm">{getInitials(profile.contactName || profile.name)}</span>
-              )}
+            <div className="relative shrink-0" style={{ width: 44, height: 44 }}>
+              <div style={{ borderRadius: '62% 38% 55% 45% / 45% 55% 40% 60%', background: 'conic-gradient(from 0deg, #5EB7FF, #C65EFF, #4ADE80, #5EB7FF)', padding: 2 }}>
+                <div className="rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden" style={{ width: 40, height: 40 }}>
+                  {profile.avatar_url ? (
+                    <CachedImage src={profile.avatar_url} alt={profile.contactName || profile.name} className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover" loading="lazy" />
+                  ) : (
+                    <div className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                      <span className="text-white font-black text-sm">
+                        {(profile.contactName || profile.name).split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-slate-800 truncate">

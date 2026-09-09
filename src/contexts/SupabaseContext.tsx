@@ -108,6 +108,18 @@ function debugLog(label: string, data?: any) {
   logger.debug(`[SUPABASE] ${label}`, data);
 }
 
+function updatedAtTime(x: any): number {
+  return new Date(x?.updated_at || 0).getTime();
+}
+
+function getChatTime(x: any): number {
+  return new Date(x.updated_at || x.lastMessageTimeRaw || 0).getTime();
+}
+
+function sortChats(a: any, b: any): number {
+  return getChatTime(b) - getChatTime(a);
+}
+
 interface SupabaseContextType {
   user: any | null;
   profile: Profile | null;
@@ -923,9 +935,18 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           // ═══════════════ FIN TEMPORAL LOG ═══════════════
           setChats(prev => {
             const merged = new Map<string, Chat>();
-            for (const c of fresh) merged.set(c.id, c);
+            const prevById = new Map<string, Chat>();
+            for (const p of prev) prevById.set(p.id, p);
+            for (const c of fresh) {
+              const local = prevById.get(c.id);
+              if (local && updatedAtTime(local) > updatedAtTime(c)) {
+                merged.set(c.id, { ...c, updated_at: local.updated_at });
+              } else {
+                merged.set(c.id, c);
+              }
+            }
             for (const c of prev) if (!merged.has(c.id)) merged.set(c.id, c);
-            return Array.from(merged.values());
+            return Array.from(merged.values()).sort(sortChats);
           });
         });
         // Refresh contacts too: resuelve avatar/nombre desde profiles, así una
@@ -1097,7 +1118,9 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
 const refreshChats = async () => {
     if (!user) return;
+    console.log(`[RACE-T3] refreshChats STARTED — fetching getChats for user ${user.id.slice(0,8)}`);
     const ch = await getChats(user.id);
+    console.log(`[RACE-T4] refreshChats RETURNED — ${ch.length} chats: [${ch.map(c=>c.id).join(',')}]`);
     // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
     console.log("[NAME RESOLUTION - REFRESHCHATS]", JSON.stringify({
       trigger: new Error().stack?.split("\n")[2]?.trim()?.slice(0, 80) || "unknown",
@@ -1107,12 +1130,18 @@ const refreshChats = async () => {
     // ═══════════════ FIN TEMPORAL LOG ═══════════════
     const withMessages = ch.map((fresh) => {
       const prev = chatsRef.current.find((p) => p.id === fresh.id) as (Chat & { messages?: unknown[] }) | undefined;
-      if (Array.isArray(prev?.messages) && prev.messages.length > 0) {
-        return { ...fresh, messages: prev.messages };
+      let merged = fresh;
+      if (prev && updatedAtTime(prev) > updatedAtTime(fresh)) {
+        merged = { ...fresh, updated_at: prev.updated_at };
       }
-      return fresh;
+      if (Array.isArray(prev?.messages) && prev.messages.length > 0) {
+        return { ...merged, messages: prev.messages };
+      }
+      return merged;
     });
+    withMessages.sort(sortChats);
     setChats(withMessages);
+    console.log(`[RACE-T4b] refreshChats setChats called — context chats now ${withMessages.length}`);
     chatRepo.saveChats(user.id, withMessages);
   };
 
