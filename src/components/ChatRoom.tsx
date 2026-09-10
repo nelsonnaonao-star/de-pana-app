@@ -413,7 +413,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
   // Live Chat Style states with localStorage caching
   const [selectedBgId, setSelectedBgId] = useState(() => {
-    return localStorage.getItem("chat_bg_id") || "default";
+    return localStorage.getItem("chat_bg_id") || "wepa";
   });
   const [customBgImage, setCustomBgImage] = useState<string | null>(() => {
     return localStorage.getItem("chat_bg_custom");
@@ -430,6 +430,46 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
   const [ephemeralTimer, setEphemeralTimerState] = useState<number | null>(() => (chat as any)?.ephemeral_timer ?? null);
+
+  // Nombres de participantes del grupo (para identificar el emisor de cada mensaje)
+  const [groupMemberNames, setGroupMemberNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!chat.isGroup || !chat.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: rows } = await supabase
+          .from("chat_participants")
+          .select("profile_id, profiles(name)")
+          .eq("chat_id", chat.id);
+        if (cancelled || !rows) return;
+        const map: Record<string, string> = {};
+        for (const r of rows as any[]) {
+          if (r.profile_id && r.profiles?.name) map[r.profile_id] = r.profiles.name;
+        }
+        if (uid) map[uid] = uname || "Tú";
+        setGroupMemberNames(map);
+      } catch (e) {
+        console.error("[CHAT] Error fetching group member names", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [chat.isGroup, chat.id, uid, uname]);
+
+  const senderLabelFor = useCallback((msg: Message): string | null => {
+    if (!chat.isGroup || msg.sender === "me" || msg.type === "system") return null;
+    const sid = msg.sender_id || msg.senderId;
+    if (!sid) return null;
+    return groupMemberNames[sid] || contacts.find(c => c.contact_user_id === sid)?.name || null;
+  }, [chat.isGroup, groupMemberNames, contacts]);
+
+  const senderColor = useCallback((sid?: string): string => {
+    const palette = ["#e17055", "#0984e3", "#e84393", "#00b894", "#6c5ce7", "#d63031", "#f39c12", "#00cec9"];
+    if (!sid) return palette[0];
+    let h = 0;
+    for (let i = 0; i < sid.length; i++) h = (h * 31 + sid.charCodeAt(i)) >>> 0;
+    return palette[h % palette.length];
+  }, []);
 
   // Synchronize style choices with localStorage
   useEffect(() => {
@@ -471,6 +511,14 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   const pickerLastSelectRef = useRef(0);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+
+  const handleVideoPosterReady = useCallback((msgId: string, posterDataUrl: string) => {
+    const target = messagesRef.current.find(m => m.id === msgId);
+    if (!target) return;
+    setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, posterUrl: posterDataUrl } : m)));
+    messageRepo.upsertMessage(chat.id, { ...target, posterUrl: posterDataUrl, synced: true, chatId: chat.id })
+      .catch((e) => console.warn("[CHATROOM] upsert posterUrl failed", e, chat.id, msgId));
+  }, [chat.id]);
 
   const handleMessageEvent = (payload: MessageEventPayload) => {
     if (payload.event === 'INSERT') {
@@ -1022,7 +1070,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         />
       )}
       {/* Subtle dark overlay only for dark Unsplash backgrounds */}
-      {!isPatternBg && !isGradientBg && selectedBgId !== "default" && selectedBgId !== "minimal_white" && selectedBgId !== "olive" && selectedBgId !== "pink" && (
+      {!isPatternBg && !isGradientBg && selectedBgId !== "default" && selectedBgId !== "wepa" && selectedBgId !== "wepa_light" && selectedBgId !== "wepa_neon" && selectedBgId !== "minimal_white" && selectedBgId !== "olive" && selectedBgId !== "pink" && (
         <div className="absolute inset-0 bg-black/15 pointer-events-none z-0"></div>
       )}
 
@@ -1272,15 +1320,23 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           itemContent={(index, msg) => {
             const isMe = msg.sender === "me";
             const isHighlighted = showSearch && searchQuery.trim() && index === searchIndex;
+            const isSystem = msg.type === "system" || (msg.type === "text" && msg.id.startsWith("sys_ephemeral_"));
+            const senderLabel = isSystem ? null : senderLabelFor(msg);
             return (
               <div className={`px-4 pb-3.5 ${isHighlighted ? "ring-2 ring-teal-400 rounded-xl transition-all duration-300" : ""}`}>
-              {msg.type === "system" || (msg.type === "text" && msg.id.startsWith("sys_ephemeral_")) ? (
+              {isSystem ? (
                 <div className="flex justify-center">
                   <div className="bg-black/40 backdrop-blur-md border border-white/10 rounded-full px-4 py-2 text-[11px] text-white/90 font-semibold text-center">
                     {msg.type === "system" ? msg.text : `⏳ ${msg.text}`}
                   </div>
                 </div>
               ) : (
+                <>
+                {senderLabel && (
+                  <div className="flex px-1.5 mb-1">
+                    <span className="text-[11px] font-bold" style={{ color: senderColor(msg.sender_id || msg.senderId) }}>{senderLabel}</span>
+                  </div>
+                )}
                 <MessageBubbleWithCache
                   msg={msg}
                   isMe={isMe}
@@ -1297,7 +1353,9 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                   isPending={isPending}
                   onEdit={(m) => setEditingMessage({ id: m.id, text: m.text || "" })}
                   onUpdatePrice={actions.handleUpdatePrice}
+                  onVideoPosterReady={handleVideoPosterReady}
                 />
+                </>
               )}
               </div>
             );

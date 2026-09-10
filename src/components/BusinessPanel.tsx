@@ -17,6 +17,7 @@ import { uploadChatMedia } from "../services/storage";
 import { saveMediaToGalleryDirect } from "../services/mediaUtils";
 import { getMusicLibrary, MusicTrack } from "../services/stickerService";
 import { fetchEmprendedorAccess } from "../services/emprendedorAccess";
+import { getFlyerPaywallActive } from "../services/featureFlags";
 
 export interface BusinessFlyer {
   id: string;
@@ -171,9 +172,24 @@ export default function BusinessPanel({
     return () => { cancelled = true; };
   }, [currentUserId]);
 
-  // Al entrar a "Publicar" se exige membresía vigente; el resto de pestañas es libre
+  // Feature flag de Supabase: true = paywall obligatorio; false = modo prueba (publicación libre)
+  const [paywallActive, setPaywallActive] = useState(true);
+
+  // Relee el flag cada 60s para alternar el paywall desde el Dashboard sin reinstalar la app
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      getFlyerPaywallActive().then((v) => {
+        if (!cancelled) setPaywallActive(v);
+      });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // Al entrar a "Publicar" se exige membresía vigente (si el paywall está activo); el resto de pestañas es libre
   const handleSubTabPress = (tab: typeof activeSubTab) => {
-    if (tab === "create" && !hasMembership) {
+    if (tab === "create" && paywallActive && !hasMembership) {
       setShowPlansModal(true);
       return;
     }
@@ -261,7 +277,7 @@ export default function BusinessPanel({
     e.preventDefault();
     if (!upName.trim() || !upDesc.trim() || !upLoc.trim()) return;
 
-    if (!hasMembership) {
+    if (paywallActive && !hasMembership) {
       setShowPlansModal(true);
       return;
     }
@@ -320,7 +336,7 @@ export default function BusinessPanel({
     const validProducts = genProducts.filter(p => p.name.trim());
     if (!genName.trim() || !validProducts.length || !genLoc.trim()) return;
 
-    if (!hasMembership) {
+    if (paywallActive && !hasMembership) {
       setShowPlansModal(true);
       return;
     }
@@ -490,7 +506,7 @@ export default function BusinessPanel({
               activeSubTab === "create" ? "bg-teal-400 text-white" : "text-slate-300 hover:text-white"
             }`}
           >
-            {!hasMembership && <Crown className="w-3 h-3 text-amber-400" />}
+            {paywallActive && !hasMembership && <Crown className="w-3 h-3 text-amber-400" />}
             Publicar
           </button>
           <button
@@ -1477,7 +1493,7 @@ export default function BusinessPanel({
         <div className="absolute inset-0 bg-slate-900 z-50 flex flex-col overflow-hidden">
           <MediaEditor 
             onPublishFlyer={(newFlyer) => {
-              if (!hasMembership) {
+              if (paywallActive && !hasMembership) {
                 setShowPlansModal(true);
                 return;
               }

@@ -556,7 +556,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       debugLog("fetching fresh data", { timeout: TIMEOUT_MS });
       
       const [profilesResult, chatsResult, contactsResult, callsResult] = await Promise.allSettled([
-        withTimeout(supabase.from("profiles").select("*").eq("id", userId).single(), 8000),
+        withTimeout(supabase.from("profiles").select("id,name,email,avatar,avatar_url,bio,role,status,phone_number,username,bubble_color,partner_bubble_color,notif_config,default_story_audience,created_at,updated_at").eq("id", userId).single(), 8000),
         withTimeout(getChats(userId), TIMEOUT_MS),
         withTimeout(getContacts(userId), TIMEOUT_MS),
         withTimeout(getCalls(userId), TIMEOUT_MS),
@@ -1107,7 +1107,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     if (!user) return;
     const { data, error } = await supabase
       .from("profiles")
-      .select("*")
+      .select("id,name,email,avatar,avatar_url,bio,role,status,phone_number,username,bubble_color,partner_bubble_color,notif_config,default_story_audience,created_at,updated_at")
       .eq("id", user.id)
       .single();
     if (!error && data) {

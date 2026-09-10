@@ -24,7 +24,7 @@ public class CallFcmService extends FirebaseMessagingService {
     private static final String TAG = "CallFcmService";
     private static final String CHANNEL_CALLS = "redon-calls";
     private static final String CHANNEL_MESSAGES = "redon-messages";
-    private static final String CHANNEL_GROUPS = "redon-groups";
+    private static final String CHANNEL_GROUPS = "redon-groups-v2";
     private static final String REPLY_ACTION = "com.redon.app.REPLY_MESSAGE";
 
     // Almacenamiento compartido creado por el plugin @capacitor/preferences

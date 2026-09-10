@@ -9,6 +9,7 @@ import { getCachedVideoPath, cacheVideoUrl } from "../../services/videoCache";
 import { Capacitor } from "@capacitor/core";
 import CachedImage from "../CachedImage";
 import toast from "react-hot-toast";
+import { generateVideoThumbnailFromElement } from "../../utils/videoThumbnail";
 
 const URL_PATTERN = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
 
@@ -52,6 +53,7 @@ interface MessageBubbleProps {
   isPending?: (msgId: string) => boolean;
   onEdit?: (msg: Message) => void;
   onUpdatePrice?: (msgId: string, price: string) => void;
+  onVideoPosterReady?: (msgId: string, posterDataUrl: string) => void;
 }
 
 function useSaveMedia() {
@@ -436,7 +438,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
 
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
-  handleVote, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice,
+  handleVote, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice, onVideoPosterReady,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
   const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
@@ -787,6 +789,7 @@ export default React.memo(function MessageBubble({
             msg={msg}
             handleForwardMessage={handleForwardMessage}
             handleAddReaction={handleAddReaction}
+            onVideoPosterReady={onVideoPosterReady}
           />
         )}
 
@@ -1038,14 +1041,41 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
   );
 }
 
-function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
+function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction, onVideoPosterReady }: {
   msg: Message;
   handleForwardMessage: (m: Message) => void;
   handleAddReaction: (id: string, emoji: string) => void;
+  onVideoPosterReady?: (msgId: string, posterDataUrl: string) => void;
 }) {
   const [showViewer, setShowViewer] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
+  const [posterOverride, setPosterOverride] = useState<string | undefined>(undefined);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const capturedRef = useRef(false);
   const isSending = msg.status === "sending";
+  const poster = msg.posterUrl || posterOverride;
+
+  // Primer frame disponible: sin poster, captura del <video> YA cargado (sin
+  // descarga extra) y lo persiste vía ChatRoom (upsertMessage → poster_url).
+  const handleFirstFrame = useCallback(() => {
+    setVideoReady(true);
+    if (capturedRef.current || msg.posterUrl) return;
+    try {
+      const v = videoRef.current;
+      if (!v || !v.videoWidth) return;
+      generateVideoThumbnailFromElement(v)
+        .then((dataUrl) => {
+          capturedRef.current = true;
+          setPosterOverride(dataUrl);
+          onVideoPosterReady?.(msg.id, dataUrl);
+        })
+        .catch(() => {
+          capturedRef.current = true;
+        });
+    } catch {
+      capturedRef.current = true;
+    }
+  }, [msg.id, msg.posterUrl, onVideoPosterReady]);
 
   return (
     <>
@@ -1063,31 +1093,41 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction }: {
         onClick={() => setShowViewer(true)}
       >
         <div className="w-24 h-24 rounded-full border-4 border-teal-400 overflow-hidden bg-black flex items-center justify-center relative shadow-inner">
-          {isSending ? (
-            <div className="w-full h-full flex items-center justify-center bg-black/60">
-              <Loader2 className="w-6 h-6 text-white/40 animate-spin" />
-            </div>
-          ) : (
-            <video
-              src={msg.localVideoUrl || msg.mediaUrl}
-              className={`w-full h-full object-cover absolute inset-0 transition-opacity duration-150 ${
-                videoReady ? "opacity-100" : "opacity-0"
-              }`}
-              muted
-              playsInline
-              crossOrigin="anonymous"
-              preload="auto"
-              onLoadedData={() => setVideoReady(true)}
-              onCanPlay={() => setVideoReady(true)}
+          {poster && (
+            <img
+              src={poster}
+              alt=""
+              className="absolute inset-0 w-full h-full object-cover"
             />
           )}
+
+          <video
+            ref={videoRef}
+            src={msg.localVideoUrl || msg.mediaUrl}
+            className={`w-full h-full object-cover absolute inset-0 transition-opacity duration-150 ${
+              videoReady ? "opacity-100" : "opacity-0"
+            }`}
+            muted
+            playsInline
+            crossOrigin="anonymous"
+            preload="auto"
+            onLoadedData={handleFirstFrame}
+            onCanPlay={handleFirstFrame}
+          />
+
           <div className={`absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/20 transition-all ${
-            videoReady ? "opacity-100" : "opacity-0"
+            poster || videoReady ? "opacity-100" : "opacity-0"
           }`}>
             <div className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center">
               <Play className="w-5 h-5 text-white ml-0.5" />
             </div>
           </div>
+
+          {(isSending || (!poster && !videoReady)) && (
+            <div className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center">
+              <Loader2 className="w-3 h-3 text-white/70 animate-spin" />
+            </div>
+          )}
         </div>
         <span className={`text-[9px] font-bold tracking-tight opacity-90`}>📹 Nota de Video ({msg.duration || "0:08"})</span>
       </div>

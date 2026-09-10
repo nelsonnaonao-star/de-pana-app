@@ -1,7 +1,8 @@
 import React from "react";
-import { Smile, Paperclip, Mic, VideoIcon, Send, X, Check, Loader2 } from "lucide-react";
+import { Paperclip, Mic, VideoIcon, Send, X, Check, Loader2 } from "lucide-react";
 import { Message } from "../../types";
 import CachedImage from "../CachedImage";
+import AnimatedSmileButton from "./AnimatedSmileButton";
 
 function formatRecTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -176,13 +177,7 @@ export default function ChatInputBar({
         ) : (
           <>
             <div className="flex-1 min-w-0 bg-white rounded-full pl-3 pr-1.5 py-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100/50 flex items-center gap-1 transition-all duration-300 overflow-hidden">
-              <button 
-                onClick={() => { setShowGifPicker(true); }}
-                className="p-1.5 text-slate-400 hover:text-[#0a4d52] rounded-full transition-all cursor-pointer shrink-0"
-                title="GIFs y Stickers"
-              >
-                <Smile className="w-6 h-6" />
-              </button>
+              <AnimatedSmileButton onClick={() => { setShowGifPicker(true); }} />
 
               <input 
                 type="text" 

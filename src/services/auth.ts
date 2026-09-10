@@ -24,6 +24,12 @@ export type Profile = {
   updated_at: string;
 };
 
+// Columnas públicas de `profiles` que el cliente puede leer vía RLS.
+// `real_email` y `pin` NO se conceden a `authenticated` (fix_hide_profile_private_columns.sql);
+// cualquier consulta al perfil debe limitarse a esta lista para que PostgREST no genere SELECT *.
+export const PROFILE_PUBLIC_COLUMNS =
+  "id,name,email,avatar,avatar_url,bio,role,status,phone_number,username,bubble_color,partner_bubble_color,notif_config,default_story_audience,created_at,updated_at";
+
 async function trySignIn(email: string, password: string) {
   const result = await supabase.auth.signInWithPassword({ email, password });
   if (result.error) logger.debug("[AUTH] signIn fail", { email, error: result.error.message });
@@ -294,7 +300,7 @@ export async function getCurrentProfile(): Promise<Profile | null> {
 
   const { data } = await supabase
     .from("profiles")
-    .select("*")
+    .select(PROFILE_PUBLIC_COLUMNS)
     .eq("id", user.id)
     .single();
 

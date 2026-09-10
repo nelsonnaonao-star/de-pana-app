@@ -1,5 +1,8 @@
 export const CHAT_BACKGROUNDS = [
   { id: "default", name: "Clásico Red On 📱", value: "#f8fafc" },
+  { id: "wepa", name: "WEPA", value: "url('/assets/backgrounds/wepa.svg') center/cover no-repeat" },
+  { id: "wepa_light", name: "WEPA Claro ☀️", value: "url('/assets/backgrounds/wepa_light.svg') center/cover no-repeat" },
+  { id: "wepa_neon", name: "WEPA Neón ✨", value: "url('/assets/backgrounds/wepa_neon.svg') center/cover no-repeat" },
   { id: "minimal_white", name: "Minimalista Blanco 🤍", value: "#ffffff" },
   { id: "dark_simple", name: "Sencillo Oscuro 🖤", value: "#0f172a" },
   { id: "marble", name: "Mármol Elegante 🪨", value: "url('/assets/backgrounds/mansion_elegante.jpg') center/cover no-repeat" },

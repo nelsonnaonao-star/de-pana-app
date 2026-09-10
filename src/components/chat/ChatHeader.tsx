@@ -159,95 +159,138 @@ export default function ChatHeader({
             {showDropdown && (
               <>
                 <div className="fixed inset-0 z-[100]" onClick={() => setShowDropdown(false)} />
-                <div className="fixed right-4 top-[72px] bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-[110] min-w-[190px] animate-fade-in">
-                  {onSetEphemeralTimer && (
-                    <div className="px-2 py-1.5 border-b border-slate-100">
-                      <button
-                        onClick={() => setShowEphemeral(v => !v)}
-                        className="w-full flex items-center gap-2 px-1 py-1.5 rounded-lg text-[11px] font-semibold text-teal-700 hover:bg-teal-50 transition-colors cursor-pointer"
-                      >
-                        <Clock className="w-3.5 h-3.5 text-teal-600" />
-                        <span className="flex-1 text-left">Mensajes temporales</span>
-                        <span className="text-[9px] text-slate-400 font-medium">
-                          {EPHEMERAL_OPTIONS.find(o => o.value === activeTimer)?.label || "Desactivado"}
-                        </span>
-                      </button>
-                      {showEphemeral && (
-                        <div className="space-y-0.5 pt-1">
-                          {EPHEMERAL_OPTIONS.map(opt => (
-                            <button
-                              key={opt.value}
-                              onClick={() => { onSetEphemeralTimer(opt.value); setShowEphemeral(false); }}
-                              className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-[10px] font-medium transition-colors cursor-pointer ${
-                                activeTimer === opt.value
-                                  ? "bg-teal-50 text-teal-700 font-bold"
-                                  : "text-slate-600 hover:bg-slate-50"
-                              }`}
-                            >
-                              {opt.label}
-                              {activeTimer === opt.value && (
-                                <span className="text-teal-600 text-[9px]">✓</span>
-                              )}
-                            </button>
-                          ))}
+                <div className="fixed right-4 top-[70px] w-[240px] bg-white rounded-2xl border border-slate-200/80 shadow-[0_24px_60px_-12px_rgba(5,41,44,0.45),0_6px_16px_rgba(0,0,0,0.15)] z-[110] overflow-hidden anim-dropdown">
+                  <div className="bg-gradient-to-r from-[#0a4d52] to-[#05292c] px-4 pt-3 pb-3 flex items-center gap-3">
+                    <div className="relative shrink-0">
+                      {chat.avatar ? (
+                        <CachedImage src={chat.avatar} alt={chat.name} className="w-10 h-10 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border border-white/25" />
+                      ) : isGroup ? (
+                        <div className="w-10 h-10 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center border border-white/25">
+                          <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                            <circle cx="9" cy="7" r="4" />
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                          </svg>
+                        </div>
+                      ) : (
+                        <div className="w-10 h-10 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center border border-white/25">
+                          <span className="text-white font-bold text-xs">
+                            {chat.name.split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2)}
+                          </span>
                         </div>
                       )}
                     </div>
-                  )}
-                  <button
-                    onClick={onClearChat}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                      <rect x="4" y="6" width="16" height="14" rx="1" />
-                    </svg>
-                    Borrar mensajes
-                  </button>
-                  <button
-                    onClick={onOpenCustomizer}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
-                  >
-                    <Palette className="w-3.5 h-3.5 text-teal-600" />
-                    Personalizar chat
-                  </button>
-                  {isGroup && (
+                    <div className="min-w-0">
+                      <h3 className="text-[14px] font-bold text-white leading-tight truncate">{chat.name}</h3>
+                      <span className="text-[10px] text-teal-200 flex items-center gap-1">
+                        <MoreVertical className="w-3 h-3" /> Más opciones
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="py-1.5">
+                    {onSetEphemeralTimer && (
+                      <div className="mx-2 mb-1">
+                        <button
+                          onClick={() => setShowEphemeral(v => !v)}
+                          className="w-full flex items-center gap-3 px-2 py-2 rounded-xl text-[13px] font-semibold text-teal-700 hover:bg-teal-50/70 transition-colors cursor-pointer"
+                        >
+                          <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
+                            <Clock className="w-[18px] h-[18px]" />
+                          </div>
+                          <span className="flex-1 text-left">Mensajes temporales</span>
+                        </button>
+                        {showEphemeral && (
+                          <div className="bg-teal-50/70 rounded-xl p-1.5 mt-0.5 space-y-0.5">
+                            {EPHEMERAL_OPTIONS.map(opt => (
+                              <button
+                                key={opt.value}
+                                onClick={() => { onSetEphemeralTimer(opt.value); setShowEphemeral(false); }}
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[12px] font-medium transition-colors cursor-pointer ${
+                                  activeTimer === opt.value
+                                    ? "bg-white text-teal-700 font-bold shadow-sm"
+                                    : "text-slate-600 hover:bg-white/70"
+                                }`}
+                              >
+                                {opt.label}
+                                {activeTimer === opt.value && (
+                                  <span className="text-teal-600 text-[11px]">✓</span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <button
-                      onClick={onOpenGroupInfo}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-purple-600 hover:bg-purple-50 transition-colors cursor-pointer"
+                      onClick={onClearChat}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-amber-600 hover:bg-amber-50/70 transition-colors cursor-pointer"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                        <circle cx="9" cy="7" r="4" />
-                        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                      </svg>
-                      Info del grupo
+                      <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          <rect x="4" y="6" width="16" height="14" rx="1" />
+                        </svg>
+                      </div>
+                      Borrar mensajes
                     </button>
-                  )}
-                  {!isGroup && onBlockUser && (
                     <button
-                      onClick={onBlockUser}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                      onClick={onOpenCustomizer}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
                     >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-                      </svg>
-                      Bloquear usuario
+                      <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
+                        <Palette className="w-[18px] h-[18px]" />
+                      </div>
+                      Personalizar chat
                     </button>
-                  )}
-                  <div className="border-t border-slate-100 my-1"></div>
-                  <button
-                    onClick={onOpenDeleteConfirm}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    </svg>
-                    Eliminar chat
-                  </button>
+                    {isGroup && (
+                      <button
+                        onClick={onOpenGroupInfo}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-purple-600 hover:bg-purple-50/70 transition-colors cursor-pointer"
+                      >
+                        <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                            <circle cx="9" cy="7" r="4" />
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                          </svg>
+                        </div>
+                        Info del grupo
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="border-t border-slate-200 my-1"></div>
+                  <div className="pb-1.5">
+                    {!isGroup && onBlockUser && (
+                      <button
+                        onClick={onBlockUser}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-rose-600 hover:bg-rose-50/70 transition-colors cursor-pointer"
+                      >
+                        <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="10" />
+                            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                          </svg>
+                        </div>
+                        Bloquear usuario
+                      </button>
+                    )}
+                    <button
+                      onClick={onOpenDeleteConfirm}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-rose-600 hover:bg-rose-50/70 transition-colors cursor-pointer"
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      </div>
+                      Eliminar chat
+                    </button>
+                  </div>
                 </div>
               </>
             )}

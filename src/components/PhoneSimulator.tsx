@@ -1226,7 +1226,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
 
           if (!isNewMessage) {
             const updated = [...prev];
-            updated[idx] = { ...existing, updated_at: chat.updated_at };
+            updated[idx] = { ...existing, name: chat.name || existing.name, updated_at: chat.updated_at };
             return updated.sort(sortChats);
           }
 
@@ -3353,7 +3353,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                                 document.addEventListener('mouseup', onMouseUp);
                               }
                             }}
-                            className={`relative flex items-start gap-4 px-2.5 py-2 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer ${shouldAnimate ? 'animate-fade-in' : ''} bg-white z-10 ${
+                            className={`relative flex items-start gap-4 px-2.5 py-2 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer bg-white z-10 ${
                               isSwiped ? 'shadow-lg' : ''
                             }`}
                             style={isSwiped ? { transform: 'translateX(80px)' } : undefined}

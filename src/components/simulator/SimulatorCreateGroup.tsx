@@ -60,19 +60,19 @@ export default function SimulatorCreateGroup({
           placeholder="Nombre del grupo (opcional)"
           value={groupName}
           onChange={(e) => onGroupNameChange(e.target.value)}
-          className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-xs px-4 py-2.5 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
+          className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-sm px-4 py-2.5 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
         />
       </div>
 
       <div className="px-4 py-2 border-b border-slate-100">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
             type="text"
             placeholder="Buscar contactos..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-xs pl-9 pr-4 py-2 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
+            className="w-full bg-slate-100 text-slate-800 placeholder-slate-400 text-sm pl-9 pr-4 py-2 rounded-xl outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
           />
         </div>
       </div>
@@ -87,21 +87,21 @@ export default function SimulatorCreateGroup({
               onClick={() => onToggleMember(contactId)}
               className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors"
             >
-              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${isSelected ? "bg-teal-500 border-teal-500" : "border-slate-300"}`}>
-                {isSelected && <Check className="w-3 h-3 text-white" />}
+              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${isSelected ? "bg-teal-500 border-teal-500" : "border-slate-300"}`}>
+                {isSelected && <Check className="w-4 h-4 text-white" />}
               </div>
               {contact.avatar ? (
-                <CachedImage src={contact.avatar} alt={contact.name} className="w-9 h-9 rounded-full object-cover" loading="lazy" />
+                <CachedImage src={contact.avatar} alt={contact.name} className="w-11 h-11 rounded-full object-cover" loading="lazy" />
               ) : (
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
-                  <span className="text-white font-bold text-[10px]">
+                <div className="w-11 h-11 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
+                  <span className="text-white font-bold text-sm">
                     {(contact.name || "?").split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2)}
                   </span>
                 </div>
               )}
               <div className="text-left">
-                <p className="text-[11px] font-bold text-slate-800">{contact.name}</p>
-                <p className="text-[9px] text-slate-400">{contact.phone || "Sin teléfono"}</p>
+                <p className="text-sm font-bold text-slate-800">{contact.name}</p>
+                <p className="text-[10px] text-slate-400">{contact.phone || "Sin teléfono"}</p>
               </div>
             </button>
           );

@@ -7,12 +7,39 @@
 }
 
 :root {
-  --font-scale: 1;
+  /* Escalado automático por ancho disponible (CSS px ~= dp en WebView Android):
+     360dp -> 1.0, pendiente +0.0011/dp, techo 1.22 (~a partir de 560dp). */
+  --auto-scale: clamp(1, calc(1 + ((100vw - 360px) / 1px) * 0.003), 1.22);
+  --font-scale: 1; /* slider manual del usuario (multiplicador opcional) */
+  --ui-scale: calc(var(--auto-scale) * var(--font-scale));
 }
 
 html {
-  font-size: calc(16px * var(--font-scale));
+  font-size: calc(16px * var(--ui-scale));
 }
+
+/* Escala las clases tipográficas en px con el mismo --ui-scale.
+   Quedan fuera de @layer utilities de Tailwind: ganan a las utilities
+   (mismas o posteriores en orden) y respetan los estilos inline. */
+.text-\[5px\] { font-size: calc(5px * var(--ui-scale)); }
+.text-\[5\.5px\] { font-size: calc(5.5px * var(--ui-scale)); }
+.text-\[6px\] { font-size: calc(6px * var(--ui-scale)); }
+.text-\[6\.5px\] { font-size: calc(6.5px * var(--ui-scale)); }
+.text-\[7px\] { font-size: calc(7px * var(--ui-scale)); }
+.text-\[7\.5px\] { font-size: calc(7.5px * var(--ui-scale)); }
+.text-\[8px\] { font-size: calc(8px * var(--ui-scale)); }
+.text-\[8\.5px\] { font-size: calc(8.5px * var(--ui-scale)); }
+.text-\[9px\] { font-size: calc(9px * var(--ui-scale)); }
+.text-\[9\.5px\] { font-size: calc(9.5px * var(--ui-scale)); }
+.text-\[10px\] { font-size: calc(10px * var(--ui-scale)); }
+.text-\[10\.5px\] { font-size: calc(10.5px * var(--ui-scale)); }
+.text-\[11px\] { font-size: calc(11px * var(--ui-scale)); }
+.text-\[12px\] { font-size: calc(12px * var(--ui-scale)); }
+.text-\[13px\] { font-size: calc(13px * var(--ui-scale)); }
+.text-\[13\.5px\] { font-size: calc(13.5px * var(--ui-scale)); }
+.text-\[14px\] { font-size: calc(14px * var(--ui-scale)); }
+.text-\[18px\] { font-size: calc(18px * var(--ui-scale)); }
+.text-\[22px\] { font-size: calc(22px * var(--ui-scale)); }
 
 body {
   background-color: #0b0f19;
@@ -71,6 +98,25 @@ body {
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+.anim-smile {
+  animation: smileSwing 3s ease-in-out infinite;
+}
+@keyframes smileSwing {
+  0%, 100% { transform: rotate(0deg); }
+  20% { transform: rotate(-12deg); }
+  40% { transform: rotate(10deg); }
+  60% { transform: rotate(-8deg); }
+  80% { transform: rotate(6deg); }
+}
+
+.anim-dropdown {
+  animation: dropdownIn 0.18s ease-out forwards;
+}
+@keyframes dropdownIn {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .animate-slide-up {

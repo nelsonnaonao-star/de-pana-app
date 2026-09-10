@@ -51,7 +51,7 @@ export async function cacheVideoBlob(
 ): Promise<void> {
   if (!Capacitor.isNativePlatform() || !url) return;
   if (blob.size > MAX_VIDEO_SIZE) {
-    logger.log("[VideoCache] skip — too large", { size: blob.size });
+    logger.info("[VideoCache] skip — too large", { size: blob.size });
     return;
   }
   try {
@@ -66,7 +66,7 @@ export async function cacheVideoBlob(
       directory: Directory.Data,
       recursive: true, // CRITICAL: prevents silent failure if dir missing
     });
-    logger.log("[VideoCache] saved", { fileName, sizeMB: (blob.size / 1048576).toFixed(1) });
+    logger.info("[VideoCache] saved", { fileName, sizeMB: (blob.size / 1048576).toFixed(1) });
     await enforceSizeLimit().catch(() => {});
   } catch (e) {
     logger.warn("[VideoCache] save failed", { error: e });
@@ -155,7 +155,7 @@ async function enforceSizeLimit(): Promise<void> {
         freed += f.size;
       } catch {}
     }
-    logger.log("[VideoCache] enforced limit", {
+    logger.info("[VideoCache] enforced limit", {
       freedMB: (freed / 1048576).toFixed(1),
     });
   } catch {}

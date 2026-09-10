@@ -19,6 +19,7 @@ interface MessageBubbleWithCacheProps {
   isPending: (msgId: string) => boolean;
   onEdit: (msg: Message) => void;
   onUpdatePrice: (msgId: string, price: string) => void;
+  onVideoPosterReady?: (msgId: string, posterDataUrl: string) => void;
 }
 
 // Sin estado local ni efectos: este componente lee y renderiza `msg` (status,

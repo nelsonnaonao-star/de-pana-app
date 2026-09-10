@@ -9,6 +9,7 @@ import { cacheVideoBlob } from "../../services/videoCache";
 import { revokeCachedMedia } from "../../services/mediaCache";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
 import { inFlightMessageIds, syncService } from "../../services/sync/SyncService";
+import { generateVideoThumbnail } from "../../utils/videoThumbnail";
 import toast from "react-hot-toast";
 
 function formatFileSize(bytes: number): string {
@@ -86,35 +87,6 @@ export interface UseMessageActionsReturn {
   handleUpdatePrice: (messageId: string, price: string) => void;
   handleFinishVoiceNote: () => Promise<void>;
 }
-
-const generateVideoThumbnail = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    video.playsInline = true;
-    video.muted = true;
-    video.src = URL.createObjectURL(file);
-    video.onloadeddata = () => { video.currentTime = 0.5; };
-    video.onseeked = () => {
-      const canvas = document.createElement("canvas");
-      let w = video.videoWidth || 320;
-      let h = video.videoHeight || 180;
-
-      if (w > 600) {
-        h = Math.floor((600 / w) * h);
-        w = 600;
-      }
-
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext("2d")?.drawImage(video, 0, 0, w, h);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-      URL.revokeObjectURL(video.src);
-      resolve(dataUrl);
-    };
-    video.onerror = () => { URL.revokeObjectURL(video.src); reject(new Error("Error generando thumbnail")); };
-  });
-};
 
 export function useMessageActions(params: UseMessageActionsParams): UseMessageActionsReturn {
   const {
@@ -871,6 +843,16 @@ pendingSendIdsRef.current.add(tempId);
       type: currentRecordingType === "voice" ? "audio/webm" : "video/webm",
     });
     console.log("[VOICE] blob listo", { chunks: buffers.length, bytes: blob.size, type: blob.type });
+    // Miniatura del primer frame para que la nota de video tenga preview real desde el inicio
+    let posterUrl: string | undefined;
+    if (currentRecordingType === "video") {
+      try {
+        const videoFile = new File([blob], "video_note.webm", { type: blob.type });
+        posterUrl = await generateVideoThumbnail(videoFile);
+      } catch (e) {
+        console.warn("[VOICE] No se pudo generar thumbnail de nota de video", e);
+      }
+    }
     const durStr = `${Math.floor(currentDuration / 60)}:${(currentDuration % 60).toString().padStart(2, "0")}`;
     const tempId = "msg_" + Date.now();
     const clientId = newClientId();
@@ -884,6 +866,7 @@ pendingSendIdsRef.current.add(tempId);
       duration: durStr,
       mediaUrl: localUrl,
       localVideoUrl: currentRecordingType === "video" ? localUrl : undefined,
+      posterUrl: currentRecordingType === "video" ? posterUrl : undefined,
       status: "sending",
       synced: false,
     };
