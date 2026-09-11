@@ -90,7 +90,7 @@ async function sendPushToChat(chatId, senderId, senderName, text) {
           try {
             await getMessaging().send({
               token: t.token,
-              data: { title: senderName || 'RED ON', body: text || 'Nuevo mensaje', type: 'message', chatId, contactId: senderId, is_group: chat.is_group ? 'true' : 'false', ts: new Date().toISOString() },
+data: { title: senderName || 'RED ON', body: text || 'Nuevo mensaje', type: 'message', chatId, contactId: senderId, is_group: chat.is_group ? 'true' : 'false', ts: new Date().toISOString() },
               android: { priority: 'high', ttl: 86400000 },
             });
           } catch {}
