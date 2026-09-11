@@ -309,6 +309,25 @@ router.post('/add-participants', async (req, res) => {
       return res.status(500).json({ ok: false, error: error.message });
     }
 
+    // Emitir evento 'added' SOLO a los miembros realmente nuevos (el upsert
+    // con ignoreDuplicates no informa cuáles se ignoraron, así que se consulta).
+    // Es best-effort: si falla, el chat igual se agrega por el INSERT realtime.
+    try {
+      const { data: existing } = await supabaseAdmin
+        .from('chat_participants')
+        .select('profile_id')
+        .eq('chat_id', chat_id);
+      const existingIds = new Set((existing || []).map(r => r.profile_id));
+      const freshIds = member_ids.filter(id => !existingIds.has(id));
+      if (freshIds.length > 0) {
+        await supabaseAdmin.from('group_member_events').insert(
+          freshIds.map(profile_id => ({ user_id: profile_id, chat_id, type: 'added' }))
+        );
+      }
+    } catch (eventErr) {
+      console.error('[GROUPS] add-participants event insert error:', eventErr);
+    }
+
     res.json({ ok: true, inserted: member_ids.length });
   } catch (err) {
     console.error('[GROUPS] add-participants error:', err);
