@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "../../lib/supabase";
-import { addGroupMember, removeGroupMember, leaveGroup as apiLeaveGroup, updateChat, muteGroup, unmuteGroup, getGroupMute, MuteDuration } from "../../services/chats";
+import { addGroupMember, removeGroupMember, expelGroupMember, leaveGroup as apiLeaveGroup, updateChat, muteGroup, unmuteGroup, getGroupMute, MuteDuration } from "../../services/chats";
 import { searchUsers } from "../../services/contacts";
 import { logger } from "../../lib/logger";
 
@@ -154,12 +154,13 @@ export function useGroupManagement(chatId: string, chatName: string, uid: string
 
   const handleRemoveMember = useCallback(async (profileId: string) => {
     try {
-      await removeGroupMember(chatId, profileId);
+      await expelGroupMember(chatId, profileId);
       setGroupMembers(prev => prev.filter(m => m.profile_id !== profileId));
       toast.success("Miembro eliminado del grupo");
     } catch (e) {
+      const msg = e instanceof Error ? e.message : "Error al eliminar miembro";
       logger.error("[CHAT] Error removing member", { error: e });
-      toast.error("Error al eliminar miembro");
+      toast.error(msg);
     }
   }, [chatId]);
 

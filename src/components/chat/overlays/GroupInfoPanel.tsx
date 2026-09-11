@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { X, Check, Loader2, Camera, Trash2, BellOff, Bell } from "lucide-react";
+import { X, Check, Loader2, Camera, Trash2, BellOff, Bell, LogOut } from "lucide-react";
 import { MuteDuration } from "../../../services/chats";
 import CachedImage from "../../CachedImage";
 
@@ -62,6 +62,7 @@ export default function GroupInfoPanel({
 }: GroupInfoPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [memberToRemove, setMemberToRemove] = useState<GroupMember | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
   const [showMuteOptions, setShowMuteOptions] = useState(false);
   if (!isOpen) return null;
   const localGroupName = chatName;
@@ -287,7 +288,7 @@ export default function GroupInfoPanel({
         </div>
         <div className="p-4 border-t border-slate-100 shrink-0 space-y-2">
           <button
-            onClick={onLeaveGroup}
+            onClick={() => setConfirmLeave(true)}
             className="w-full py-2.5 text-[11px] font-bold text-amber-600 bg-amber-50 rounded-xl hover:bg-amber-100 transition-colors cursor-pointer"
           >
             Salir del grupo
@@ -327,6 +328,38 @@ export default function GroupInfoPanel({
                 className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 transition-colors cursor-pointer"
               >
                 Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmLeave && (
+        <div className="fixed inset-0 z-[250] flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setConfirmLeave(false)}>
+          <div className="bg-white rounded-2xl shadow-lg w-[280px] p-5 text-center animate-fade-in" onClick={e => e.stopPropagation()}>
+            <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-3">
+              <LogOut className="w-6 h-6 text-amber-600" />
+            </div>
+            <h3 className="text-sm font-bold text-slate-800 mb-1">¿Salir del grupo?</h3>
+            <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
+              Al salir dejarás de recibir mensajes de este grupo y se eliminará
+              de tu lista de chats.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmLeave(false)}
+                className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  onLeaveGroup();
+                  setConfirmLeave(false);
+                }}
+                className="flex-1 py-2 text-[11px] font-semibold text-white bg-amber-500 rounded-xl hover:bg-amber-600 transition-colors cursor-pointer"
+              >
+                Salir
               </button>
             </div>
           </div>

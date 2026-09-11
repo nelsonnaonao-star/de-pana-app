@@ -124,6 +124,13 @@ class DatabaseService {
         created_at TEXT DEFAULT (datetime('now'))
       )`,
       `CREATE INDEX IF NOT EXISTS idx_call_rooms_chat_id ON call_rooms(chat_id)`,
+      `CREATE TABLE IF NOT EXISTS expelled_chats (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        payload TEXT,
+        expelled_at TEXT DEFAULT (datetime('now'))
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_expelled_chats_user_id ON expelled_chats(user_id)`,
     ];
     for (const sql of migrations) {
       try {

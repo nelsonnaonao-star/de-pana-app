@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft, Trash2, ExternalLink, MessageCircle } from "lucide-react";
+import { Search, UserPlus, X, ChevronRight, Users, ArrowLeft, Trash2, ExternalLink, MessageCircle, Pencil } from "lucide-react";
 import { AppLauncher } from "@capacitor/app-launcher";
 import { Contact } from "../services/contacts";
 import CachedImage from "./CachedImage";
@@ -9,6 +9,7 @@ interface ContactsListProps {
   onSelectContact: (contact: Contact) => void;
   onAddContact: () => void;
   onDeleteContact: (contactId: string) => void;
+  onEditContact?: (contact: Contact) => void;
   onBack?: () => void;
   currentUserId: string;
 }
@@ -17,9 +18,10 @@ function getInitials(name: string): string {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
-export default function ContactsList({ contacts, onSelectContact, onAddContact, onDeleteContact, onBack, currentUserId }: ContactsListProps) {
+export default function ContactsList({ contacts, onSelectContact, onAddContact, onDeleteContact, onEditContact, onBack, currentUserId }: ContactsListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [menuContact, setMenuContact] = useState<Contact | null>(null);
+  const [confirmDeleteContact, setConfirmDeleteContact] = useState<Contact | null>(null);
   const [inviteContact, setInviteContact] = useState<Contact | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -185,10 +187,10 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
         )}
       </div>
 
-      {menuContact && (
+      {confirmDeleteContact && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
-          onClick={() => setMenuContact(null)}
+          onClick={() => setConfirmDeleteContact(null)}
         >
           <div
             className="w-full bg-white rounded-t-2xl shadow-2xl p-5 pb-8 animate-slide-up"
@@ -199,24 +201,74 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
                 <Trash2 className="w-5 h-5 text-rose-500" />
               </div>
               <p className="text-sm font-bold text-slate-800">
-                ¿Eliminar a <span className="text-rose-600">{menuContact.name}</span>?
+                ¿Eliminar a <span className="text-rose-600">{confirmDeleteContact.name}</span>?
               </p>
             </div>
             <div className="flex gap-3">
               <button
-                onClick={() => setMenuContact(null)}
+                onClick={() => setConfirmDeleteContact(null)}
                 className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 No
               </button>
               <button
                 onClick={() => {
-                  onDeleteContact(menuContact.id);
-                  setMenuContact(null);
+                  onDeleteContact(confirmDeleteContact.id);
+                  setConfirmDeleteContact(null);
                 }}
                 className="flex-1 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
               >
                 Sí, eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {menuContact && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+          onClick={() => setMenuContact(null)}
+        >
+          <div
+            className="w-full bg-white rounded-t-2xl shadow-2xl p-5 pb-8 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-teal-50 flex items-center justify-center shrink-0">
+                <Pencil className="w-5 h-5 text-teal-600" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800 truncate">Opciones de {menuContact.name}</p>
+                <p className="text-[10px] text-slate-400 font-mono">{menuContact.phone || "Contacto Red On"}</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <button
+                onClick={() => {
+                  onEditContact?.(menuContact);
+                  setMenuContact(null);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded-2xl text-[12px] font-bold transition-all cursor-pointer"
+              >
+                <Pencil className="w-4 h-4" />
+                Editar nombre
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmDeleteContact(menuContact);
+                  setMenuContact(null);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-2xl text-[12px] font-bold transition-all cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                Eliminar contacto
+              </button>
+              <button
+                onClick={() => setMenuContact(null)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-2xl text-[11px] font-bold transition-all cursor-pointer"
+              >
+                Cancelar
               </button>
             </div>
           </div>

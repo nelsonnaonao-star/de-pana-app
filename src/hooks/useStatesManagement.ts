@@ -45,6 +45,15 @@ export interface UserState {
   userId?: string;
 }
 
+// Metadatos estructurados para "Responder a un estado": viajan por los campos
+// replyToId / replyToText / replyToSender del Message (nada nuevo en BD).
+export interface StoryReplyPayload {
+  storyId: string;
+  storyType: "text" | "image" | "video";
+  mediaUrl?: string;
+  storyText?: string;
+}
+
 export const GRADIENTS = [
   "from-indigo-600 via-purple-600 to-pink-500",
   "from-emerald-500 to-teal-700",
@@ -59,7 +68,7 @@ interface UseStatesManagementParams {
   profileName?: string;
   profileAvatar?: string;
   defaultAudience?: string;
-  onStartChat: (name: string, avatar: string, initialText: string) => void;
+  onStartChat: (name: string, avatar: string, initialText: string, partnerUserId?: string, storyReply?: StoryReplyPayload) => void;
   onHasUnseen?: (unseen: boolean) => void;
 }
 
@@ -112,6 +121,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
         if (!grouped[s.user_id]) {
           grouped[s.user_id] = {
             id: s.user_id + '_state',
+            userId: s.user_id,
             userName: s.profiles?.name || 'Usuario',
             userAvatar: s.profiles?.avatar_url || '',
             hasUnseen: false,
@@ -290,13 +300,16 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     if (!storyReplyText.trim() || !activeUserStates) return;
 
     const currentStory = activeUserStates.stories[activeStoryIdx];
-    const contextQuote = currentStory.type === "text"
-      ? `"${currentStory.content}"`
-      : `[${currentStory.type === "video" ? "Video" : "Imagen"} de Estado]`;
+    const userText = storyReplyText.trim();
 
-    const initialText = `Respondí a tu estado ${contextQuote}:\n\n${storyReplyText}`;
+    const storyReply: StoryReplyPayload = {
+      storyId: currentStory.id,
+      storyType: currentStory.type,
+      mediaUrl: currentStory.type === "text" ? undefined : currentStory.content,
+      storyText: currentStory.type === "text" ? currentStory.content : undefined,
+    };
 
-    onStartChat(activeUserStates.userName, activeUserStates.userAvatar, initialText, activeUserStates.userId || activeUserStates.id);
+    onStartChat(activeUserStates.userName, activeUserStates.userAvatar, userText, activeUserStates.userId || activeUserStates.id, storyReply);
     setStoryReplyText("");
     setStoryPaused(false);
     setReplyFeedback("Has respondido a esta historia");

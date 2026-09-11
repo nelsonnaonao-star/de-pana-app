@@ -108,9 +108,49 @@ export async function addContact(
   avatar?: string,
   phone?: string
 ): Promise<Contact> {
+  const trimmedName = (name || "").trim();
+  if (!trimmedName) throw new Error("El nombre del contacto no puede estar vacío");
+
+  // Idempotente: si el usuario actual ya tiene un contacto vinculado con este
+  // contact_user_id, reutiliza/actualiza esa fila en vez de insertar otra
+  // (evita nuevos duplicados sin depender de migraciones ni índices únicos).
+  if (contactUserId) {
+    const { data: existing } = await supabase
+      .from("contacts")
+      .select("id, name, avatar, phone")
+      .eq("user_id", userId)
+      .eq("contact_user_id", contactUserId)
+      .limit(1);
+    if (existing && existing.length > 0) {
+      const row = existing[0];
+      const updates: Record<string, unknown> = { name: trimmedName };
+      if (avatar && avatar.trim()) updates.avatar = avatar.trim();
+      const { error: upErr } = await supabase
+        .from("contacts")
+        .update(updates)
+        .eq("user_id", userId)
+        .eq("contact_user_id", contactUserId);
+      if (upErr) throw upErr;
+      return {
+        id: row.id,
+        user_id: userId,
+        contact_user_id: contactUserId,
+        name: trimmedName,
+        avatar: (avatar && avatar.trim()) || row.avatar || "",
+        phone: row.phone || "",
+        bio: "",
+        type: "human",
+        color_theme: "from-indigo-500 to-violet-600",
+        is_group: false,
+        is_favorite: false,
+        created_at: new Date().toISOString(),
+      };
+    }
+  }
+
   const basePayload: Record<string, unknown> = {
     user_id: userId,
-    name,
+    name: trimmedName,
     avatar: avatar || "",
     bio: phone ? `Contacto externo: ${phone}` : "",
     created_at: new Date().toISOString(),
@@ -161,6 +201,44 @@ export async function addContact(
   }
 
   throw new Error("No se pudo guardar el contacto en el servidor");
+}
+
+export async function updateContactName(
+  userId: string,
+  contactUserId: string | null,
+  newName: string,
+  contactId?: string
+): Promise<void> {
+  const trimmedName = (newName || "").trim();
+  if (!trimmedName) throw new Error("El nombre del contacto no puede estar vacío");
+
+  // Nunca tocar registros de otros usuarios: SIEMPRE filtrar por user_id.
+  if (contactUserId) {
+    // Contacto vinculado: actualiza todas las filas del usuario actual para ese
+    // contacto (maneja duplicados históricos sin ocultar el nombre). Common:
+    // user_id + contact_user_id.
+    const { error } = await supabase
+      .from("contacts")
+      .update({ name: trimmedName })
+      .eq("user_id", userId)
+      .eq("contact_user_id", contactUserId);
+    if (error) throw error;
+    return;
+  }
+
+  // Contacto externo (sin contact_user_id): actualizar solo la fila del usuario
+  // indicado, nunca otra fila de otro usuario.
+  if (contactId) {
+    const { error } = await supabase
+      .from("contacts")
+      .update({ name: trimmedName })
+      .eq("id", contactId)
+      .eq("user_id", userId);
+    if (error) throw error;
+    return;
+  }
+
+  throw new Error("No se pudo identificar el contacto");
 }
 
 export async function deleteContact(contactId: string) {

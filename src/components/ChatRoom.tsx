@@ -117,6 +117,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     return {
       id: m.id,
       sender: m.sender_id === uid ? ("me" as const) : ("other" as const),
+      sender_id: m.sender_id,
       text: m.text,
       timestamp: m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
       rawCreatedAt: m.created_at || undefined,
@@ -273,7 +274,18 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
       // 1. Load cached messages immediately (offline-first)
       messageRepo.getMessages(chat.id).then(async cached => {
-        // Filter out messages older than cleared_at (frontera de historial)
+        // 1a. Mostrar historial local INMEDIATAMENTE, sin esperar a chat_clears
+        // ni a ninguna otra consulta de red (red lenta/caída no bloquea el render).
+        if (cached.length > 0) {
+          // Merge consciente: elimina tems optimistas viejos (relojito) cuando la
+          // caché ya tiene la fila confirmada, y no duplica por id.
+          setMessages(prev => safeMergeMessages(prev, cached));
+          setHasMoreOlder(true);
+        }
+
+        // 1b. Frontera cleared_at en SEGUNDO PLANO: se consulta después de
+        // mostrar el caché para no retrasar la aparición del historial.
+        // Si falla la red, se conservan los mensajes locales (best effort).
         let filtered = cached;
         if (uid) {
           try {
@@ -288,17 +300,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                 const ts = m.rawCreatedAt || m.timestamp || "";
                 return ts > clearData.cleared_at;
               });
+              // Ajustar solo los mensajes visibles a la frontera tras recibir
+              // cleared_at (flash temporal aceptado si no hay dato local).
+              setMessages(prev => prev.filter(m => {
+                const ts = m.rawCreatedAt || m.timestamp || "";
+                return ts > (clearData.cleared_at as string);
+              }));
             }
           } catch {
             // If query fails, use unfiltered cache (best effort)
           }
-        }
-
-        if (filtered.length > 0) {
-          // Merge consciente: elimina tems optimistas viejos (relojito) cuando la
-          // caché ya tiene la fila confirmada, y no duplica por id.
-          setMessages(prev => safeMergeMessages(prev, filtered));
-          setHasMoreOlder(true);
         }
 
         // 2. Fetch fresh messages from server in background
@@ -1241,7 +1252,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           setShowDeleteConfirm(false);
           try {
             messageRepo.clearMessages(chat.id);
-            if (user?.id) {
+            if (user?.id && !chat.removedFromGroup) {
               await apiDeleteChat(chat.id, user.id);
             }
             onChatDeleted?.(chat.id);
@@ -1406,28 +1417,39 @@ onSelect={(url, type) => {
         />
       )}
 
-      <ChatInputBar
-        inputText={inputText}
-        setInputText={setInputText}
-        showAttachments={showAttachments}
-        setShowAttachments={setShowAttachments}
-        replyTo={replyTo}
-        setReplyTo={setReplyTo}
-        recordingType={recordingType}
-        setRecordingType={setRecordingType}
-        recordingSeconds={recordingSeconds}
-        isCameraReady={isCameraReady}
-        setIsCameraReady={setIsCameraReady}
-        showGifPicker={showGifPicker}
-        setShowGifPicker={setShowGifPicker}
-        onSendText={actions.handleSendText}
-        onFinishVoiceNote={actions.handleFinishVoiceNote}
-        triggerFilePick={actions.triggerFilePick}
-        emitTyping={emitTyping}
-        chatName={chat.name}
-        videoPreviewRef={videoPreviewRef as React.RefObject<HTMLVideoElement | null>}
-        typingTimerRef={typingTimerRef}
-      />
+      {chat.removedFromGroup ? (
+        <div className="shrink-0 px-4 py-3 bg-amber-50 border-t border-amber-200 text-center">
+          <p className="text-[11px] font-semibold text-amber-700">
+            Fuiste eliminado de este grupo. Ya no puedes enviar mensajes.
+          </p>
+          <p className="text-[10px] text-amber-600 mt-0.5">
+            El historial sigue disponible en modo lectura.
+          </p>
+        </div>
+      ) : (
+        <ChatInputBar
+          inputText={inputText}
+          setInputText={setInputText}
+          showAttachments={showAttachments}
+          setShowAttachments={setShowAttachments}
+          replyTo={replyTo}
+          setReplyTo={setReplyTo}
+          recordingType={recordingType}
+          setRecordingType={setRecordingType}
+          recordingSeconds={recordingSeconds}
+          isCameraReady={isCameraReady}
+          setIsCameraReady={setIsCameraReady}
+          showGifPicker={showGifPicker}
+          setShowGifPicker={setShowGifPicker}
+          onSendText={actions.handleSendText}
+          onFinishVoiceNote={actions.handleFinishVoiceNote}
+          triggerFilePick={actions.triggerFilePick}
+          emitTyping={emitTyping}
+          chatName={chat.name}
+          videoPreviewRef={videoPreviewRef as React.RefObject<HTMLVideoElement | null>}
+          typingTimerRef={typingTimerRef}
+        />
+      )}
 
       {/* EDIT MESSAGE MODAL */}
       {editingMessage && (

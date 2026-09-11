@@ -50,6 +50,7 @@ export interface Chat {
   isGroup?: boolean;
   lastMessageTimeRaw?: string;
   updated_at?: string;
+  removedFromGroup?: boolean;
 }
 
 export interface ActiveCall {

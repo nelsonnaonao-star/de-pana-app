@@ -14,18 +14,22 @@ import { Chat, Message, ActiveCall } from "../types";
 import WelcomeScreen from "./WelcomeScreen";
 import CallOverlay from "./CallOverlay";
 import type { BusinessFlyer } from "./BusinessPanel";
+import type { StoryReplyPayload } from "../hooks/useStatesManagement";
 import BottomTabBar from "./phone/BottomTabBar";
 import FabMenu from "./phone/FabMenu";
 import { supabase } from "../lib/supabase";
 import { getAllUserData } from "../services/server-api";
 import { useSupabase } from "../contexts/SupabaseContext";
 import { clearForMe, sendMessage as apiSendMessage, getMessages } from "../services/messages";
+import { recordReconciledId } from "../lib/reconciledIds";
 import { messageRepo } from "../services/database/repositories/MessageRepository";
-import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner } from "../services/chats";
+import { ExpelledChatRepository } from "../services/database/repositories/ExpelledChatRepository";
+import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner, leaveGroup } from "../services/chats";
 import { getAllFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
 import { deleteContact, getContacts, type Contact } from "../services/contacts";
 import { getBlockedUsers, unblockUser, type BlockedUser } from "../services/blocks";
 import { logger } from "../lib/logger";
+import { useGroupMemberEvents } from "../hooks/chat/useGroupMemberEvents";
 import { syncService } from "../services/sync/SyncService";
 import { 
   isBiometricEnabled, 
@@ -358,6 +362,13 @@ export default function PhoneSimulator({
   const [refetchTrigger, setRefetchTrigger] = useState(0);
   const deletedChatIdsRef = useRef<Set<string>>(new Set());
 
+  // Chats de grupos de los que el usuario fue expulsado: permanecen visibles en
+  // solo-lectura y sobreviven a refreshChats() (get_user_chats ya no los incluye).
+  const [expelledChats, setExpelledChats] = useState<Chat[]>([]);
+  const expelledChatsRef = useRef<Map<string, Chat>>(new Map());
+  // Confirmación al ser agregado a un grupo ('added'): Sí → permanecer, No → salir.
+  const [pendingGroupInvite, setPendingGroupInvite] = useState<{ chatId: string; name: string } | null>(null);
+
   // Active Call Screen Overlay
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   // Reacción en vivo recibida del otro participante (via WebRTC signal).
@@ -558,6 +569,7 @@ export default function PhoneSimulator({
   const forwardingSearchRef = useRef<HTMLInputElement>(null);
   const [forwardSearchQuery, setForwardSearchQuery] = useState("");
   const [contactProfile, setContactProfile] = useState<ContactProfileData | null>(null);
+  const [contactProfileAutoEdit, setContactProfileAutoEdit] = useState(false);
   const [showMyAvatarLightbox, setShowMyAvatarLightbox] = useState(false);
 
   // Group creation state
@@ -875,21 +887,146 @@ export default function PhoneSimulator({
     setCurrentScreen("chat_room");
   };
 
-  const handleStartChatFromState = (name: string, avatar: string, initialText: string) => {
-    const existing = chats.find(c => c.name.toLowerCase() === name.toLowerCase());
-    let targetId = "";
+  const handleStartChatFromState = async (name: string, avatar: string, initialText: string, partnerUserId?: string, storyReply?: StoryReplyPayload) => {
+    // Respuesta a un estado: siempre que tengamos un partner real (userId del autor
+    // del estado) creamos/reutilizamos el chat REAL en Supabase y enviamos el
+    // mensaje por el flujo normal (apiSendMessage + SyncService), viajando el
+    // contexto del estado por replyToId / replyToText / replyToSender.
+    if (user?.id && partnerUserId && storyReply) {
+      const existing = getChatByPartnerId(partnerUserId);
+      let targetId = existing ? existing.id : "";
 
+      if (!targetId) {
+        const profileId = partnerUserId;
+        if (profileId) {
+          try {
+            const chat = await createChatInSupabase({
+              name,
+              avatar: avatar || "",
+              profile_id: profileId,
+              admin_id: user.id,
+            });
+            if (chat?.id) {
+              targetId = chat.id;
+              setChats(prev => {
+                if (prev.some(c => c.id === chat.id)) return prev;
+                return [{
+                  id: chat.id,
+                  name,
+                  avatar: avatar || "",
+                  status: "online" as const,
+                  lastMessage: initialText,
+                  lastMessageTime: "Ahora mismo",
+                  unreadCount: 0,
+                  partnerUserId: profileId,
+                  messages: [],
+                }, ...prev];
+              });
+            }
+          } catch (e) {
+            logger.error("[STATE-REPLY] createChatInSupabase failed", { error: e });
+            showToast("No se pudo crear el chat para responder al estado");
+            return;
+          }
+        }
+      }
+
+      if (targetId) {
+        const replyToId = `story_${storyReply.storyId}`;
+        const replyToText = storyReply.storyType !== "text" ? storyReply.mediaUrl : storyReply.storyText;
+        const replyToSender = name;
+
+        const tempId = `temp_${Date.now()}_txt`;
+        const clientId = (() => {
+          try {
+            if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+          } catch {}
+          return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+            const r = Math.floor(Math.random() * 16);
+            return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+          });
+        })();
+        const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const newMsg: Message = {
+          id: tempId,
+          sender: "me",
+          text: initialText,
+          timestamp,
+          rawCreatedAt: new Date().toISOString(),
+          type: "text",
+          status: "sending",
+          synced: false,
+          replyToId,
+          replyToText,
+          replyToSender,
+        };
+
+        const finalChatId = targetId;
+
+        // Optimista local
+        setChats(prev => prev.map(c => {
+          if (c.id !== finalChatId) return c;
+          return {
+            ...c,
+            lastMessage: initialText,
+            lastMessageTime: "Ahora mismo",
+            messages: [...(c.messages || []), newMsg],
+          };
+        }));
+        setSelectedChatId(finalChatId);
+        setCurrentScreen("chat_room");
+
+        try {
+          await messageRepo.upsertMessage(finalChatId, { ...newMsg, clientId, sender_id: user.id });
+        } catch (e) {
+          logger.warn("[STATE-REPLY] upsert local failed", { error: e });
+        }
+
+        try {
+          const saved = await apiSendMessage({
+            chat_id: finalChatId,
+            client_id: clientId,
+            temp_id: tempId,
+            text: initialText,
+            type: "text",
+            sender_id: user.id,
+            reply_to_id: replyToId,
+            reply_to_text: replyToText,
+            reply_to_sender: replyToSender,
+          });
+          const savedRow = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
+          recordReconciledId(finalChatId, tempId, saved.id);
+          setChats(prev => prev.map(c => c.id === finalChatId
+            ? { ...c, messages: (c.messages || []).map(m => m.id === tempId ? { ...m, ...savedRow } : m) }
+            : c));
+          messageRepo.reconcileTemp(finalChatId, tempId, savedRow).catch((err) =>
+            logger.warn("[STATE-REPLY] reconcileTemp failed", { error: err })
+          );
+        } catch (e) {
+          logger.error("[STATE-REPLY] apiSendMessage failed, queueing in SyncService", { error: e });
+          try {
+            await syncService.queueMessage(finalChatId, { ...newMsg, clientId, sender_id: user.id }, user.id);
+          } catch (qErr) {
+            logger.error("[STATE-REPLY] SyncService queue failed", { error: qErr });
+          }
+        }
+        return;
+      }
+    }
+
+    // Fallback (sin partner real / modo demo): reutilizamos un chat existente por
+    // nombre agregando el mensaje local. NO se crean chats chat_state_reply_ nuevos.
+    const existing = chats.find(c => c.name.toLowerCase() === name.toLowerCase());
     if (existing) {
-      targetId = existing.id;
       const newMsg: Message = {
-        id: "msg_state_reply_" + Date.now(),
+        id: "temp_" + Date.now() + "_txt",
         sender: "me",
         text: initialText,
         timestamp: "Ahora mismo",
         type: "text"
       };
       setChats(prev => prev.map(c => {
-        if (c.id === targetId) {
+        if (c.id === existing.id) {
           return {
             ...c,
             lastMessage: initialText,
@@ -899,31 +1036,12 @@ export default function PhoneSimulator({
         }
         return c;
       }));
+      setSelectedChatId(existing.id);
+      setCurrentScreen("chat_room");
     } else {
-      targetId = "chat_state_reply_" + Date.now();
-      const newChat: Chat = {
-        id: targetId,
-        name: name,
-        avatar: avatar,
-        status: "online",
-        lastMessage: initialText,
-        lastMessageTime: "Ahora mismo",
-        unreadCount: 0,
-        messages: [
-          {
-            id: "msg_state_reply_" + Date.now(),
-            sender: "me",
-            text: initialText,
-            timestamp: "Ahora mismo",
-            type: "text"
-          }
-        ]
-      };
-      setChats(prev => [newChat, ...prev]);
+      showToast("No se pudo iniciar el chat de la respuesta");
     }
-
-    setSelectedChatId(targetId);
-      };
+  };
 
   const handleRegister = (name: string, phone: string, avatar: string) => {
     setRegisteredUser({ name, phone, avatar, bio: "" });
@@ -985,6 +1103,45 @@ export default function PhoneSimulator({
         }));
       }
       // ═══════════════ FIN TEMPORAL LOG ═══════════════
+      // ── Protección del preview optimista pendiente ─────────────────
+      // Si un chat tiene un envío reciente aún no confirmado por el servidor
+      // (ventana INSERT mensaje → UPDATE chats), un refreshChats() puede
+      // devolver la versión anterior de la fila. Se conserva el preview
+      // optimista hasta que el servidor devuelva un last_message_time
+      // DISTINTO/posterior (comparado todo en reino servidor: base conocida vs.
+      // valor entrante; sin reloj del dispositivo) o hasta el tope de 30 s para
+      // envíos que nunca llegan a confirmarse. Del servidor siempre se conservan
+      // name/avatar/unread y cualquier campo que no sea el preview protegido.
+      for (const m of mapped as any[]) {
+        const raw: string = m.lastMessageTimeRaw || "";
+        const pending = pendingLocalPreviewRef.current[m.id];
+        if (pending) {
+          // Tope de seguridad: nunca proteger indefinidamente un envío no confirmado.
+          if (Date.now() - pending.sentAtMs > 30000) {
+            delete pendingLocalPreviewRef.current[m.id];
+            if (raw) lastServerPreviewRawRef.current[m.id] = raw;
+            continue;
+          }
+          const knownRaw = lastServerPreviewRawRef.current[m.id];
+          const serverAdvanced = knownRaw !== undefined && raw !== "" && raw !== knownRaw;
+          if (serverAdvanced) {
+            // El servidor alcanzó/superó el envío → aceptar su versión y liberar.
+            if (raw) lastServerPreviewRawRef.current[m.id] = raw;
+            delete pendingLocalPreviewRef.current[m.id];
+          } else {
+            // El servidor aún devuelve la versión anterior → conservar el preview
+            // optimista. Acepta cualquier avance real (incluso borrado/resta de
+            // mensajes) porque el criterio es "el valor de servidor cambió".
+            m.lastMessage = pending.lastMessage;
+            m.lastMessageTime = pending.lastMessageTime;
+            m.lastMessageTimeRaw = pending.lastMessageTimeRaw;
+            m.updated_at = pending.updated_at;
+          }
+        } else if (raw && raw !== lastServerPreviewRawRef.current[m.id]) {
+          // Sin protección: mantener al día la base de servidor para futuros envíos.
+          lastServerPreviewRawRef.current[m.id] = raw;
+        }
+      }
       const containsSelected = mapped.some((m: any) => m.id === selectedChatId);
       console.log(`[RACE-T5] EFFECT 932 replacing chats: supabaseChats=${supabaseChats.length} mapped=${mapped.length} | selectedChatId=${selectedChatId} | containsSelected=${containsSelected} | BEFORE chats.length=${chats.length}`);
       // FIX-A: If selectedChatId isn't in mapped yet (race: Supabase hasn't
@@ -999,10 +1156,18 @@ export default function PhoneSimulator({
           finalChats = [preservedChat, ...finalChats];
         }
       }
-      setChats(finalChats);
+      // Re-insertar los chats de grupos donde el usuario fue expulsado: este effect
+      // reemplaza `chats` con lo que devuelve get_user_chats y el expulsado ya no
+      // figura como miembro; sin este merge el modo solo-lectura se perdería.
+      for (const exp of expelledChatsRef.current.values()) {
+        if (!finalChats.some((c) => c.id === exp.id)) {
+          finalChats = [exp, ...finalChats];
+        }
+      }
+      setChats(finalChats.sort(sortChats));
       setChatsLoaded(true);
     }
-  }, [supabaseChats, user, clearedAtMap, loading]);
+  }, [supabaseChats, user, clearedAtMap, loading, expelledChats]);
 
   // Cargar TODOS los chat_clears del usuario de una sola vez (sin N+1)
   useEffect(() => {
@@ -1126,6 +1291,20 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   // Último timestamp de mensaje ya contado como no-leído por canal (dedup por
   // mensaje entre realtime chats, chat_unread_pings y FCM — evita doble cuenta).
   const lastHandledMsgRef = useRef<Record<string, string>>({});
+  // Snapshot del preview optimista de un mensaje PROPIO aún no confirmado por
+  // el servidor (ventana INSERT mensaje → UPDATE chats). Evita que un
+  // refreshChats() que lea la versión anterior del servidor pise el último
+  // mensaje que acabo de enviar en la lista de chats.
+  const pendingLocalPreviewRef = useRef<Record<string, {
+    sentAtMs: number;
+    lastMessage: string;
+    lastMessageTime: string;
+    lastMessageTimeRaw: string;
+    updated_at: string;
+  }>>({});
+  // Último last_message_time DE SERVIDOR visto por chat (siempre reino servidor).
+  // Base para decidir si el servidor avanzó o todavía devuelve la versión anterior.
+  const lastServerPreviewRawRef = useRef<Record<string, string>>({});
 
   // Persistencia ligera de un mensaje entrante con el chat cerrado: RPC
   // get_user_messages limit 1 + upsertMessage (dedup por id). Compartida por el
@@ -1237,6 +1416,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
 
           if (isCurrentChat || isOwnRecent) {
             // Own message or currently viewing — update metadata only, no unread increment
+            // El servidor confirmó una versión avanzada → liberar preview pendiente.
+            delete pendingLocalPreviewRef.current[chat.id];
+            lastServerPreviewRawRef.current[chat.id] = newRawTime;
             const updated = [...prev];
             updated[idx] = {
               ...existing,
@@ -1258,6 +1440,10 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           }
 
           // Someone else sent a message while we're not viewing — increment unread
+          // El servidor avanzó (mensaje entrante) → liberar cualquier preview
+          // optimista pendiente: nunca congelar el preview ante un avance real.
+          delete pendingLocalPreviewRef.current[chat.id];
+          lastServerPreviewRawRef.current[chat.id] = newRawTime;
           const clearedAt = clearedAtMapRef.current[chat.id];
           const isCleared = clearedAt && newRawTime && newRawTime <= clearedAt;
           // La misma llegada puede venir por varios canales (realtime por
@@ -1809,6 +1995,25 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     // Mark this chat as "just sent to" so the chats subscription won't count it as unread
     lastSentAtRef.current[selectedChatId] = Date.now();
     const isoNow = new Date().toISOString();
+
+    // Registra el preview optimista como pendiente de confirmación del servidor,
+    // para que un refreshChats() que lea una versión aún vieja no lo pise.
+    pendingLocalPreviewRef.current[selectedChatId] = {
+      sentAtMs: Date.now(),
+      lastMessage: newMsg.text || "Archivo multimedia",
+      lastMessageTime: newMsg.timestamp,
+      lastMessageTimeRaw: isoNow,
+      updated_at: isoNow,
+    };
+    // Base de comparación en reino servidor si aún no la conocemos (mejor
+    // esfuerzo: el flujo realtime/effect la mantendrá al día).
+    if (lastServerPreviewRawRef.current[selectedChatId] === undefined) {
+      const currentChat = chatsRef.current.find((c: any) => c.id === selectedChatId);
+      const serverRaw = (currentChat as any)?.lastMessageTimeRaw;
+      if (typeof serverRaw === "string" && serverRaw) {
+        lastServerPreviewRawRef.current[selectedChatId] = serverRaw;
+      }
+    }
 
     setChats((prevChats) => {
       const updated = prevChats.map((c) => {
@@ -2549,19 +2754,32 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   const handleOpenProfile = useCallback(async () => {
     if (!activeChat?.partnerUserId || !user?.id) return;
     try {
-      const { data } = await supabase
-        .from("profiles")
-        .select("id, name, username, phone_number, avatar_url, bio")
-        .eq("id", activeChat.partnerUserId)
-        .single();
+      const [profileRes, contactRes] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("id, name, username, phone_number, avatar_url, bio")
+          .eq("id", activeChat.partnerUserId)
+          .single(),
+        supabase
+          .from("contacts")
+          .select("id, name")
+          .eq("user_id", user.id)
+          .eq("contact_user_id", activeChat.partnerUserId)
+          .limit(1),
+      ]);
+      const data = profileRes.data;
+      const contactRow = contactRes.data && contactRes.data.length > 0 ? contactRes.data[0] : null;
       if (data) {
         setContactProfile({
           id: data.id,
-          name: data.name,
+          // Prioridad: contacts.name → profiles.name (mismo criterio que getChats)
+          name: contactRow?.name || data.name,
           phone: data.phone_number || "",
           avatar: data.avatar_url || "",
           bio: data.bio || "",
           username: data.username || "",
+          contactUserId: data.id,
+          contactId: contactRow?.id,
         });
       }
     } catch (e) {
@@ -2569,11 +2787,33 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     }
   }, [activeChat, user?.id]);
 
+  const handleEditContact = (contact: Contact) => {
+    setContactProfileAutoEdit(true);
+    setContactProfile({
+      id: contact.contact_user_id || contact.id,
+      name: contact.name,
+      phone: contact.phone || "",
+      avatar: contact.avatar || "",
+      bio: contact.bio || "",
+      username: "",
+      contactUserId: contact.contact_user_id,
+      contactId: contact.id,
+    });
+  };
+
+  const handleContactNameUpdated = (newName: string) => {
+    // Actualiza el overlay local para reflejar el nombre de inmediato
+    setContactProfile(prev => (prev ? { ...prev, name: newName } : prev));
+    refreshContacts(true).catch(() => {});
+    refreshChats().catch(() => {});
+  };
+
   const handleDeleteChat = async (chatId: string) => {
     setSwipedChatId(null);
     setContextMenuChat(null);
     setContextMenuPos(null);
-    if (user?.id && !chatId.startsWith("chat_biz_") && !chatId.startsWith("chat_state_")) {
+    const isExpelled = expelledChatsRef.current.has(chatId);
+    if (user?.id && !isExpelled && !chatId.startsWith("chat_biz_") && !chatId.startsWith("chat_state_")) {
       try {
         await apiDeleteChat(chatId, user.id);
         removeChatFromContext(chatId);
@@ -2588,11 +2828,20 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         showToast("Error al eliminar chat");
       }
     } else {
+      // Chats expulsados (solo-lectura): el DELETE del server da 403 (ya no se es
+      // miembro), así que se ocultan/borran localmente.
       deletedChatIdsRef.current.add(chatId);
       setChats(prev => prev.filter(c => c.id !== chatId));
       if (selectedChatId === chatId) {
         setSelectedChatId(null);
         setCurrentScreen("chats");
+      }
+      if (isExpelled) {
+        expelledChatsRef.current.delete(chatId);
+        setExpelledChats(Array.from(expelledChatsRef.current.values()));
+        if (user?.id) {
+          ExpelledChatRepository.remove(user.id, chatId).catch((e) => logger.warn("[EXP] remove failed", { error: e }));
+        }
       }
     }
   };
@@ -2618,6 +2867,79 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       showToast("Error al eliminar mensajes");
     }
   };
+
+  const handleGroupMemberRemoved = useCallback((chatId: string) => {
+    // El expulsado NO purga el chat: quedará visible en solo-lectura.
+    // Se persiste un snapshot en expelled_chats (SQLite) para que sobreviva
+    // a refreshChats(), ya que get_user_chats deja de incluir chats donde el
+    // usuario ya no es participante.
+    const existing = chats.find(c => c.id === chatId);
+    const snapshot: Chat = existing
+      ? { ...existing, isGroup: true, removedFromGroup: true }
+      : { id: chatId, name: "Grupo", avatar: "", status: "offline", lastMessage: "", lastMessageTime: "", unreadCount: 0, messages: [], isGroup: true, removedFromGroup: true };
+    expelledChatsRef.current.set(chatId, snapshot);
+    if (user?.id) {
+      ExpelledChatRepository.save(user.id, snapshot).catch((e) => logger.warn("[EXP] save failed", { error: e }));
+    }
+    setExpelledChats(Array.from(expelledChatsRef.current.values()));
+    const wasOpen = selectedChatId === chatId;
+    if (wasOpen) {
+      setSelectedChatId(null);
+      setCurrentScreen("chats");
+    }
+    showToast(existing && existing.name ? `Fuiste eliminado del grupo ${existing.name}` : "Fuiste eliminado del grupo");
+  }, [chats, selectedChatId, user?.id]);
+
+  const handleGroupMemberAdded = useCallback(async (chatId: string) => {
+    const existing = chats.find(c => c.id === chatId);
+    let name = existing?.name || "Grupo";
+    if (!existing) {
+      try {
+        const { data } = await supabase.from("chats").select("name").eq("id", chatId).maybeSingle();
+        if (data?.name) name = data.name;
+      } catch { /* RLS o error de red: se usa el nombre por defecto */ }
+    }
+    setPendingGroupInvite({ chatId, name });
+  }, [chats]);
+
+  const handleDeclineGroupInvite = useCallback(async () => {
+    const invite = pendingGroupInvite;
+    setPendingGroupInvite(null);
+    if (!invite || !user?.id) return;
+    try {
+      await leaveGroup(invite.chatId, user.id);
+      showToast(`Saliste del grupo ${invite.name}`);
+    } catch (e) {
+      logger.warn("[INVITE] leaveGroup error", { error: e });
+      showToast("No se pudo salir del grupo");
+    }
+    removeChatFromContext(invite.chatId);
+    deletedChatIdsRef.current.add(invite.chatId);
+    setChats(prev => prev.filter(c => c.id !== invite.chatId));
+    if (selectedChatId === invite.chatId) {
+      setSelectedChatId(null);
+      setCurrentScreen("chats");
+    }
+  }, [pendingGroupInvite, user?.id, removeChatFromContext, selectedChatId]);
+
+  useGroupMemberEvents(user?.id, handleGroupMemberRemoved, handleGroupMemberAdded);
+
+  // Cargar desde SQLite los chats de grupos de los que se fue expulsado
+  // (para que el modo solo-lectura perdure entre reinicios de la app).
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    ExpelledChatRepository.get(user.id)
+      .then((list) => {
+        if (cancelled) return;
+        const map = new Map<string, Chat>();
+        for (const c of list) map.set(c.id, { ...c, removedFromGroup: true });
+        expelledChatsRef.current = map;
+        setExpelledChats(Array.from(map.values()));
+      })
+      .catch((e) => logger.warn("[EXP] load failed", { error: e }));
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   const handleLongPress = (chat: Chat, clientX: number, clientY: number) => {
     setSwipedChatId(null);
@@ -2709,6 +3031,47 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[100] bg-slate-950/90 backdrop-blur-md text-white text-[10px] font-black px-4 py-2 rounded-2xl border border-teal-500/30 flex items-center gap-2 shadow-lg animate-fade-in pointer-events-none">
           <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-ping"></span>
           {toastMessage}
+        </div>
+      )}
+
+      {/* Te agregaron a un grupo: confirmación de permanencia */}
+      {pendingGroupInvite && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4">
+          <div
+            className="w-full max-w-[320px] bg-white rounded-2xl shadow-2xl p-5 animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center shrink-0">
+                <svg viewBox="0 0 24 24" className="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+              </div>
+              <p className="text-sm font-bold text-slate-800">
+                Te agregaron al grupo <span className="text-purple-600">{pendingGroupInvite.name}</span>
+              </p>
+            </div>
+            <p className="text-[11px] text-slate-500 mb-4">
+              ¿Deseas permanecer en este grupo?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleDeclineGroupInvite}
+                className="flex-1 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                No, salir
+              </button>
+              <button
+                onClick={() => setPendingGroupInvite(null)}
+                className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Sí, permanecer
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -3069,6 +3432,7 @@ try {
             <div className="absolute inset-0 z-50 bg-white">
               <React.Suspense fallback={<ChatListSkeleton />}>
               <ChatRoom
+                key={activeChat.id}
                 chat={activeChat}
                 onBack={() => {
                   setSelectedChatId(null);
@@ -3086,6 +3450,13 @@ try {
                   removeChatFromContext(chatId);
                   deletedChatIdsRef.current.add(chatId);
                   setChats(prev => prev.filter(c => c.id !== chatId));
+                  if (expelledChatsRef.current.has(chatId)) {
+                    expelledChatsRef.current.delete(chatId);
+                    setExpelledChats(Array.from(expelledChatsRef.current.values()));
+                    if (user?.id) {
+                      ExpelledChatRepository.remove(user.id, chatId).catch(() => {});
+                    }
+                  }
                   setSelectedChatId(null);
                   setCurrentScreen("chats");
                 }}
@@ -3400,7 +3771,11 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                                 <span className="text-[10px] text-slate-400 font-medium">{chat.lastMessageTime}</span>
                               </div>
                               <div className="flex items-center justify-between gap-1">
-                                <p className="text-xs text-slate-500 truncate max-w-[180px]">{chat.lastMessage}</p>
+                                {chat.removedFromGroup ? (
+                                  <p className="text-xs text-amber-600 truncate max-w-[180px] italic">Ya no eres miembro de este grupo</p>
+                                ) : (
+                                  <p className="text-xs text-slate-500 truncate max-w-[180px]">{chat.lastMessage}</p>
+                                )}
                                 
                                 {chat.unreadCount > 0 ? (
                                   <span className="bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center shadow-sm shrink-0">
@@ -3595,6 +3970,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                     }}
                     onAddContact={() => setCurrentScreen("add_contact_manual")}
                     onDeleteContact={handleDeleteContact}
+                    onEditContact={handleEditContact}
                     currentUserId={user?.id || ""}
                   />
                   </LazyPanel>
@@ -4766,7 +5142,10 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
           <ContactProfile
             isOpen={contactProfile !== null}
             profile={contactProfile}
-            onClose={() => setContactProfile(null)}
+            onClose={() => { setContactProfile(null); setContactProfileAutoEdit(false); }}
+            currentUserId={user?.id}
+            onNameUpdated={handleContactNameUpdated}
+            autoEdit={contactProfileAutoEdit}
           />
 
           {showMyAvatarLightbox && registeredUser?.avatar && (

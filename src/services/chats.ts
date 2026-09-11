@@ -87,7 +87,6 @@ export async function getChats(userId: string): Promise<Chat[]> {
       const profile = partnerMap.get(partnerId);
       const finalName = savedName || profile?.name || chat.name;
       const resolvedAvatar = profile ? (profile.avatar_url || profile.avatar || "") : "";
-      console.log("[CHATS-DEBUG] partnerId:", partnerId, "avatar resuelto:", resolvedAvatar, "profile.avatar_url:", profile?.avatar_url, "profile.avatar:", profile?.avatar);
       return {
         ...chat,
         name: finalName,
@@ -308,6 +307,22 @@ export async function removeGroupMember(chatId: string, profileId: string) {
 
 export async function leaveGroup(chatId: string, userId: string) {
   await removeGroupMember(chatId, userId);
+}
+
+/**
+ * Expulsar miembro del grupo desde el admin. Utiliza el endpoint
+ * del servidor que inserta el evento group_member_events y el
+ * mensaje de sistema de forma atómica. No tiene fallback a RLS.
+ */
+export async function expelGroupMember(chatId: string, profileId: string) {
+  const resp = await authFetch(apiUrl("/api/groups/remove-participant"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, profile_id: profileId }),
+  });
+  const result = await resp.json();
+  if (!resp.ok) throw new Error(`[${resp.status}] ${result.error || "Error al expulsar miembro"}`);
+  return result;
 }
 
 export async function getChatWithPartner(chatId: string, userId: string): Promise<Chat | null> {

@@ -9,14 +9,14 @@ import MediaEditor from "./MediaEditor";
 import CachedImage from "./CachedImage";
 import { useSupabase } from "../contexts/SupabaseContext";
 import toast from "react-hot-toast";
-import { useStatesManagement, Story, UserState } from "../hooks/useStatesManagement";
+import { useStatesManagement, Story, UserState, StoryReplyPayload } from "../hooks/useStatesManagement";
 import StoryViewer from "./states/StoryViewer";
 import StateViewersModal from "./states/StateViewersModal";
 import CreateStateModal from "./states/CreateStateModal";
 import StoryAudiencePicker from "./states/StoryAudiencePicker";
 
 interface StatesPanelProps {
-  onStartChat: (name: string, avatar: string, initialText: string, partnerUserId?: string) => void;
+  onStartChat: (name: string, avatar: string, initialText: string, partnerUserId?: string, storyReply?: StoryReplyPayload) => void;
   onHasUnseen?: (unseen: boolean) => void;
 }
 
