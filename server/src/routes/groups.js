@@ -179,6 +179,101 @@ router.post('/sound', async (req, res) => {
   }
 });
 
+// POST /api/groups/remove-participant
+// Remove one member from a group chat and notify everyone via system message.
+// Body: { chat_id: string, profile_id: string }
+// The endpoint is responsible for inserting a group_member_events row so the
+// removed user's device can purge the chat locally via Realtime.
+router.post('/remove-participant', async (req, res) => {
+  try {
+    const { chat_id, profile_id } = req.body || {};
+    if (!chat_id || !profile_id) {
+      return res.status(400).json({ ok: false, error: 'chat_id y profile_id requeridos' });
+    }
+
+    const { data: chat } = await supabaseAdmin
+      .from('chats')
+      .select('id, is_group, admin_id')
+      .eq('id', chat_id)
+      .maybeSingle();
+    if (!chat) {
+      return res.status(404).json({ ok: false, error: 'Grupo no encontrado' });
+    }
+    if (!chat.is_group) {
+      return res.status(400).json({ ok: false, error: 'Solo se pueden expulsar miembros de chats grupales' });
+    }
+    if (chat.admin_id !== req.userId && req.userRole !== 'service_role') {
+      console.log('[GROUPS] remove-participant forbidden', { chat_id, target: profile_id, admin_id: chat.admin_id, caller: req.userId });
+      return res.status(403).json({ ok: false, error: 'Solo el admin del grupo puede expulsar miembros' });
+    }
+
+    // 1) Borrar participante (crítica)
+    const { error: delErr } = await supabaseAdmin
+      .from('chat_participants')
+      .delete()
+      .eq('chat_id', chat_id)
+      .eq('profile_id', profile_id);
+    if (delErr) {
+      console.error('[GROUPS] remove-participant delete error:', delErr);
+      return res.status(500).json({ ok: false, error: delErr.message });
+    }
+
+    // 2) Evento de Realtime dirigido al expulsado (crítica)
+    const { error: evErr } = await supabaseAdmin
+      .from('group_member_events')
+      .insert({ user_id: profile_id, chat_id, type: 'removed' });
+    if (evErr) {
+      console.error('[GROUPS] remove-participant event insert error:', evErr);
+      return res.status(500).json({ ok: false, error: evErr.message });
+    }
+
+    // 3) Mensaje de sistema para el resto del grupo
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('name')
+      .eq('id', profile_id)
+      .maybeSingle();
+    const memberName = profile?.name || 'Usuario';
+    const systemText = `👋 ${memberName} fue eliminado del grupo`;
+    try {
+      await supabaseAdmin.from('messages').insert({
+        chat_id,
+        sender_id: req.userId,
+        text: systemText,
+        type: 'system',
+        status: 'sent',
+        created_at: new Date().toISOString(),
+        edited: false,
+        forwarded: false,
+        is_deleted: false,
+        is_ephemeral: false,
+        has_image: false,
+        has_audio: false,
+        has_video: false,
+        has_document: false,
+        has_location: false,
+        is_animated: false,
+      });
+      await supabaseAdmin
+        .from('chats')
+        .update({
+          last_message: systemText,
+          last_message_time: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', chat_id);
+    } catch (msgErr) {
+      // El mensaje de sistema es best-effort; la purga y el borrado ya ocurrieron.
+      console.error('[GROUPS] remove-participant system message error:', msgErr);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[GROUPS] remove-participant error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POST /api/groups/add-participants
 // Insert multiple participants into a group chat using service_role (bypasses RLS)
 // Body: { chat_id: string, member_ids: string[] }
