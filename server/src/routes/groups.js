@@ -299,6 +299,15 @@ router.post('/add-participants', async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Solo el admin del grupo puede agregar participantes' });
     }
 
+    // Determinar ANTES del upsert qué miembros ya eran participantes:
+    // una vez ejecutado el upsert no se puede distinguir cuáles eran nuevos.
+    const { data: existing } = await supabaseAdmin
+      .from('chat_participants')
+      .select('profile_id')
+      .eq('chat_id', chat_id);
+    const existingIds = new Set((existing || []).map(r => r.profile_id));
+    const freshIds = member_ids.filter(id => !existingIds.has(id));
+
     const rows = member_ids.map(profile_id => ({ chat_id, profile_id }));
     const { error } = await supabaseAdmin
       .from('chat_participants')
@@ -309,16 +318,9 @@ router.post('/add-participants', async (req, res) => {
       return res.status(500).json({ ok: false, error: error.message });
     }
 
-    // Emitir evento 'added' SOLO a los miembros realmente nuevos (el upsert
-    // con ignoreDuplicates no informa cuáles se ignoraron, así que se consulta).
+    // Emitir evento 'added' SOLO a los miembros realmente nuevos.
     // Es best-effort: si falla, el chat igual se agrega por el INSERT realtime.
     try {
-      const { data: existing } = await supabaseAdmin
-        .from('chat_participants')
-        .select('profile_id')
-        .eq('chat_id', chat_id);
-      const existingIds = new Set((existing || []).map(r => r.profile_id));
-      const freshIds = member_ids.filter(id => !existingIds.has(id));
       if (freshIds.length > 0) {
         await supabaseAdmin.from('group_member_events').insert(
           freshIds.map(profile_id => ({ user_id: profile_id, chat_id, type: 'added' }))
