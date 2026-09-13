@@ -436,21 +436,24 @@ class SyncService {
             const blobField = item.message.mediaUrl || item.message.localVideoUrl || item.message.posterUrl;
             if (typeof blobField === "string" && blobField.startsWith("blob:")) {
               const isVoice = item.message.type === "voice_note" || item.message.type === "audio";
-              if (isVoice) {
-                const audioBlob = await messageRepo.getAudioBlob(item.message.id);
-                if (audioBlob) {
+              const isVideoNote = item.message.type === "video_note";
+              if (isVoice || isVideoNote) {
+                const blob = await messageRepo.getAudioBlob(item.message.id);
+                if (blob) {
                   try {
-                    const httpsUrl = await uploadChatMedia(audioBlob, "voice");
+                    const folder = isVoice ? "voice" : "video";
+                    const httpsUrl = await uploadChatMedia(blob, folder);
                     const updatedMsg = { ...item.message, mediaUrl: httpsUrl };
+                    if (isVideoNote) updatedMsg.localVideoUrl = httpsUrl;
                     await messageRepo.upsertMessage(item.chatId, updatedMsg);
                     item.message = updatedMsg;
-                    dbg("processQueue: voice blob re-uploaded", item.message.id, "->", httpsUrl.slice(0, 60));
+                    dbg("processQueue: media blob re-uploaded", item.message.id, "->", httpsUrl.slice(0, 60));
                   } catch (uploadErr) {
-                    logger.warn("[SyncService] voice blob re-upload failed, will retry", { error: uploadErr });
+                    logger.warn("[SyncService] media blob re-upload failed, will retry", { error: uploadErr });
                     continue;
                   }
                 } else {
-                  dbg("processQueue: voice blob not found in IDB, skip", item.message.id);
+                  dbg("processQueue: media blob not found in IDB, skip", item.message.id);
                   continue;
                 }
               } else {
@@ -551,13 +554,13 @@ class SyncService {
       const uploaded = await this.uploadIfNeeded(mediaUrl, type);
       if (uploaded) {
         if (type === "image") imageUrl = uploaded;
-        else if (type === "video") videoUrl = uploaded;
+        else if (type === "video" || type === "video_note") videoUrl = uploaded;
         else if (type === "audio" || type === "voice_note") audioUrl = uploaded;
         else if (type === "sticker") stickerUrl = uploaded;
         else imageUrl = uploaded;
       } else {
         if (type === "image") imageUrl = mediaUrl;
-        else if (type === "video") videoUrl = mediaUrl;
+        else if (type === "video" || type === "video_note") videoUrl = mediaUrl;
         else if (type === "audio" || type === "voice_note") audioUrl = mediaUrl;
         else if (type === "sticker") stickerUrl = mediaUrl;
         else imageUrl = mediaUrl;

@@ -895,14 +895,14 @@ pendingSendIdsRef.current.add(tempId);
     sendingLockRef.current = new Promise<void>((resolve) => { releaseSending = resolve; });
     await prevSending;
 
+    let uploadedUrl: string | null = null;
     try {
       const uploadTimeout = new Promise<string>((_, reject) =>
         setTimeout(() => reject(new Error("upload voz/video timeout (25s)")), 25000)
       );
       const url = await Promise.race([uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video"), uploadTimeout]);
       console.log("[VOICE] upload OK", { url });
-      // Upload exitoso: limpiar blob de IDB (ya no se necesita para reintentos)
-      await messageRepo.deleteAudioBlob(tempId);
+      uploadedUrl = url;
       const mediaUpdated = { ...newMsg, mediaUrl: url };
       await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId, sender_id: uid }, uid).catch(() => {});
       setMessages(prev => {
@@ -956,12 +956,16 @@ pendingSendIdsRef.current.add(tempId);
         messageRepo.deleteMessage(chatId, tempId);
         setMessages(prev => prev.map(m => m.id === tempId ? final : m));
       }
+      // Blob ya no se necesita: el mensaje fue confirmado por el servidor (o
+      // en local). Limpiarlo aquí garantiza que SIEMPRE esté disponible para
+      // el reintento si el POST falla. Nunca limpiarlo antes de confirmar.
+      await messageRepo.deleteAudioBlob(tempId);
     } catch (err) {
       console.error("[CHAT] Upload recording error:", err);
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
       // Encolar en SyncService para reintento automático (upload + message creation)
       try {
-        await syncService.queueMessage(chatId, { ...newMsg, clientId, sender_id: uid }, uid);
+        await syncService.queueMessage(chatId, { ...newMsg, mediaUrl: uploadedUrl ?? localUrl, clientId, sender_id: uid }, uid);
       } catch (qErr) {
         console.error("[CHAT] SyncService queue failed for voice:", qErr);
       }

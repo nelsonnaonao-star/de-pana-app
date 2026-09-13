@@ -1362,19 +1362,44 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   // Persistencia ligera de un mensaje entrante con el chat cerrado: RPC
   // get_user_messages limit 1 + upsertMessage (dedup por id). Compartida por el
   // canal chats-for y el puente FCM (CallFcmService → pushNotificationReceived).
-  const scheduleLightMessagePersist = useCallback((chatId: string) => {
+  const scheduleLightMessagePersist = useCallback((chatId: string, immediate?: boolean) => {
     if (!user) return;
     const pendingTimer = persistMsgTimersRef.current.get(chatId);
     if (pendingTimer) clearTimeout(pendingTimer);
-    persistMsgTimersRef.current.set(chatId, setTimeout(() => {
+    const runPersist = () => {
       persistMsgTimersRef.current.delete(chatId);
-      getMessages(chatId, { limit: 1 }).then((msgs) => {
-        const latest = msgs.length ? msgs.reduce((a, b) => (((a.created_at || "") >= (b.created_at || "")) ? a : b)) : null;
-        if (!latest) return;
-        const mapped = mapDtoToUiMessage(latest, user.id);
-        messageRepo.upsertMessage(chatId, { ...mapped, chatId, synced: true });
-      }).catch((e) => logger.warn("[LIGHT-PERSIST] Failed to persist latest message", { error: e, chatId }));
-    }, 1200));
+      const persistIncoming = async () => {
+        try {
+          // Persistir TODO lo que llegó con el chat cerrado: pedir al servidor
+          // solo lo más nuevo que lo ya confirmado localmente (cursor `after`),
+          // en vez de `limit:1` del último mensaje. Así N mensajes entrantes
+          // quedan en SQLite y no dependen del RPC único al abrir el chat.
+          let lastTs = "";
+          try {
+            const local = await messageRepo.getMessages(chatId);
+            for (const m of local) {
+              if (m.synced === false) continue; // pendientes propios (temp) no marcan frontera
+              const ts = m.rawCreatedAt || "";
+              if (ts && ts > lastTs) lastTs = ts;
+            }
+          } catch { /* best effort: sin frontera local */ }
+          const msgs = await getMessages(chatId, { after: lastTs || undefined, limit: 50 });
+          if (!msgs || msgs.length === 0) return;
+          for (const m of msgs) {
+            const mapped = mapDtoToUiMessage(m, user.id);
+            messageRepo.upsertMessage(chatId, { ...mapped, chatId, synced: true });
+          }
+        } catch (e) {
+          logger.warn("[LIGHT-PERSIST] Failed to persist messages", { error: e, chatId });
+        }
+      };
+      persistIncoming();
+    };
+    if (immediate) {
+      runPersist();
+    } else {
+      persistMsgTimersRef.current.set(chatId, setTimeout(runPersist, 1200));
+    }
   }, [user]);
 
   // Handle message synced callback: replace tempId with server ID and update status
@@ -1795,10 +1820,11 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         });
       }
       if (!isChatOpen) {
-        // Mensaje recibido con el chat cerrado: persistir en SQLite (misma
-        // rutina debounced del canal chats-for). Si está abierto, el
-        // refetchTrigger de abajo ya trae y persiste vía getMessages(50).
-        scheduleLightMessagePersist(d.chatId);
+        // Mensaje recibido con el chat cerrado desde PUSH/FCM: persistir en
+        // SQLite INMEDIATAMENTE (0ms) para que ChatRoom lo encuentre en caché
+        // al abrir, sin depender del fetch remoto. La ruta Realtime del canal
+        // chats-for conserva su debounce actual (agrupa ráfagas de eventos).
+        scheduleLightMessagePersist(d.chatId, true);
       } else {
         setRefetchTrigger(n => n + 1);
       }

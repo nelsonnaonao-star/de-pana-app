@@ -269,6 +269,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   // Fetch initial messages: cache-first, then network refresh
   useEffect(() => {
     console.log(`[RACE-T1] ChatRoom MOUNTED/EFFECT — chat.id=${chat.id} uid=${uid} messages=${messages.length} (+${Date.now() - (window as any).__chatRoomMountTime || '?'}ms from render)`);
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     if (chat.id) {
       setHasMoreOlder(true);
 
@@ -312,27 +313,42 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           }
         }
 
-        // 2. Fetch fresh messages from server in background
-        getMessages(chat.id, { limit: 50 }).then(apiMessages => {
-          console.log('[CHAT] getMessages result count:', apiMessages?.length);
-          if (apiMessages && apiMessages.length > 0) {
-            const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
-            mergeServerMessages(mapped);
-            messageRepo.saveMessages(chat.id, mapped);
-            const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
-            if (latest) lastSyncTimestampRef.current = latest;
-            if (apiMessages.length < 50) setHasMoreOlder(false);
-            console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
-          } else {
-            if (filtered.length === 0) setHasMoreOlder(false);
-            console.log('[CHAT] ⚠️ getMessages returned 0 messages');
-          }
-        }).catch((err) => {
-          console.error('[CHAT] ❌ getMessages error (using cache):', err);
-          // Keep showing cached messages — offline-first UX
-        });
+        // 2. Fetch fresh messages from server in background. Un reintento acotado:
+        // si el primer getMessages falla por red/sesión, da una segunda oportunidad
+        // (~4s) sin reemplazar jamás el caché local (solo se fusiona en éxito).
+        let retriesLeft = 1;
+        const fetchLatest = (): void => {
+          getMessages(chat.id, { limit: 50 }).then(apiMessages => {
+            console.log('[CHAT] getMessages result count:', apiMessages?.length);
+            if (apiMessages && apiMessages.length > 0) {
+              const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
+              mergeServerMessages(mapped);
+              messageRepo.saveMessages(chat.id, mapped);
+              const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
+              if (latest) lastSyncTimestampRef.current = latest;
+              if (apiMessages.length < 50) setHasMoreOlder(false);
+              console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
+            } else {
+              if (filtered.length === 0) setHasMoreOlder(false);
+              console.log('[CHAT] ⚠️ getMessages returned 0 messages');
+            }
+          }).catch((err) => {
+            console.error('[CHAT] ❌ getMessages error (using cache):', err);
+            // Keep showing cached messages — offline-first UX. Y un solo reintento
+            // ante fallos transitorios (cubre el caso en que el caché aún no tenía
+            // el mensaje entrante persistido por la rutina ligera).
+            if (retriesLeft > 0) {
+              retriesLeft -= 1;
+              retryTimer = setTimeout(fetchLatest, 4000);
+            }
+          });
+        };
+        fetchLatest();
       });
     }
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [chat.id]);
 
   // Reintentos en segundo plano (cola SyncService): cuando un mensaje que quedó
