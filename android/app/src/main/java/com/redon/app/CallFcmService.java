@@ -26,6 +26,7 @@ public class CallFcmService extends FirebaseMessagingService {
     private static final String CHANNEL_MESSAGES = "redon-messages";
     private static final String CHANNEL_GROUPS = "redon-groups-v2";
     private static final String REPLY_ACTION = "com.redon.app.REPLY_MESSAGE";
+    private static final String PENDING_MESSAGE_KEY = "redon_pending_message";
 
     // Almacenamiento compartido creado por el plugin @capacitor/preferences
     private static final String SOUND_PREFS = "CapacitorStorage";
@@ -142,6 +143,30 @@ public class CallFcmService extends FirebaseMessagingService {
         return channelId;
     }
 
+    // Payload del mensaje recibido en background para que JS lo recupere al volver
+    // al foreground (abierta por el ícono, SIN tocar la notificación). Mismo
+    // mecanismo que MainActivity.persistPendingCall: SharedPreferences
+    // "CapacitorStorage", leída por @capacitor/preferences desde el WebView.
+    private void persistPendingMessage(RemoteMessage message) {
+        try {
+            SharedPreferences prefs = getSharedPreferences(SOUND_PREFS, Context.MODE_PRIVATE);
+            String chatId = message.getData().get("chatId");
+            String contactId = message.getData().get("contactId");
+            if (chatId == null || chatId.isEmpty()) return;
+            org.json.JSONObject payload = new org.json.JSONObject();
+            payload.put("chatId", chatId);
+            payload.put("contactId", contactId != null ? contactId : "");
+            payload.put("title", message.getData().get("title"));
+            payload.put("body", message.getData().get("body"));
+            payload.put("is_group", message.getData().get("is_group"));
+            payload.put("ts", message.getData().get("ts"));
+            prefs.edit().putString(PENDING_MESSAGE_KEY, payload.toString()).apply();
+            Log.d(TAG, "Persisted pending message for chat " + chatId);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to persist pending message", e);
+        }
+    }
+
     @Override
     public void onNewToken(String token) {
         super.onNewToken(token);
@@ -211,6 +236,10 @@ public class CallFcmService extends FirebaseMessagingService {
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to bridge message to Capacitor JS", e);
                 }
+                // Persistir el payload: si el usuario abre la app por el ícono (no por
+                // la notificación), JS lo recupera al volver a foreground y procesa el
+                // mensaje sin esperar a que Realtime reconecte.
+                persistPendingMessage(message);
                 showMessageNotification(message);
             }
         }

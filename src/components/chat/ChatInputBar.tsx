@@ -117,7 +117,7 @@ export default function ChatInputBar({
           ) : (
             <div className="flex-1 animate-fade-in">
               <div
-                className="w-full max-w-[320px] mx-auto rounded-3xl flex flex-col items-center gap-[18px] px-5 py-7"
+                className="w-full rounded-3xl flex flex-col items-center gap-[18px] px-5 py-7"
                 style={{ background: "#0c1617" }}
               >
                 <div className="relative w-[150px] h-[150px] flex items-center justify-center">

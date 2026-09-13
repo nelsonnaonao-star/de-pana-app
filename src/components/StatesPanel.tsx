@@ -39,6 +39,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
     handleDeleteMyStory, handleToggleReaction,
     setPublishStep, setIsEditingProState, setShowPublishDecisionModal,
     audience, handleSetAudience,
+    isPublishing, publishStatus,
   } = useStatesManagement({
     userId: user?.id || "",
     profileName: profile?.name,
@@ -336,6 +337,8 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
         publishStep={publishStep}
         publishComment={publishComment}
         isEditingProState={isEditingProState}
+        isPublishing={isPublishing}
+        publishStatus={publishStatus}
         onPublishOriginal={handlePublishOriginal}
         onPublishNow={handlePublishNow}
         onGoToProEditor={handleGoToProEditor}

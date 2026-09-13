@@ -331,6 +331,43 @@ export default function PhoneSimulator({
     loadBiometricSettings();
   }, []);
 
+  // Recuperación de mensajes pendientes de FCM (background → foreground vía ícono):
+  // Si el usuario NO abrió tocando la notificación, el payload del mensaje se
+  // persiste en CapacitorStorage (native, CallFcmService). Al volver al foreground,
+  // se reinyecta por el MISMO flujo `new-message-received`, activando el refetch del
+  // ChatRoom sin esperar a que Realtime reconecte. El pendiente se limpia una vez
+  // procesado; si el parseo falla, NO se borra para no perder el mensaje.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let listener: { remove: () => Promise<void> } | null = null;
+    let removed = false;
+    const setupListener = async () => {
+      const { App } = await import('@capacitor/app');
+      listener = await App.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive || removed) return;
+        (async () => {
+          try {
+            const pending = await Preferences.get({ key: 'redon_pending_message' });
+            if (!pending?.value) return;
+            const data = JSON.parse(pending.value);
+            if (!data || !data.chatId) return;
+            logger.info('[PENDING-MSG] Recuperando mensaje pendiente de FCM', { chatId: data.chatId });
+            window.dispatchEvent(new CustomEvent('new-message-received', { detail: data }));
+            await Preferences.remove({ key: 'redon_pending_message' });
+            logger.info('[PENDING-MSG] Pendiente procesado y eliminado');
+          } catch (e) {
+            logger.warn('[PENDING-MSG] Fallo al procesar pendiente (NO se borra)', { error: e });
+          }
+        })();
+      });
+    };
+    setupListener();
+    return () => {
+      removed = true;
+      listener?.remove();
+    };
+  }, []);
+
   // Lock app on resume if biometric is enabled
   useEffect(() => {
     if (!biometricEnabled) return;
@@ -1057,40 +1094,53 @@ export default function PhoneSimulator({
       });
       const mapped = supabaseChats
         .filter((sc: any) => !deletedChatIdsRef.current.has(sc.id))
-        .map((sc: any) => ({
-        id: sc.id,
-        name: sc.name,
-        avatar: sc.avatar || "",
-        status: sc.is_online ? "online" : "offline",
-        lastMessage: (() => {
-          const clearedAt = clearedAtMap[sc.id];
-          if (clearedAt && sc.last_message_time && sc.last_message_time <= clearedAt) return "";
-          return sc.last_message || "";
-        })(),
-        lastMessageTime: (() => {
-          const clearedAt = clearedAtMap[sc.id];
-          if (clearedAt && sc.last_message_time && sc.last_message_time <= clearedAt) return "";
-          return sc.last_message_time
-            ? (() => {
-                const d = new Date(sc.last_message_time);
-                const now = new Date();
-                const isToday = d.toDateString() === now.toDateString();
-                return isToday
-                  ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                  : d.toLocaleDateString([], { day: "numeric", month: "short" });
-              })()
-            : "";
-        })(),
-        lastMessageTimeRaw: sc.last_message_time || "",
-        updated_at: sc.updated_at || sc.last_message_time || "",
-        unreadCount: (() => {
-          const localChat = chats.find((c: any) => c.id === sc.id);
-          return localChat?.unreadCount ?? sc.unread_count ?? 0;
-        })(),
-        partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
-        isGroup: sc.is_group || false,
-        messages: [],
-      }));
+        .map((sc: any) => {
+          const local = chats.find((c: any) => c.id === sc.id);
+          const localRaw = local
+            ? new Date(local.lastMessageTimeRaw || "").getTime()
+            : 0;
+          const serverRaw = new Date(sc.last_message_time || "").getTime();
+          const useServer = serverRaw > localRaw;
+          const effRaw = useServer
+            ? (sc.last_message_time || "")
+            : (local?.lastMessageTimeRaw ?? "");
+          return {
+            id: sc.id,
+            name: sc.name,
+            avatar: sc.avatar || "",
+            status: sc.is_online ? "online" : "offline",
+            lastMessage: (() => {
+              const clearedAt = clearedAtMap[sc.id];
+              if (clearedAt && sc.last_message_time && sc.last_message_time <= clearedAt) return "";
+              return useServer ? (sc.last_message || "") : (local?.lastMessage ?? "");
+            })(),
+            lastMessageTime: (() => {
+              const clearedAt = clearedAtMap[sc.id];
+              if (clearedAt && sc.last_message_time && sc.last_message_time <= clearedAt) return "";
+              return effRaw
+                ? (() => {
+                    const d = new Date(effRaw);
+                    const now = new Date();
+                    const isToday = d.toDateString() === now.toDateString();
+                    return isToday
+                      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      : d.toLocaleDateString([], { day: "numeric", month: "short" });
+                  })()
+                : "";
+            })(),
+            lastMessageTimeRaw: effRaw,
+            updated_at: useServer
+              ? (sc.updated_at || sc.last_message_time || "")
+              : (local?.updated_at ?? ""),
+            unreadCount: (() => {
+              const localChat = chats.find((c: any) => c.id === sc.id);
+              return localChat?.unreadCount ?? sc.unread_count ?? 0;
+            })(),
+            partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
+            isGroup: sc.is_group || false,
+            messages: [],
+          };
+        });
       // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
       for (const m of mapped) {
         const currentLocal = chats.find((c: any) => c.id === m.id);
@@ -1123,7 +1173,7 @@ export default function PhoneSimulator({
             continue;
           }
           const knownRaw = lastServerPreviewRawRef.current[m.id];
-          const serverAdvanced = knownRaw !== undefined && raw !== "" && raw !== knownRaw;
+          const serverAdvanced = knownRaw !== undefined && raw !== "" && new Date(raw) > new Date(knownRaw);
           if (serverAdvanced) {
             // El servidor alcanzó/superó el envío → aceptar su versión y liberar.
             if (raw) lastServerPreviewRawRef.current[m.id] = raw;
@@ -1137,7 +1187,10 @@ export default function PhoneSimulator({
             m.lastMessageTimeRaw = pending.lastMessageTimeRaw;
             m.updated_at = pending.updated_at;
           }
-        } else if (raw && raw !== lastServerPreviewRawRef.current[m.id]) {
+        } else if (
+            raw &&
+            new Date(raw) > new Date(lastServerPreviewRawRef.current[m.id])
+          ) {
           // Sin protección: mantener al día la base de servidor para futuros envíos.
           lastServerPreviewRawRef.current[m.id] = raw;
         }
@@ -1707,7 +1760,15 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           if (!full) return;
           setChats(later => {
             if (later.some(c => c.id === full.id)) return later;
-            return [{ ...full, avatar: (full as any).avatar || "", lastMessage: d.body || (full as any).last_message || "", lastMessageTime: (full as any).last_message_time || "", unreadCount: 1 } as any, ...later].sort(sortChats);
+            return [{
+              ...full,
+              avatar: (full as any).avatar || "",
+              lastMessage: d.body || (full as any).last_message || "",
+              lastMessageTime: d.ts || (full as any).last_message_time || "",
+              lastMessageTimeRaw: d.ts || (full as any).last_message_time || "",
+              updated_at: d.ts || (full as any).updated_at || "",
+              unreadCount: 1,
+            } as any, ...later].sort(sortChats);
           });
         });
       } else {
@@ -1721,6 +1782,15 @@ const lastSentAtRef = useRef<Record<string, number>>({});
             updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
           }
           if (d.body) updated[idx].lastMessage = d.body;
+          if (d.ts && d.ts > (updated[idx].lastMessageTimeRaw || "")) {
+            const fcmTime = new Date(d.ts);
+            const currentDate = new Date();
+            updated[idx].lastMessageTimeRaw = d.ts;
+            updated[idx].updated_at = d.ts;
+            updated[idx].lastMessageTime = fcmTime.toDateString() === currentDate.toDateString()
+              ? fcmTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              : fcmTime.toLocaleDateString([], { day: "numeric", month: "short" });
+          }
           return updated.sort(sortChats);
         });
       }
@@ -2000,7 +2070,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     // para que un refreshChats() que lea una versión aún vieja no lo pise.
     pendingLocalPreviewRef.current[selectedChatId] = {
       sentAtMs: Date.now(),
-      lastMessage: newMsg.text || "Archivo multimedia",
+      lastMessage: messagePreviewLabel(newMsg),
       lastMessageTime: newMsg.timestamp,
       lastMessageTimeRaw: isoNow,
       updated_at: isoNow,
@@ -2020,7 +2090,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         if (c.id === selectedChatId) {
           return {
             ...c,
-            lastMessage: newMsg.text || "Archivo multimedia",
+            lastMessage: messagePreviewLabel(newMsg),
             lastMessageTime: newMsg.timestamp,
             lastMessageTimeRaw: isoNow,
             updated_at: isoNow,
@@ -3440,7 +3510,38 @@ try {
                 }}
                 onSendMessage={handleSendMessageInRoom}
                 onChatMessagesChanged={(chatId, msgs) => {
-                  setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: msgs } : c));
+                  setChats(prev => {
+                    const mapped = prev.map(c => {
+                      if (c.id !== chatId) return c;
+                      const last = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+                      if (!last) return { ...c, messages: msgs };
+                      const raw = last.rawCreatedAt || "";
+                      const isNew =
+                        raw &&
+                        new Date(raw).getTime() >
+                          new Date(c.lastMessageTimeRaw || 0).getTime();
+                      if (!isNew) {
+                        return {
+                          ...c,
+                          messages: msgs,
+                          lastMessage: messagePreviewLabel(last),
+                        };
+                      }
+                      const ct = new Date(raw);
+                      const cNow = new Date();
+                      return {
+                        ...c,
+                        messages: msgs,
+                        lastMessage: messagePreviewLabel(last),
+                        lastMessageTimeRaw: raw,
+                        updated_at: raw,
+                        lastMessageTime: ct.toDateString() === cNow.toDateString()
+                          ? ct.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                          : ct.toLocaleDateString([], { day: "numeric", month: "short" }),
+                      };
+                    });
+                    return mapped.sort(sortChats);
+                  });
                 }}
                 onTriggerCall={handleTriggerCallFromChat}
                 callInProgress={isInitiatingCall}
@@ -5190,4 +5291,22 @@ function getChatTime(x: any): number {
 
 function sortChats(a: any, b: any): number {
   return getChatTime(b) - getChatTime(a);
+}
+
+// Label de mini-preview local-first: replica EXACTAMENTE el texto que el
+// servidor guardará en chats.last_message tras INSERT→UPDATE, para que la
+// preview optimista sea correcta al instante y no flipee al reconciliar.
+function messagePreviewLabel(m: any): string {
+  if (m.text) return m.text;
+  switch (m.type) {
+    case "voice_note": return "Nota de voz";
+    case "video_note": return "Nota de video";
+    case "image": return "Imagen";
+    case "video": return "Video";
+    case "audio": return "Audio";
+    case "sticker": return "Multimedia";
+    case "poll": return m.pollQuestion || "Multimedia";
+    case "location": return "📍 " + (m.locationName || "");
+    default: return "Multimedia";
+  }
 }

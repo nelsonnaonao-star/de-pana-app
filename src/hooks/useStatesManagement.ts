@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, FormEvent, ChangeEvent, MouseEvent } from "react";
 import { getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
 import { updateProfile } from "../services/auth";
+import { uploadChatMedia } from "../services/storage";
 import { storyRepo } from "../services/database/repositories/StoryRepository";
 
 export type StoryAudience =
@@ -78,7 +79,11 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
   const [subView, setSubView] = useState<"list" | "create_text" | "create_image">("list");
   const [audience, setAudience] = useState<StoryAudience>(() => parseStoryAudience(defaultAudience));
 
-  const [uploadedMedia, setUploadedMedia] = useState<{ url: string; type: "image" | "video"; name: string } | null>(null);
+  const [uploadedMedia, setUploadedMedia] = useState<{ url: string; type: "image" | "video"; name: string; file?: File } | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishStatus, setPublishStatus] = useState<"idle" | "publishing" | "success" | "error">("idle");
+  const publishingRef = useRef(false);
+  const objectUrlRef = useRef<string | null>(null);
   const [showPublishDecisionModal, setShowPublishDecisionModal] = useState(false);
   const [isEditingProState, setIsEditingProState] = useState(false);
   const [publishStep, setPublishStep] = useState<"choice" | "comment">("choice");
@@ -360,8 +365,25 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
   const handleFileUploaded = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setPublishStatus("idle");
 
     const fileType = file.type.startsWith("video") ? "video" : "image";
+
+    if (fileType === "video") {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      const objectUrl = URL.createObjectURL(file);
+      objectUrlRef.current = objectUrl;
+      setUploadedMedia({
+        url: objectUrl,
+        type: "video",
+        name: file.name,
+        file
+      });
+      setShowPublishDecisionModal(true);
+      e.target.value = "";
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
@@ -384,8 +406,50 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     setPublishComment("");
   };
 
-  const handlePublishNow = () => {
-    if (!uploadedMedia) return;
+  const handlePublishNow = async () => {
+    if (!uploadedMedia || publishingRef.current) return;
+
+    if (uploadedMedia.type === "video") {
+      if (!uploadedMedia.file) return;
+      publishingRef.current = true;
+      setIsPublishing(true);
+      setPublishStatus("publishing");
+      try {
+        const content = await uploadChatMedia(uploadedMedia.file, "stories");
+        const newStory: Story = {
+          id: "my_upload_" + Date.now(),
+          type: "video",
+          content,
+          caption: publishComment.trim(),
+          time: "Ahora mismo"
+        };
+        if (!userId) throw new Error("Usuario no disponible");
+        await createStory({
+          user_id: userId,
+          type: newStory.type,
+          content: newStory.content,
+          audience: audienceToJson(audience),
+        });
+        setMyStories(prev => [newStory, ...prev]);
+        setPublishStatus("success");
+        window.setTimeout(() => {
+          if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+          setUploadedMedia(null);
+          setShowPublishDecisionModal(false);
+          setPublishStep("choice");
+          setPublishComment("");
+          setSubView("list");
+          setPublishStatus("idle");
+        }, 1200);
+      } catch (err) {
+        console.error("[StatesPanel] publish video failed:", err);
+        setPublishStatus("error");
+      } finally {
+        publishingRef.current = false;
+        setIsPublishing(false);
+      }
+      return;
+    }
 
     const newStory: Story = {
       id: "my_upload_" + Date.now(),
@@ -409,7 +473,50 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     setIsEditingProState(true);
   };
 
-  const handlePublishProState = (editedUrl: string, mediaType: "image" | "video", caption: string) => {
+  const handlePublishProState = async (editedUrl: string, mediaType: "image" | "video", caption: string) => {
+    if (mediaType === "video") {
+      if (!uploadedMedia?.file || publishingRef.current) return;
+      publishingRef.current = true;
+      setIsPublishing(true);
+      setPublishStatus("publishing");
+      try {
+        const content = await uploadChatMedia(uploadedMedia.file, "stories");
+        const newStory: Story = {
+          id: "my_pro_" + Date.now(),
+          type: "video",
+          content,
+          caption: caption || "Editado con Red On PRO Editor ✨🎨",
+          time: "Ahora mismo"
+        };
+        if (!userId) throw new Error("Usuario no disponible");
+        await createStory({
+          user_id: userId,
+          type: newStory.type,
+          content: newStory.content,
+          audience: audienceToJson(audience),
+        });
+        setMyStories(prev => [newStory, ...prev]);
+        setPublishStatus("success");
+        setIsEditingProState(false);
+        window.setTimeout(() => {
+          if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+          setUploadedMedia(null);
+          setShowPublishDecisionModal(false);
+          setPublishStep("choice");
+          setPublishComment("");
+          setSubView("list");
+          setPublishStatus("idle");
+        }, 1200);
+      } catch (err) {
+        console.error("[StatesPanel] publish pro video failed:", err);
+        setPublishStatus("error");
+      } finally {
+        publishingRef.current = false;
+        setIsPublishing(false);
+      }
+      return;
+    }
+
     const newStory: Story = {
       id: "my_pro_" + Date.now(),
       type: mediaType,
@@ -506,6 +613,8 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     setNewImageCaption,
     setSelectedImageUrl,
     setStoryReplyText,
+isPublishing,
+    publishStatus,
     handleOpenStoryViewer,
     handleCloseStoryViewer,
     handleStoryTap,
