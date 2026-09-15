@@ -41,6 +41,7 @@ export default function StoryViewer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [videoMuted, setVideoMuted] = useState(true);
+  const [imgLoaded, setImgLoaded] = useState(false);
 
   // Descargar el estado actual (imagen o video) a la galería del dispositivo
   const downloadCurrentStory = async () => {
@@ -60,6 +61,7 @@ export default function StoryViewer({
 
   useEffect(() => {
     setVideoReady(false);
+    setImgLoaded(false);
   }, [activeStoryIdx]);
 
   const handlePointerDown = () => {
@@ -227,8 +229,10 @@ export default function StoryViewer({
           <>
             <CachedImage
               src={currentStory.content}
-              alt="Story Content"
-              className="absolute inset-0 w-full h-full object-contain"
+              onLoad={() => setImgLoaded(true)}
+              className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-150 ${
+                imgLoaded ? "opacity-100" : "opacity-0"
+              }`}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/45 pointer-events-none z-10" />
             {currentStory.caption && (

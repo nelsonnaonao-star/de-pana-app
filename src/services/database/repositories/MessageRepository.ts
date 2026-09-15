@@ -322,7 +322,56 @@ export class MessageRepository {
     }
   }
 
+  /**
+   * Auto-reparación idempotente: mensajes pendientes SIN sender_id que quedaron
+   * atascados (builds previos que guardaban sin él) y ya no son elegibles para
+   * sendSingle. Se les asigna el sender_id del usuario actual SOLO si son
+   * salientes (sender='me'), pendientes (synced=0) y propiedad de esta cuenta.
+   * Nunca toca mensajes recibidos ('other'), ya sincronizados ni contenido.
+   */
+  private async repairMissingSenderId(ownerUserId: string): Promise<void> {
+    // Caché idb: es la fuente que usa getAllUnsynced cuando SQLite no está
+    // listo (el caso del dispositivo con el relojito eterno).
+    try {
+      const cacheKeys = await getKeys();
+      for (const key of cacheKeys) {
+        if (typeof key !== "string" || !key.startsWith(CACHE_PREFIX)) continue;
+        const raw = await getItem<Message[]>(key);
+        if (!Array.isArray(raw)) continue;
+        let changed = false;
+        for (const m of raw) {
+          if (m && m.synced === false && m.sender === "me" && !m.sender_id) {
+            m.sender_id = ownerUserId;
+            (m as any).owner_user_id = ownerUserId;
+            changed = true;
+          }
+        }
+        if (changed) await setItem(key, raw);
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] auto-repair idb error", { error: e });
+    }
+    // SQLite: solo si el esquema lo permite. Fallo de catch = esquema viejo sin
+    // owner_user_id (el dispositivo usa la red de idb) → se ignora.
+    if (db.ready) {
+      try {
+        await db.run(
+          `UPDATE messages SET sender_id = ?, owner_user_id = ?
+           WHERE synced = 0 AND sender = 'me'
+             AND (sender_id IS NULL OR sender_id = '')
+             AND (owner_user_id IS NULL OR owner_user_id = '')`,
+          [ownerUserId, ownerUserId]
+        );
+      } catch (e) {
+        logger.warn("[MessageRepo] auto-repair sqlite error", { error: e });
+      }
+    }
+  }
+
   async getAllUnsynced(ownerUserId?: string): Promise<{ chatId: string; message: Message }[]> {
+    if (ownerUserId) {
+      await this.repairMissingSenderId(ownerUserId);
+    }
     let fromSqlite: { chatId: string; message: Message }[] | null = null;
     if (db.ready) {
       try {

@@ -13,11 +13,7 @@ function formatTime(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-const ORB_SIZE = 60;
-const RING_RADIUS = 26;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-const INNER_RADIUS = 24;
-const SEEK_BAND_START = 25;
+const DEFAULT_ORB_SIZE = 60;
 
 
 
@@ -27,6 +23,7 @@ interface AudioMessagePlayerProps {
   isMe: boolean;
   isGlass?: boolean;
   duration?: string;
+  orbSize?: number;
 }
 
 export default function AudioMessagePlayer({
@@ -35,6 +32,7 @@ export default function AudioMessagePlayer({
   isMe,
   isGlass = false,
   duration,
+  orbSize = DEFAULT_ORB_SIZE,
 }: AudioMessagePlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -135,7 +133,7 @@ export default function AudioMessagePlayer({
       const dy = e.clientY - (rect.top + rect.height / 2);
       const dist = Math.hypot(dx, dy);
 
-      if (audio && durationSec > 0 && dist >= SEEK_BAND_START && dist <= ORB_SIZE) {
+      if (audio && durationSec > 0 && dist >= SEEK_BAND_START && dist <= orbSize) {
         const frac = ((((Math.atan2(dy, dx) * 180) / Math.PI + 90) % 360) + 360) % 360 / 360;
         const time = frac * durationSec;
         audio.currentTime = time;
@@ -153,6 +151,10 @@ export default function AudioMessagePlayer({
     setSpeed(next);
     if (audioRef.current) audioRef.current.playbackRate = next;
   }, [speed]);
+
+  const RING_RADIUS = orbSize / 2 - 4;
+  const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+  const SEEK_BAND_START = orbSize * (25 / 60);
 
   const displayDuration = durationSec > 0 ? durationSec : 0;
   const progressFrac =
@@ -179,11 +181,11 @@ export default function AudioMessagePlayer({
   return (
     <>
       <div
-        className="flex items-center gap-3 w-fit"
+        className="flex items-center gap-2 w-fit"
         style={{
           background: "transparent",
           borderRadius: 20,
-          padding: "4px 16px",
+          padding: "2px 14px",
         }}
       >
         <div
@@ -191,26 +193,26 @@ export default function AudioMessagePlayer({
           role="button"
           aria-label={isPlaying ? "Pausar" : "Reproducir"}
           className="relative shrink-0 select-none"
-          style={{ width: ORB_SIZE, height: ORB_SIZE, minWidth: ORB_SIZE, cursor: "pointer" }}
+          style={{ width: orbSize, height: orbSize, minWidth: orbSize, cursor: "pointer" }}
         >
           <svg
-            width={ORB_SIZE}
-            height={ORB_SIZE}
+            width={orbSize}
+            height={orbSize}
             className="absolute inset-0"
             style={{ transform: "rotate(-90deg)" }}
             aria-hidden="true"
           >
             <circle
-              cx={ORB_SIZE / 2}
-              cy={ORB_SIZE / 2}
+              cx={orbSize / 2}
+              cy={orbSize / 2}
               r={RING_RADIUS}
               fill="none"
               stroke={ringTrackColor}
               strokeWidth="2"
             />
             <circle
-              cx={ORB_SIZE / 2}
-              cy={ORB_SIZE / 2}
+              cx={orbSize / 2}
+              cy={orbSize / 2}
               r={RING_RADIUS}
               fill="none"
               stroke={ringProgressColor}
@@ -230,7 +232,7 @@ export default function AudioMessagePlayer({
               overflow: "hidden",
             }}
           >
-            <BrandOrb size={ORB_SIZE - 12} animate={isPlaying} />
+            <BrandOrb size={orbSize - 12} animate={isPlaying} />
           </div>
 
           {isLoading && (

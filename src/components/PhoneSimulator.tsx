@@ -996,6 +996,8 @@ export default function PhoneSimulator({
           replyToId,
           replyToText,
           replyToSender,
+          clientId,
+          sender_id: user.id,
         };
 
         const finalChatId = targetId;
@@ -1014,7 +1016,7 @@ export default function PhoneSimulator({
         setCurrentScreen("chat_room");
 
         try {
-          await messageRepo.upsertMessage(finalChatId, { ...newMsg, clientId, sender_id: user.id });
+          await messageRepo.upsertMessage(finalChatId, { ...newMsg, clientId, sender_id: user.id }, user.id);
         } catch (e) {
           logger.warn("[STATE-REPLY] upsert local failed", { error: e });
         }

@@ -616,7 +616,7 @@ export default React.memo(function MessageBubble({
       <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
         <div className={`flex flex-col ${isMe ? "items-end" : "items-start"} gap-0.5`}>
           <span className="text-7xl leading-none select-none px-1">{msg.text}</span>
-          <div className={`flex items-center gap-1 px-2 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
+          <div className={`flex items-center gap-1 px-2 text-[9px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
             {msg.edited && <span className="italic opacity-60">editado</span>}
             {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
             <span>{msg.timestamp}</span>
@@ -682,7 +682,7 @@ export default React.memo(function MessageBubble({
   return (
     <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 ${msg.type === "audio" || msg.type === "voice_note" ? "py-0.5" : "py-2.5"} min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
+        className={`max-w-[85%] rounded-2xl px-4 ${msg.type === "audio" || msg.type === "voice_note" ? "py-0.5" : "py-2.5"} ${msg.type === "voice_note" ? "pb-2" : ""} min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
           isMe ? activeMeBubble.css : activeThemBubble.css
         }`}
         onClick={() => {
@@ -809,6 +809,7 @@ export default React.memo(function MessageBubble({
             isMe={isMe}
             isGlass={isGlass}
             duration={msg.duration}
+            orbSize={52}
           />
         )}
 
@@ -889,7 +890,7 @@ export default React.memo(function MessageBubble({
           );
         })()}
 
-        <div className={`flex items-center justify-end gap-1 mt-1 text-[8px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
+        <div className={`flex items-center justify-end gap-1 mt-1 text-[9px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
           {msg.edited && <span className="italic opacity-60">editado</span>}
           {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
           <span>{msg.timestamp}</span>
