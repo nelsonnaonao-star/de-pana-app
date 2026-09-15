@@ -321,7 +321,7 @@ router.post('/send', sendLimiter, async (req, res) => {
             chat_id: msg.chat_id,
             user_id: p.profile_id,
             sender_id: msg.sender_id,
-            body: isEphemeral ? 'Mensaje temporal' : (sanitizedText || 'Multimedia'),
+            body: sanitizedText || 'Multimedia',
             sent_at: msgNow,
           }));
         if (pingRows.length) {
@@ -341,7 +341,7 @@ router.post('/send', sendLimiter, async (req, res) => {
         .select('name')
         .eq('id', msg.sender_id)
         .maybeSingle();
-      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, isEphemeral ? 'Mensaje temporal' : (sanitizedText || 'Nuevo mensaje'));
+      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, sanitizedText || 'Nuevo mensaje');
     } catch (e) {
       console.error('[MESSAGES] push/profile failed:', e.message);
     }
