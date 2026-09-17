@@ -37,12 +37,19 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
   }
 }
 
+const SUPABASE_HOST = "akgsylutbpgolurkcavh.supabase.co";
+
 async function fetchWithAuth(url: string): Promise<Blob> {
   const headers: Record<string, string> = {};
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) {
-      headers["Authorization"] = `Bearer ${session.access_token}`;
+    const hostname = new URL(url).hostname;
+    // Solo el host oficial de Supabase recibe el JWT; cualquier host externo se
+    // descarga de forma anónima para no filtrar la sesión.
+    if (hostname === SUPABASE_HOST) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
     }
   } catch { /* proceed without auth */ }
   const response = await fetchWithTimeout(url, { headers });
@@ -124,9 +131,14 @@ export async function openDocument(url: string, fileName: string, mimeType?: str
   // Native: download to cache and open via the native viewer intent (FileOpener).
   const headers: Record<string, string> = {};
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) {
-      headers["Authorization"] = `Bearer ${session.access_token}`;
+    const hostname = new URL(url).hostname;
+    // Solo el host oficial de Supabase recibe el JWT; cualquier host externo se
+    // descarga de forma anónima para no filtrar la sesión.
+    if (hostname === SUPABASE_HOST) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
     }
   } catch { /* proceed without auth */ }
 

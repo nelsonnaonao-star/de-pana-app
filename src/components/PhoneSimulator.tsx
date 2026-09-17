@@ -7,7 +7,7 @@ import {
   QrCode, LogOut, CheckCheck, Shield, Bell, Database, Type, 
   HelpCircle, Lock, Cloud, RefreshCw, FileText, ChevronRight, 
   Smartphone, EyeOff, UserCheck, CircleUser, Camera, Forward, ArrowRight, ArrowLeft, Copy, User, Wifi,
-  X, Loader2, UserPlus, Phone, Video, MessageCircle
+  X, Loader2, UserPlus, Phone, Video, MessageCircle, Volume2, Play
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { Chat, Message, ActiveCall } from "../types";
@@ -410,7 +410,7 @@ export default function PhoneSimulator({
   const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
   // Reacción en vivo recibida del otro participante (via WebRTC signal).
   const [pendingReaction, setPendingReaction] = useState<{ id: number; emoji: string } | null>(null);
-  const [isInitiatingCall, setIsInitiatingCall] = useState(false);
+  const [isInitiatingCall, setIsInitiatingCall] = useState<"audio" | "video" | null>(null);
 
   // WebRTC streams for real calls
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -475,8 +475,11 @@ export default function PhoneSimulator({
   }, []);
 
   const playRingbackTone = useCallback(() => {
+    if (ringbackCtxRef.current || ringbackIntervalRef.current) {
+      logger.info("[WEBRTC SIGNALING] Ringback tone already active — ignoring duplicate start");
+      return;
+    }
     try {
-      stopRingbackTone();
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
       ringbackCtxRef.current = ctx;
       const playBeep = () => {
@@ -2508,8 +2511,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
 
   const startOutgoingCall = async (opts: { partnerId: string; name: string; avatar: string; chatId: string; type: "audio" | "video" }) => {
     const { partnerId, name: contactName, avatar: contactAvatar, chatId, type } = opts;
-    if (!user || isInitiatingCall) return;
-    setIsInitiatingCall(true);
+    if (!user || isInitiatingCall !== null) return;
+    setIsInitiatingCall(type);
     try { await Haptics.impact({ style: ImpactStyle.Light }); } catch {}
     logger.info('[WEBRTC SIGNALING] Starting outgoing call', { contactName, type });
 
@@ -2592,7 +2595,11 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       await webrtc.createOffer();
       logger.info('[WEBRTC SIGNALING] Offer sent — waiting for answer');
 
-      playRingbackTone();
+      if (webrtcRef.current === webrtc && activeCallRef.current?.status === "outgoing") {
+        playRingbackTone();
+      } else {
+        logger.info('[WEBRTC SIGNALING] Ringback tone skipped — call no longer active');
+      }
 
       if (partnerId) {
         logger.info('[WEBRTC SIGNALING] Push handled by Supabase webhook — skip duplicate');
@@ -2642,11 +2649,11 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       setLocalStream(null);
       setTimeout(() => cleanupCall(), 3000);
     }
-    setIsInitiatingCall(false);
+    setIsInitiatingCall(null);
   };
 
   const handleTriggerCallFromChat = async (type: "audio" | "video") => {
-    if (!activeChat || !user || isInitiatingCall) return;
+    if (!activeChat || !user || isInitiatingCall !== null) return;
     const isGroup = Boolean(activeChat.isGroup) || activeChat.id === "grupo_redon";
     if (isGroup) {
       if (isGroupCallAtLimit(groupParticipantCount)) {
@@ -2661,7 +2668,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   };
 
   const handleContactCall = async (contact: Contact, type: "audio" | "video") => {
-    if (!user || isInitiatingCall) return;
+    if (!user || isInitiatingCall !== null) return;
     const partnerId = contact.contact_user_id;
     if (!partnerId) return;
     setContactActions(null);
@@ -4868,39 +4875,49 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                     <div className="text-[10.5px] text-slate-400">Tono cuando llega una notificación</div>
                                   </div>
                                 </div>
-                                <div className="flex flex-col gap-1 bg-slate-100 p-1.5 rounded-xl max-h-[200px] overflow-y-auto scrollbar-thin">
-                                  {SOUND_LIBRARY.message.map((opt) => (
-                                    <div key={opt.id} className="flex flex-col gap-1 w-full">
+                                <div className="flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden max-h-[240px] overflow-y-auto">
+                                  {SOUND_LIBRARY.message.map((opt, i) => {
+                                    const isActive = msgSoundId === opt.id;
+                                    const isPreviewing = previewMsgSound === opt.id;
+                                    return (
                                       <button
+                                        key={opt.id}
                                         onClick={() => {
                                           setPreviewMsgSound(opt.id);
                                           playSoundOption("message", opt.id, 0.7);
+                                          setSoundId("message", opt.id);
+                                          setMsgSoundId(opt.id);
+                                          setTimeout(() => { stopSound(); setPreviewMsgSound(null); }, 1800);
+                                          showToast(`Sonido: ${opt.name} ✅`);
                                         }}
-                                        className={`w-full py-2 px-2 text-left text-[11px] font-black rounded-lg transition-all cursor-pointer ${
-                                          previewMsgSound === opt.id
-                                            ? "bg-white text-[#0a4d52] shadow-sm"
-                                            : "bg-transparent text-slate-500 hover:text-slate-800"
+                                        className={`flex items-center gap-2.5 w-full py-2.5 px-3 text-left transition-all cursor-pointer border-b border-slate-100 last:border-b-0 ${
+                                          isActive
+                                            ? "bg-teal-50"
+                                            : "bg-white hover:bg-slate-50"
                                         }`}
-                                        title="Escuchar"
                                       >
-                                        {opt.name} 👂
-                                      </button>
-                                      {previewMsgSound === opt.id && (
-                                        <button
-                                          onClick={() => {
-                                            setSoundId("message", opt.id);
-                                            setMsgSoundId(opt.id);
-                                            setPreviewMsgSound(null);
-                                            stopSound();
-                                            showToast(`Sonido de mensaje: ${opt.name} ✅`);
-                                          }}
-                                          className="w-full py-1.5 text-[10px] font-bold text-white bg-teal-500 hover:bg-teal-600 rounded-lg transition-colors cursor-pointer"
+                                        <Volume2
+                                          size={14}
+                                          className={`shrink-0 ${
+                                            isActive ? "text-teal-600" : "text-slate-400"
+                                          }`}
+                                        />
+                                        <span
+                                          className={`flex-1 text-[13px] font-bold ${
+                                            isActive ? "text-teal-700" : "text-slate-600"
+                                          }`}
                                         >
-                                          Guardar
-                                        </button>
-                                      )}
-                                    </div>
-                                  ))}
+                                          {opt.name}
+                                        </span>
+                                        {isActive && (
+                                          <Check size={13} className="text-teal-500 shrink-0" />
+                                        )}
+                                        {isPreviewing && !isActive && (
+                                          <Play size={11} className="text-teal-500 shrink-0 animate-pulse" />
+                                        )}
+                                      </button>
+                                    );
+                                  })}
                                 </div>
                               </div>
 
@@ -4911,39 +4928,49 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                     <div className="text-[10.5px] text-slate-400">Tono cuando llega una llamada</div>
                                   </div>
                                 </div>
-                                <div className="flex flex-col gap-1 bg-slate-100 p-1.5 rounded-xl max-h-[200px] overflow-y-auto scrollbar-thin">
-                                  {SOUND_LIBRARY.call.map((opt) => (
-                                    <div key={opt.id} className="flex flex-col gap-1 w-full">
+                                <div className="flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden">
+                                  {SOUND_LIBRARY.call.map((opt) => {
+                                    const isActive = callSoundId === opt.id;
+                                    const isPreviewing = previewCallSound === opt.id;
+                                    return (
                                       <button
+                                        key={opt.id}
                                         onClick={() => {
                                           setPreviewCallSound(opt.id);
                                           playSoundOption("call", opt.id, 0.8);
+                                          setSoundId("call", opt.id);
+                                          setCallSoundId(opt.id);
+                                          setTimeout(() => { stopSound(); setPreviewCallSound(null); }, 2500);
+                                          showToast(`Sonido de llamada: ${opt.name} ✅`);
                                         }}
-                                        className={`w-full py-2 px-2 text-left text-[11px] font-black rounded-lg transition-all cursor-pointer ${
-                                          previewCallSound === opt.id
-                                            ? "bg-white text-[#0a4d52] shadow-sm"
-                                            : "bg-transparent text-slate-500 hover:text-slate-800"
+                                        className={`flex items-center gap-2.5 w-full py-2.5 px-3 text-left transition-all cursor-pointer border-b border-slate-100 last:border-b-0 ${
+                                          isActive
+                                            ? "bg-indigo-50"
+                                            : "bg-white hover:bg-slate-50"
                                         }`}
-                                        title="Escuchar"
                                       >
-                                        {opt.name} 👂
-                                      </button>
-                                      {previewCallSound === opt.id && (
-                                        <button
-                                          onClick={() => {
-                                            setSoundId("call", opt.id);
-                                            setCallSoundId(opt.id);
-                                            setPreviewCallSound(null);
-                                            stopSound();
-                                            showToast(`Sonido de llamada: ${opt.name} ✅`);
-                                          }}
-                                          className="w-full py-1.5 text-[10px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
+                                        <Volume2
+                                          size={14}
+                                          className={`shrink-0 ${
+                                            isActive ? "text-indigo-600" : "text-slate-400"
+                                          }`}
+                                        />
+                                        <span
+                                          className={`flex-1 text-[13px] font-bold ${
+                                            isActive ? "text-indigo-700" : "text-slate-600"
+                                          }`}
                                         >
-                                          Guardar
-                                        </button>
-                                      )}
-                                    </div>
-                                  ))}
+                                          {opt.name}
+                                        </span>
+                                        {isActive && (
+                                          <Check size={13} className="text-indigo-500 shrink-0" />
+                                        )}
+                                        {isPreviewing && !isActive && (
+                                          <Play size={11} className="text-indigo-500 shrink-0 animate-pulse" />
+                                        )}
+                                      </button>
+                                    );
+                                  })}
                                 </div>
                               </div>
                             </div>

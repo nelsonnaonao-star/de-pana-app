@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { supabaseAdmin } from '../db.js';
 import { getMessaging } from 'firebase-admin/messaging';
 import { isGroupMuted } from './groups.js';
-import { validateMediaReference } from './media.js';
+import { extractPath } from './media.js';
 
 const router = Router();
 
@@ -187,8 +187,8 @@ router.post('/send', sendLimiter, async (req, res) => {
 
     const mediaFields = ['image_url', 'audio_url', 'video_url', 'file_url'];
     for (const field of mediaFields) {
-      if (msg[field] && !validateMediaReference(msg[field])) {
-        console.warn(`[MEDIA-VALIDATE] URL inválida en ${field}: ${msg[field].slice(0, 100)}`);
+      if (msg[field] && !extractPath(msg[field])) {
+        return res.status(400).json({ error: `URL de ${field} inválida` });
       }
     }
 

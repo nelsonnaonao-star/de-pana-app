@@ -546,9 +546,41 @@ class SyncService {
     let stickerUrl: string | undefined;
     let gifUrl: string | undefined;
 
-    const mediaUrl = msg.mediaUrl as string | undefined;
+    let mediaUrl = msg.mediaUrl as string | undefined;
     const localVideoUrl = msg.localVideoUrl as string | undefined;
     const type = msg.type as string;
+
+    // Voice note / audio pendiente con blob URL (upload inicial falló por red
+    // inestable): NUNCA enviarlo sin audio al servidor. Recuperar el blob desde
+    // IDB y re-subirlo antes de continuar; si no se puede, dejar el mensaje en
+    // cola para el próximo reintento (jamás confirmarlo como enviado).
+    if (
+      (type === "voice_note" || type === "audio") &&
+      mediaUrl &&
+      mediaUrl.startsWith("blob:")
+    ) {
+      try {
+        const blob = await messageRepo.getAudioBlob(msg.id as string);
+        if (blob) {
+          const reuploaded = await uploadChatMedia(blob, "voice");
+          if (reuploaded && reuploaded.startsWith("http")) {
+            audioUrl = reuploaded;
+            mediaUrl = reuploaded;
+            msg.mediaUrl = reuploaded;
+            dbg("sendSingle: voice blob re-uploaded from IDB", msg.id, "->", reuploaded.slice(0, 60));
+          } else {
+            logger.warn("[SyncService] voice blob re-upload devolvió URL inválida, se mantiene en cola", { messageId: msg.id, reuploaded });
+            return null;
+          }
+        } else {
+          dbg("sendSingle: voice blob no encontrado en IDB, se mantiene en cola", msg.id);
+          return null;
+        }
+      } catch (uploadErr) {
+        logger.warn("[SyncService] voice blob re-upload falló, se mantiene en cola", { messageId: msg.id, error: uploadErr });
+        return null;
+      }
+    }
 
     if (mediaUrl && !mediaUrl.startsWith("blob:")) {
       const uploaded = await this.uploadIfNeeded(mediaUrl, type);

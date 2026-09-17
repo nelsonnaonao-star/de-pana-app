@@ -10,6 +10,9 @@ const config: CapacitorConfig = {
   },
   loggingBehavior: 'production',
   plugins: {
+    CapacitorSQLite: {
+      androidIsEncryption: false,
+    },
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],
     },

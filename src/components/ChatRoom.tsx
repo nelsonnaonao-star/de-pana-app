@@ -35,7 +35,7 @@ interface ChatRoomProps {
   onBack: () => void;
   onSendMessage: (msg: Message) => void;
   onTriggerCall: (type: "audio" | "video") => void;
-  callInProgress?: boolean;
+  callInProgress?: "audio" | "video" | null;
   onForwardMessage?: (msg: Message) => void;
   onChatDeleted?: (chatId: string) => void;
   onMessageDeleted?: (chatId: string, messageId: string) => void;

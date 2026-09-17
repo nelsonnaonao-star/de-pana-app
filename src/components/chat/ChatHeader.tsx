@@ -8,7 +8,7 @@ interface ChatHeaderProps {
   onBack: () => void;
   partnerTyping: boolean;
   onTriggerCall: (type: "audio" | "video") => void;
-  callInProgress?: boolean;
+  callInProgress?: "audio" | "video" | null;
   showSearch: boolean;
   onToggleSearch: () => void;
   showDropdown: boolean;
@@ -114,25 +114,25 @@ export default function ChatHeader({
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={() => onTriggerCall("audio")}
-            disabled={callInProgress}
-            className={`p-2 rounded-full transition-all duration-150 active:scale-90 active:bg-green-700 cursor-pointer ${
-              callInProgress
-                ? "text-teal-600 bg-white/5"
-                : "text-teal-100 hover:bg-white/10 hover:text-white"
+            disabled={callInProgress !== null}
+            className={`p-2 rounded-full transition-all duration-150 active:scale-95 cursor-pointer ${
+              callInProgress === "audio"
+                ? "bg-emerald-500 text-white"
+                : "text-teal-100 hover:bg-white/10 active:bg-emerald-500 active:text-white"
             }`}
-            title={callInProgress ? "Iniciando llamada..." : "Llamada de voz"}
+            title={callInProgress === "audio" ? "Iniciando llamada..." : "Llamada de voz"}
           >
             <Phone className="w-5 h-5" />
           </button>
           <button
             onClick={() => onTriggerCall("video")}
-            disabled={callInProgress}
-            className={`p-2 rounded-full transition-all duration-150 active:scale-90 active:bg-green-700 cursor-pointer ${
-              callInProgress
-                ? "text-teal-600 bg-white/5"
-                : "text-teal-100 hover:bg-white/10 hover:text-white"
+            disabled={callInProgress !== null}
+            className={`p-2 rounded-full transition-all duration-150 active:scale-95 cursor-pointer ${
+              callInProgress === "video"
+                ? "bg-violet-500 text-white"
+                : "text-teal-100 hover:bg-white/10 active:bg-violet-500 active:text-white"
             }`}
-            title={callInProgress ? "Iniciando llamada..." : "Video llamada"}
+            title={callInProgress === "video" ? "Iniciando llamada..." : "Video llamada"}
           >
             <Video className="w-5 h-5" />
           </button>

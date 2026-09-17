@@ -142,9 +142,9 @@ export default function CreateStateModal({
           {/* Full screen preview */}
           <div className="absolute inset-0">
             {uploadedMedia.type === "video" ? (
-              <SoundVideo src={uploadedMedia.url} loop playsInline className="w-full h-full object-cover" />
+              <SoundVideo src={uploadedMedia.url} loop playsInline className="w-full h-full object-contain" />
             ) : (
-              <img src={uploadedMedia.url} alt="Preview" className="w-full h-full object-cover" />
+              <img src={uploadedMedia.url} alt="Preview" className="w-full h-full object-contain" />
             )}
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-black/20"></div>
           </div>
