@@ -380,13 +380,13 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
         ) : (
           <>
         {!imgLoaded && !imgError && (
-          <div className={`${isSticker ? "w-[140px] h-[140px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
+          <div className={`${isSticker ? "w-[190px] h-[190px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
             <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
           </div>
         )}
 
         {imgError && (
-          <div className={`${isSticker ? "w-[140px] h-[140px]" : "w-[220px] h-[200px]"} bg-slate-100 rounded-xl flex items-center justify-center`}>
+          <div className={`${isSticker ? "w-[190px] h-[190px]" : "w-[220px] h-[200px]"} bg-slate-100 rounded-xl flex items-center justify-center`}>
             <span className="text-slate-400 text-xs">No se pudo cargar</span>
           </div>
         )}
@@ -398,7 +398,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           onLoad={() => setImgLoaded(true)}
           onError={() => setImgError(true)}
           className={`${isSticker
-            ? "max-w-[160px] max-h-[160px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
+            ? "max-w-[210px] max-h-[210px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
             : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
           } ${!imgLoaded ? "invisible" : ""}`}
         />

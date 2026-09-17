@@ -5,7 +5,7 @@ import { X, Ban, Trash2, UserPlus, Check, ShieldCheck, CheckCircle } from "lucid
 import { Chat, Message } from "../types";
 import GifPicker from "./GifPicker";
 import MessageBubbleWithCache from "./chat/MessageBubbleWithCache";
-import ChatCustomizer from "./chat/ChatCustomizer";
+import ChatCustomizer, { PreviewTarget } from "./chat/ChatCustomizer";
 import ChatPatternBackground from "./chat/ChatPatternBackground";
 import ChatHeader from "./chat/ChatHeader";
 import ChatInputBar from "./chat/ChatInputBar";
@@ -452,6 +452,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     return localStorage.getItem("bubble_color_them") || "white";
   });
   const [showCustomizer, setShowCustomizer] = useState(false);
+  const [pendingBg, setPendingBg] = useState<PreviewTarget | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -1043,6 +1044,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       if (activeReactionMenu) { setActiveReactionMenu(null); return true; }
       if (showSearch) { setShowSearch(false); setSearchQuery(""); return true; }
       if (showGifPicker) { setShowGifPicker(false); return true; }
+      if (pendingBg) { setPendingBg(null); return true; }
       if (showCustomizer) { setShowCustomizer(false); return true; }
       if (showDeleteConfirm) { setShowDeleteConfirm(false); return true; }
       if (showGroupInfo) { setShowGroupInfo(false); return true; }
@@ -1051,7 +1053,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     };
     onRegisterBackHandler(handler);
     return () => { onRegisterBackHandler(null); };
-  }, [editingMessage, replyTo, showAttachments, activeReactionMenu, showSearch, showGifPicker, showCustomizer, showDeleteConfirm, showGroupInfo, showDropdown, onRegisterBackHandler]);
+  }, [editingMessage, replyTo, showAttachments, activeReactionMenu, showSearch, showGifPicker, pendingBg, showCustomizer, showDeleteConfirm, showGroupInfo, showDropdown, onRegisterBackHandler]);
 
 
   const isCustomBg = selectedBgId === "custom" && !!customBgImage;
@@ -1258,6 +1260,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         chatName={chat.name}
         customBgImage={customBgImage}
         onSetCustomBgImage={setCustomBgImage}
+        pendingBg={pendingBg}
+        setPendingBg={setPendingBg}
       />
 
       <DeleteConfirmModal

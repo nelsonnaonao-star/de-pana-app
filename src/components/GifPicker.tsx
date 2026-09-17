@@ -9,7 +9,7 @@ import {
   GIF_CATEGORIES,
 } from "../services/stickerService";
 import { getMyStickers, removeMySticker } from "../services/myStickers";
-import { getOfficialStickers } from "../services/stickerStore";
+import { getOfficialStickers, getWepaStickers } from "../services/stickerStore";
 import { getItem, setItem } from "../services/storageService";
 import CachedImage from "./CachedImage";
 
@@ -106,6 +106,7 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
   const [error, setError] = useState<string | null>(null);
   const [myStickers, setMyStickers] = useState<string[]>([]);
   const [officialStickers, setOfficialStickers] = useState<string[]>([]);
+  const [wepaStickers, setWepaStickers] = useState<string[]>([]);
   const searchTimer = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -119,7 +120,31 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
   useEffect(() => {
     if (tab === "mine") {
       setMyStickers(getMyStickers().map((s) => s.url).reverse());
-      return;
+      let cancelled = false;
+      const WEPA_CACHE_KEY = "wepa_stickers_cache";
+      const WEPA_CACHE_TTL = 24 * 60 * 60 * 1000;
+      getItem<{ urls: string[]; ts: number }>(WEPA_CACHE_KEY).then((cached) => {
+        const fresh = cached && Date.now() - cached.ts < WEPA_CACHE_TTL && cached.urls?.length;
+        if (cancelled) return;
+        if (fresh) {
+          setWepaStickers(cached!.urls);
+        }
+      });
+      getWepaStickers()
+        .then(async (urls) => {
+          if (cancelled) return;
+          setWepaStickers(urls);
+          try {
+            await setItem(WEPA_CACHE_KEY, { urls, ts: Date.now() });
+          } catch { /* cache opcional */ }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setWepaStickers((prev) => (prev.length ? prev : []));
+        });
+      return () => {
+        cancelled = true;
+      };
     }
     if (tab === "official") {
       let cancelled = false;
@@ -242,7 +267,7 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
                 tab === "mine" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              Míos
+              WEPA
             </button>
             <button
               onClick={() => handleTabChange("official")}
@@ -313,48 +338,90 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
       {/* Grid */}
       <div ref={gridRef} className="flex-1 w-full max-w-full min-w-0 overflow-y-auto overflow-x-hidden px-4 py-3 scroll-smooth">
         {tab === "mine" ? (
-          myStickers.length > 0 ? (
-            <div className="grid grid-cols-4 gap-2 w-full max-w-full box-border min-w-0">
-              {myStickers.map((url) => (
-                <div
-                  key={url}
-                  className="relative rounded-xl overflow-hidden bg-slate-50 group min-w-0"
-                  style={{ aspectRatio: "1" }}
-                >
-                  <button
-                    onClick={() => onSelect(url, "sticker")}
-                    className="w-full h-full hover:ring-2 ring-teal-500/60 hover:shadow-lg transition-all cursor-pointer active:scale-95"
-                  >
-                    <CachedImage
-                      src={url}
-                      alt="Mis sticker"
-                      className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
-                      loading="lazy"
-                    />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const next = removeMySticker(url);
-                      setMyStickers(next.map((s) => s.url).reverse());
-                    }}
-                    className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-md"
-                    aria-label="Eliminar sticker"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
+          wepaStickers.length === 0 && myStickers.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-32 gap-2">
               <div className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center">
                 <TrendingUp className="w-5 h-5 text-slate-300" />
               </div>
               <p className="text-[10px] text-slate-400 font-medium text-center px-4">
-                Aún no has creado stickers. Crea uno en el editor y se guardará aquí.
+                Aún no hay stickers. Crea uno en el editor y se guardará aquí.
               </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {wepaStickers.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-black uppercase tracking-wide text-teal-700">
+                    <span className="text-[14px]">⭐</span>
+                    Pack WEPA
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 w-full max-w-full box-border min-w-0">
+                    {wepaStickers.map((url) => (
+                      <button
+                        key={url}
+                        onClick={() => onSelect(url, "sticker")}
+                        className="relative rounded-xl overflow-hidden bg-slate-50 hover:ring-2 ring-teal-500/60 hover:shadow-lg transition-all cursor-pointer group active:scale-95 min-w-0"
+                        style={{ aspectRatio: "1" }}
+                      >
+                        <img
+                          src={url}
+                          alt="Sticker WEPA"
+                          loading="lazy"
+                          className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                {myStickers.length > 0 && (
+                  <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                    <span className="text-[14px]">✨</span>
+                    Mis stickers
+                  </div>
+                )}
+                {myStickers.length > 0 ? (
+                  <div className="grid grid-cols-4 gap-2 w-full max-w-full box-border min-w-0">
+                    {myStickers.map((url) => (
+                      <div
+                        key={url}
+                        className="relative rounded-xl overflow-hidden bg-slate-50 group min-w-0"
+                        style={{ aspectRatio: "1" }}
+                      >
+                        <button
+                          onClick={() => onSelect(url, "sticker")}
+                          className="w-full h-full hover:ring-2 ring-teal-500/60 hover:shadow-lg transition-all cursor-pointer active:scale-95"
+                        >
+                          <CachedImage
+                            src={url}
+                            alt="Mis sticker"
+                            className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
+                            loading="lazy"
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/5 transition-colors" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const next = removeMySticker(url);
+                            setMyStickers(next.map((s) => s.url).reverse());
+                          }}
+                          className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-md"
+                          aria-label="Eliminar sticker"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-400 font-medium text-center py-2">
+                    Aún no has creado stickers. Crea uno en el editor y se guardará aquí.
+                  </p>
+                )}
+              </div>
             </div>
           )
         ) : tab === "official" ? (
