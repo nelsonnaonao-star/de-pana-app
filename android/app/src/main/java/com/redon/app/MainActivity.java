@@ -108,7 +108,10 @@ public class MainActivity extends BridgeActivity {
         } else if ("OPEN_CHAT".equals(action) || "OPEN_APP".equals(action) || (chatId != null && "message".equals(type))) {
             if (chatId != null) {
                 try {
-                    bridge.triggerWindowJSEvent("open-chat", chatId);
+                    // NOTA: se envía un JSON válido (no el chatId crudo). La sobrecarga
+                    // String de triggerWindowJSEvent inyecta el valor sin comillas, por lo
+                    // que un UUID crudo rompe la expresión JS y el evento nunca llega.
+                    bridge.triggerWindowJSEvent("open-chat", openChatJson(chatId));
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to trigger open-chat JS event", e);
                 }
@@ -119,11 +122,17 @@ public class MainActivity extends BridgeActivity {
             // la app desde el icono produciría una llamada fantasma. Las llamadas
             // reales ya entran por Realtime (primer plano) o por CallFcmService (fondo).
             try {
-                bridge.triggerWindowJSEvent("open-chat", chatId);
+                bridge.triggerWindowJSEvent("open-chat", openChatJson(chatId));
             } catch (Exception e) {
                 Log.e(TAG, "Failed to trigger open-chat JS event", e);
             }
         }
+    }
+
+    // Payload JSON bien formado para el evento open-chat
+    // (chatId es un UUID emitido por el servidor: caracteres seguros para JSON).
+    private static String openChatJson(String chatId) {
+        return "{\"chatId\":\"" + (chatId != null ? chatId : "") + "\"}";
     }
 
     private void persistPendingCall(String json) {

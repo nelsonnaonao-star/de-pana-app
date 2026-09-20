@@ -397,7 +397,7 @@ public class CallFcmService extends FirebaseMessagingService {
         Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/notificacion");
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, messageChannel)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_notification_wepa)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
@@ -445,7 +445,7 @@ public class CallFcmService extends FirebaseMessagingService {
         Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/raw/notificacion");
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, messageChannel)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_notification_wepa)
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -453,7 +453,9 @@ public class CallFcmService extends FirebaseMessagingService {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setVibrate(new long[]{0, 300, 200, 300})
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            // Privacidad consistente con showMessageNotification (background):
+            // ocultar contenido detallado en pantalla bloqueada.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setColor(Color.parseColor("#1E88E5"));
 
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);

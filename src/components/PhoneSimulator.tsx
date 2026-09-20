@@ -1762,9 +1762,28 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         logger.warn('[WEBRTC SIGNALING] FCM incoming-call ignored', { chatId, callerId: d?.callerId, hasActiveCall: !!activeCallRef.current });
       }
     };
+    // Tolerante a payloads de deep-link: MainActivity puede entregar el chatId como
+    // string crudo (JSON.parse de un UUID falla y quedaba undefined) o como objeto.
+    const parseEventDetail = (detail: unknown): Record<string, any> | null => {
+      if (detail == null) return null;
+      if (typeof detail === 'string') {
+        const trimmed = detail.trim();
+        if (!trimmed) return null;
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (typeof parsed === 'string') return { chatId: parsed };
+          if (parsed && typeof parsed === 'object') return parsed;
+          return null;
+        } catch {
+          return { chatId: trimmed };
+        }
+      }
+      if (typeof detail === 'object') return detail as Record<string, any>;
+      return null;
+    };
+
     const handleOpenChat = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
+      const d = parseEventDetail((e as CustomEvent).detail);
       if (d?.chatId) {
         setSelectedChatId(d.chatId);
         setCurrentScreen('chat_room');
@@ -1773,8 +1792,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     };
     const handleNewMessage = (e: Event) => {
       logger.info('[EVENT] new-message-received dispatched');
-      const detail = (e as CustomEvent).detail;
-      const d = typeof detail === 'string' ? JSON.parse(detail) : detail;
+      const d = parseEventDetail((e as CustomEvent).detail);
       logger.info('[EVENT] parsed', { chatId: d?.chatId, contactId: d?.contactId, hasBody: !!d?.body });
       if (!d?.chatId) {
         logger.warn('[EVENT] No chatId, aborting');
