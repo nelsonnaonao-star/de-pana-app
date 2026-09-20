@@ -19,6 +19,7 @@ import ratesRoutes from './routes/rates.js';
 import messagesRoutes from './routes/messages.js';
 import contentRoutes from './routes/content.js';
 import groupsRoutes from './routes/groups.js';
+import adminRoutes from './routes/admin.js';
 
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
@@ -140,6 +141,7 @@ async function main() {
   app.use('/api/content', globalLimiter, authMiddleware, contentRoutes);
   app.use('/api/media', uploadLimiter, authMiddleware, mediaRoutes);
   app.use('/api/groups', globalLimiter, authMiddleware, groupsRoutes);
+  app.use('/api/admin', globalLimiter, adminRoutes);
 
   // GIPHY proxy (hides API key from client)
   const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
