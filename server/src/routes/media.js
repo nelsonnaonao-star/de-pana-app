@@ -57,16 +57,13 @@ async function isChatMember(chatId, userId) {
     .maybeSingle();
   if (!chat) return false;
   if (chat.profile_id === userId || chat.admin_id === userId) return true;
-  if (chat.is_group) {
-    const { data: participant } = await supabaseAdmin
-      .from('chat_participants')
-      .select('profile_id')
-      .eq('chat_id', chatId)
-      .eq('profile_id', userId)
-      .maybeSingle();
-    return !!participant;
-  }
-  return false;
+  const { data: participant } = await supabaseAdmin
+    .from('chat_participants')
+    .select('profile_id')
+    .eq('chat_id', chatId)
+    .eq('profile_id', userId)
+    .maybeSingle();
+  return !!participant;
 }
 
 const uploadVideo = multer({
