@@ -53,7 +53,7 @@ async function isChatMember(chatId, userId) {
   return !!participant;
 }
 
-async function sendPushToChat(chatId, senderId, senderName, text) {
+async function sendPushToChat(chatId, senderId, senderName, senderAvatar, text) {
   try {
     const { data: chat } = await supabaseAdmin
       .from('chats')
@@ -90,7 +90,7 @@ async function sendPushToChat(chatId, senderId, senderName, text) {
           try {
             await getMessaging().send({
               token: t.token,
-data: { title: senderName || 'RED ON', body: text || 'Nuevo mensaje', type: 'message', chatId, contactId: senderId, is_group: chat.is_group ? 'true' : 'false', ts: new Date().toISOString() },
+data: { title: senderName || 'RED ON', body: text || 'Nuevo mensaje', type: 'message', chatId, contactId: senderId, is_group: chat.is_group ? 'true' : 'false', ts: new Date().toISOString(), avatarUrl: senderAvatar || undefined },
               android: { priority: 'high', ttl: 86400000 },
             });
           } catch {}
@@ -338,10 +338,10 @@ router.post('/send', sendLimiter, async (req, res) => {
     try {
       const { data: senderProfile } = await supabaseAdmin
         .from('profiles')
-        .select('name')
+        .select('name, avatar_url')
         .eq('id', msg.sender_id)
         .maybeSingle();
-      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, sanitizedText || 'Nuevo mensaje');
+      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, senderProfile?.avatar_url, sanitizedText || 'Nuevo mensaje');
     } catch (e) {
       console.error('[MESSAGES] push/profile failed:', e.message);
     }
