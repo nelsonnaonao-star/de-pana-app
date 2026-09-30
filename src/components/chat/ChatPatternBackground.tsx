@@ -8,6 +8,7 @@ interface ChatPatternBackgroundProps {
   gradientTo?: string;
   strokeOpacity?: number;
   className?: string;
+  idSuffix?: string;
 }
 
 const STARS_PATTERN = (
@@ -141,9 +142,10 @@ export default function ChatPatternBackground({
   gradientTo = "purple",
   strokeOpacity = 0.35,
   className = "",
+  idSuffix,
 }: ChatPatternBackgroundProps) {
   const colors = getGradientColors(gradientFrom, gradientTo);
-  const patternId = `pattern-${theme}`;
+  const patternId = `pattern-${theme}${idSuffix ? `-${idSuffix}` : ""}`;
 
   return (
     <div

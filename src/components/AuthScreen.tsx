@@ -281,7 +281,7 @@ export default function AuthScreen() {
                     </div>
                     <h3 className="text-white font-bold text-sm">Verificar código</h3>
                     <p className="text-slate-400 text-[11px] leading-relaxed mt-1">
-                      Se envió un código de 4 dígitos{maskedEmail ? ` al correo ${maskedEmail}` : ""}. Introdúcelo a continuación.
+                      Se envió un código de 6 dígitos{maskedEmail ? ` al correo ${maskedEmail}` : ""}. Introdúcelo a continuación.
                     </p>
                   </div>
                   <div className="space-y-1.5">
@@ -292,11 +292,11 @@ export default function AuthScreen() {
                       type="text"
                       inputMode="numeric"
                       required
-                      maxLength={4}
-                      placeholder="0000"
+                      maxLength={6}
+                      placeholder="000000"
                       value={resetCode}
                       onChange={(e) => {
-                        const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                        const v = e.target.value.replace(/\D/g, "").slice(0, 6);
                         setResetCode(v);
                       }}
                       className="w-full bg-slate-950 border border-slate-800 text-slate-100 text-xs px-4 py-3 rounded-xl outline-none focus:border-teal-500/50 transition-colors text-center text-lg tracking-[0.5em] font-mono"
@@ -304,7 +304,7 @@ export default function AuthScreen() {
                   </div>
                   <button
                     type="submit"
-                    disabled={loading || resetCode.length !== 4}
+                    disabled={loading || resetCode.length !== 6}
                     className="w-full py-3 bg-gradient-to-r from-teal-400 to-[#0a4d52] hover:from-teal-500 hover:to-[#10646a] text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                   >
                     {loading ? (

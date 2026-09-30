@@ -320,7 +320,7 @@ export default function ChatCustomizer({
               );
             })}
           </div>
-          <span className="text-[7px] text-slate-400 font-medium block truncate">
+          <span className="text-[9px] text-slate-400 font-medium block truncate">
             {BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId)?.name}
           </span>
         </div>
@@ -362,7 +362,7 @@ export default function ChatCustomizer({
               );
             })}
           </div>
-          <span className="text-[7px] text-slate-400 font-medium block truncate">
+          <span className="text-[9px] text-slate-400 font-medium block truncate">
             {BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId)?.name}
           </span>
         </div>
@@ -452,11 +452,11 @@ export default function ChatCustomizer({
                       style={previewStyle}
                     >
                       {isOficial && (
-                        <span className="absolute top-0 left-0 bg-amber-400/90 text-slate-950 text-[7px] font-black px-1 py-px rounded-br-md flex items-center gap-px leading-none">
+                        <span className="absolute top-0 left-0 bg-amber-400/90 text-slate-950 text-[9px] font-black px-1 py-px rounded-br-md flex items-center gap-px leading-none">
                           <Star className="w-2 h-2 fill-slate-950" /> Oficial
                         </span>
                       )}
-                      <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[6px] text-white text-center py-0.5 leading-none truncate px-0.5">
+                      <span className="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-white text-center py-0.5 leading-none truncate px-0.5">
                         {bg.name.split(" ")[0]}
                       </span>
                       {isPattern && (

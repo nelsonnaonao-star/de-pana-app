@@ -40,7 +40,10 @@ export default function ChatHeader({
   const [showEphemeral, setShowEphemeral] = useState(false);
   const activeTimer = ephemeralTimer ?? 0;
   return (
-    <div className="relative text-white px-4 pt-5 pb-9 shrink-0 z-40 bg-[#0a4d52]">
+    <div
+      className="relative text-white px-4 pt-5 pb-9 shrink-0 z-40 bg-[#0a4d52]"
+      style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top))" }}
+    >
       <div className="absolute inset-0 overflow-hidden pointer-events-none select-none">
       <svg
         viewBox="0 0 320 120"

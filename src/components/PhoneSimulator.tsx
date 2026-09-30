@@ -23,6 +23,7 @@ import { useSupabase } from "../contexts/SupabaseContext";
 import { clearForMe, sendMessage as apiSendMessage, getMessages } from "../services/messages";
 import { recordReconciledId } from "../lib/reconciledIds";
 import { messageRepo } from "../services/database/repositories/MessageRepository";
+import { computeUnread, getReadMarker, registerIncoming, setReadMarker } from "../services/unreadReadMarkers";
 import { ExpelledChatRepository } from "../services/database/repositories/ExpelledChatRepository";
 import { createChat as createChatInSupabase, createGroupChat, deleteChat as apiDeleteChat, subscribeToChats, getChatWithPartner, leaveGroup } from "../services/chats";
 import { getAllFlyers, createFlyer, incrementFlyerView, incrementFlyerClick, deleteFlyer } from "../services/contentService";
@@ -30,6 +31,7 @@ import { deleteContact, getContacts, type Contact } from "../services/contacts";
 import { getBlockedUsers, unblockUser, type BlockedUser } from "../services/blocks";
 import { logger } from "../lib/logger";
 import { useGroupMemberEvents } from "../hooks/chat/useGroupMemberEvents";
+import { useGlobalReadReceipts } from "../hooks/chat/useGlobalReadReceipts";
 import { syncService } from "../services/sync/SyncService";
 import { 
   isBiometricEnabled, 
@@ -62,6 +64,8 @@ import SimulatorTabHeader from "./simulator/SimulatorTabHeader";
 import SimulatorForwardModal from "./simulator/SimulatorForwardModal";
 import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
 import ImageLightbox from "./chat/overlays/ImageLightbox";
+import ChatPatternBackground from "./chat/ChatPatternBackground";
+import { readChatBackdropPrefs, resolveChatBackdrop, warmChatBackdrop, invalidateChatBackdropPreload } from "./chat/chatBackdrop";
 
 // (animatedChatIdsRef moved inside PhoneSimulator component to satisfy Rules of Hooks)
 
@@ -77,7 +81,15 @@ const AddContact = React.lazy(() => import("./AddContact"));
 const AddContactManual = React.lazy(() => import("./AddContactManual"));
 const SyncedContacts = React.lazy(() => import("./SyncedContacts"));
 const SimulatorCreateGroup = React.lazy(() => import("./simulator/SimulatorCreateGroup"));
-const ChatRoom = React.lazy(() => import("./ChatRoom"));
+// El loader se expone aparte para que la señal de "destino listo" pueda
+// esperar a que el módulo esté resuelto ANTES de reportar. Sin eso,
+// `chatRoomMounted` puede ser true mientras React todavía muestra el
+// <Suspense fallback={<ChatListSkeleton />}> (PhoneSimulator.tsx:3814) y la
+// cobertura nativa se levantaría sobre el skeleton en vez de sobre el destino.
+// Mismo especificador "./ChatRoom" => mismo chunk: el import no se duplica y el
+// componente lazy queda sincronizable una vez resuelta la promesa.
+const chatRoomChunk = () => import("./ChatRoom");
+const ChatRoom = React.lazy(chatRoomChunk);
 const ShallowSpinner = ({ label }: { label: string }) => (
   <div className="flex items-center justify-center h-full w-full bg-white">
     <div className="flex flex-col items-center gap-3">
@@ -86,6 +98,42 @@ const ShallowSpinner = ({ label }: { label: string }) => (
     </div>
   </div>
 );
+// FALLBACK DE ESPERA DEL CHATROOM (segunda capa de seguridad, no el fix principal).
+// Antes, Suspense pintaba <ChatListSkeleton /> sobre el wrapper `bg-white`, así que
+// mientras el chunk viajaba se veía un blanco vacío de pantalla completa. Este
+// componente pinta el MISMO wallpaper de destino —leído de la misma fuente de
+// verdad que usa ChatRoom: `chat_bg_custom` / `chat_bg_id` vía
+// `resolveChatBackdrop`— y deja el skeleton de siempre encima, que es transparente.
+// NO reproduce el chat: solo cubre el intervalo de espera. El ChatRoom final que
+// monta Suspense queda exactamente igual, con su diseño claro intacto.
+const ChatRoomBackdropFallback = () => {
+  const [prefs] = useState(readChatBackdropPrefs);
+  const {
+    containerBgStyle,
+    isPatternBg,
+    patternTheme,
+    patternFrom,
+    patternTo,
+    needsDarkOverlay,
+  } = resolveChatBackdrop(prefs.selectedBgId, prefs.customBgImage);
+  return (
+    <div className="absolute inset-0" style={containerBgStyle}>
+      {isPatternBg && (
+        <ChatPatternBackground
+          theme={patternTheme}
+          gradientFrom={patternFrom}
+          gradientTo={patternTo}
+          strokeOpacity={0.3}
+          className="pointer-events-none"
+        />
+      )}
+      {needsDarkOverlay && <div className="absolute inset-0 bg-black/15 pointer-events-none z-0" />}
+      <div className="relative z-10 h-full">
+        <ChatListSkeleton />
+      </div>
+    </div>
+  );
+};
 const LazyPanel = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <React.Suspense fallback={<ShallowSpinner label={label} />}>{children}</React.Suspense>
 );
@@ -99,6 +147,15 @@ interface PhoneSimulatorProps {
   onClearExternalMessageTrigger?: () => void;
   onBackPress?: (handler: () => boolean) => void;
   onSetShouldExit?: (shouldExit: boolean) => void;
+  // FASE 2: señal de SOLO LECTURA hacia App.tsx. "El destino visual está
+  // preparado; puede liberarse la superficie nativa". No modifica navegación.
+  onBootDestinationReady?: () => void;
+  // Señal de SOLO LECTURA hacia App.tsx, específica del ARRANQUE NORMAL:
+  // "el destino inicial (Chats) ya está poblado y puede mostrarse".
+  // No modifica navegación ni la carga de Chats: solo lee `chatsLoaded` y
+  // `currentScreen`, que ya existen. El flujo de notificación sigue atendido
+  // exclusivamente por onBootDestinationReady.
+  onInitialChatsReady?: () => void;
 }
 
 // Mapea el DTO de get_user_messages (services/messages) al Message de UI,
@@ -155,6 +212,8 @@ export default function PhoneSimulator({
   onClearExternalMessageTrigger = () => {},
   onBackPress,
   onSetShouldExit,
+  onBootDestinationReady,
+  onInitialChatsReady,
 }: PhoneSimulatorProps) {
   const animatedChatIdsRef = useRef(new Set<string>());
   const { user, profile, contacts: appContacts, chats: supabaseChats, loading, refreshChats, refreshContacts, refreshProfile, removeChatFromContext, logout } = useSupabase();
@@ -181,6 +240,10 @@ export default function PhoneSimulator({
   const currentScreenRef = useRef(currentScreen);
   currentScreenRef.current = currentScreen;
 
+  // Recibos de lectura globales: mantiene fresco el doble check azul en SQLite
+  // aunque el emisor no tenga el chat abierto (lo pinta al reabrir al instante).
+  useGlobalReadReceipts(user?.id);
+
   // Floating action menu
   const [showActionMenu, setShowActionMenu] = useState(false);
   const showActionMenuRef = useRef(false);
@@ -199,6 +262,9 @@ export default function PhoneSimulator({
     bio: string;
   } | null>(null);
   const avatarManualRef = useRef(false);
+  // Ref al recálculo global de no leídos (se define más abajo, junto a
+  // recalculateUnread). Permite dispararlo desde el listener de appStateChange.
+  const recalculateAllUnreadRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     if (user && profile) {
@@ -345,6 +411,10 @@ export default function PhoneSimulator({
       const { App } = await import('@capacitor/app');
       listener = await App.addListener('appStateChange', ({ isActive }) => {
         if (!isActive || removed) return;
+        // Volver a primer plano: recalcular los no leídos desde el marcador
+        // persistido. Así el badge no depende de que React haya recibido
+        // exactamente un evento determinado.
+        recalculateAllUnreadRef.current();
         (async () => {
           try {
             const pending = await Preferences.get({ key: 'redon_pending_message' });
@@ -396,6 +466,15 @@ export default function PhoneSimulator({
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const selectedChatIdRef = useRef(selectedChatId);
   selectedChatIdRef.current = selectedChatId;
+  // Destino de arranque resolvedo desde `redon_pending_open_chat` (toque de
+  // notificación FCM en arranque en frío).
+  //   undefined → todavía no se sabe si hay un open-chat pendiente
+  //   null      → no hay pendiente
+  //   string    → hay un chat pendiente de abrir
+  // Se usa solo como puerta de render: impide que la lista REAL de chats se
+  // pinte antes de conocer el destino. NO participa en la navegación, que sigue
+  // belonging a la lógica existente de `open-chat` / pending recovery.
+  const [bootChatId, setBootChatId] = useState<string | null | undefined>(undefined);
   const [refetchTrigger, setRefetchTrigger] = useState(0);
   const deletedChatIdsRef = useRef<Set<string>>(new Set());
 
@@ -1092,11 +1171,7 @@ export default function PhoneSimulator({
 
   // Load Supabase chats when available (dedup already done in getChats service)
   useEffect(() => {
-    console.log(`[RACE-T5] EFFECT 932 FIRED: supabaseChats=${supabaseChats.length} user=${user?.id?.slice(0,8)} selectedChatId=${selectedChatId}`);
     if (user && !loading) {
-      supabaseChats.filter((sc: any) => !deletedChatIdsRef.current.has(sc.id) && sc.avatar).forEach((sc: any) => {
-        console.log("[MAPEO-DEBUG] chat:", sc.name, "avatar recibido:", sc.avatar);
-      });
       const mapped = supabaseChats
         .filter((sc: any) => !deletedChatIdsRef.current.has(sc.id))
         .map((sc: any) => {
@@ -1143,30 +1218,12 @@ export default function PhoneSimulator({
             })(),
             partnerUserId: sc.profile_id === user.id ? sc.admin_id : sc.profile_id,
             isGroup: sc.is_group || false,
-            messages: [],
+            // Conservar el snapshot local de mensajes (propagado por
+            // onChatMessagesChanged) para que el remount de ChatRoom pinte de
+            // inmediato el historial conocido; SQLite/red refrescan después.
+            messages: local?.messages ?? [],
           };
         });
-      // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
-      for (const m of mapped) {
-        const currentLocal = chats.find((c: any) => c.id === m.id);
-        console.log("[NAME RESOLUTION - PHONESIMULATOR]", JSON.stringify({
-          chatId: m.id,
-          incomingContextName: m.name,
-          currentLocalName: currentLocal?.name || null,
-          profileId: (m as any).partnerUserId,
-          adminId: user?.id,
-        }));
-      }
-      // ═══════════════ FIN TEMPORAL LOG ═══════════════
-      // ── Protección del preview optimista pendiente ─────────────────
-      // Si un chat tiene un envío reciente aún no confirmado por el servidor
-      // (ventana INSERT mensaje → UPDATE chats), un refreshChats() puede
-      // devolver la versión anterior de la fila. Se conserva el preview
-      // optimista hasta que el servidor devuelva un last_message_time
-      // DISTINTO/posterior (comparado todo en reino servidor: base conocida vs.
-      // valor entrante; sin reloj del dispositivo) o hasta el tope de 30 s para
-      // envíos que nunca llegan a confirmarse. Del servidor siempre se conservan
-      // name/avatar/unread y cualquier campo que no sea el preview protegido.
       for (const m of mapped as any[]) {
         const raw: string = m.lastMessageTimeRaw || "";
         const pending = pendingLocalPreviewRef.current[m.id];
@@ -1201,7 +1258,6 @@ export default function PhoneSimulator({
         }
       }
       const containsSelected = mapped.some((m: any) => m.id === selectedChatId);
-      console.log(`[RACE-T5] EFFECT 932 replacing chats: supabaseChats=${supabaseChats.length} mapped=${mapped.length} | selectedChatId=${selectedChatId} | containsSelected=${containsSelected} | BEFORE chats.length=${chats.length}`);
       // FIX-A: If selectedChatId isn't in mapped yet (race: Supabase hasn't
       // propagated the locally-created chat), preserve the current entry
       // temporarily. It will be replaced by the proper server version once
@@ -1210,7 +1266,6 @@ export default function PhoneSimulator({
       if (!containsSelected && selectedChatId) {
         const preservedChat = chats.find((c: any) => c.id === selectedChatId);
         if (preservedChat) {
-          console.log(`[RACE-T5a] FIX-A: preserving selected chat ${selectedChatId} (name=${(preservedChat as any).name}) temporarily`);
           finalChats = [preservedChat, ...finalChats];
         }
       }
@@ -1224,6 +1279,10 @@ export default function PhoneSimulator({
       }
       setChats(finalChats.sort(sortChats));
       setChatsLoaded(true);
+      // Tras cualquier refresh de la lista, recalcular los no leídos desde el
+      // marcador persistido: el contador nunca depende del valor que traiga el
+      // servidor (siempre 0) ni de un evento previo recibido.
+      recalculateAllUnreadRef.current();
     }
   }, [supabaseChats, user, clearedAtMap, loading, expelledChats]);
 
@@ -1344,7 +1403,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   clearedAtMapRef.current = clearedAtMap;
   // Debounce por chat para el persist ligero de mensajes entrantes (chat cerrado)
   const persistMsgTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  // Última vez que el canal chats-for incrementó unread de un chat (dedup con FCM)
+  // Última vez que el canal chats-for registró un mensaje entrante (dedup con FCM)
   const lastRealtimeUnreadRef = useRef<Record<string, number>>({});
   // Último timestamp de mensaje ya contado como no-leído por canal (dedup por
   // mensaje entre realtime chats, chat_unread_pings y FCM — evita doble cuenta).
@@ -1367,7 +1426,11 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   // Persistencia ligera de un mensaje entrante con el chat cerrado: RPC
   // get_user_messages limit 1 + upsertMessage (dedup por id). Compartida por el
   // canal chats-for y el puente FCM (CallFcmService → pushNotificationReceived).
-  const scheduleLightMessagePersist = useCallback((chatId: string, immediate?: boolean) => {
+  const scheduleLightMessagePersist = useCallback((
+    chatId: string,
+    immediate?: boolean,
+    onPersisted?: () => void,
+  ) => {
     if (!user) return;
     const pendingTimer = persistMsgTimersRef.current.get(chatId);
     if (pendingTimer) clearTimeout(pendingTimer);
@@ -1389,7 +1452,10 @@ const lastSentAtRef = useRef<Record<string, number>>({});
             }
           } catch { /* best effort: sin frontera local */ }
           const msgs = await getMessages(chatId, { after: lastTs || undefined, limit: 50 });
-          if (!msgs || msgs.length === 0) return;
+          if (!msgs || msgs.length === 0) {
+            onPersisted?.();
+            return;
+          }
           for (const m of msgs) {
             const mapped = mapDtoToUiMessage(m, user.id);
             messageRepo.upsertMessage(chatId, { ...mapped, chatId, synced: true });
@@ -1397,6 +1463,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         } catch (e) {
           logger.warn("[LIGHT-PERSIST] Failed to persist messages", { error: e, chatId });
         }
+        onPersisted?.();
       };
       persistIncoming();
     };
@@ -1406,6 +1473,111 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       persistMsgTimersRef.current.set(chatId, setTimeout(runPersist, 1200));
     }
   }, [user]);
+
+  // ÚNICA fuente de cálculo del contador de no leídos.
+  // Derivado del marcador de lectura persistido (unreadReadMarkers.ts) y de los
+  // mensajes locales: nunca suma. Los tres canales de entrada (Realtime de
+  // `chats`, `chat_unread_pings` y push FCM) llaman a esta misma función, así que
+  // un mismo mensaje que llega por varios caminos produce el mismo resultado.
+  // FASE E2 · `collect` es un canal opcional de recarga (RECOLECTOR), no un
+  // cambio de semántica: sin él el comportamiento es EXACTAMENTE el anterior
+  // (un `setChats` por chat). Lo usa `recalculateAllUnread` para acumular los
+  // N resultados y aplicarlos en un único `setChats` al final.
+  // El error NO se reporta al colector, igual que antes no se escribía el
+  // contador: un chat fallido conserva su valor previo en ambos caminos.
+  const recalculateUnread = useCallback(async (
+    chatId: string,
+    collect?: (chatId: string, count: number) => void,
+  ) => {
+    if (!user) return 0;
+    try {
+      const local = await messageRepo.getMessages(chatId);
+      const count = computeUnread(user.id, chatId, local);
+      if (collect) collect(chatId, count);
+      else setChats(prev => prev.map(c => (c.id === chatId ? { ...c, unreadCount: count } : c)));
+      return count;
+    } catch (e) {
+      logger.warn("[UNREAD] recalculate failed", { error: e, chatId });
+      return 0;
+    }
+  }, [user]);
+
+  // Ref para poder disparar el recálculo desde el callback de persistencia
+  // (definido antes que recalculateUnread) sin cambiar su orden.
+  const recalculateUnreadRef = useRef<(chatId: string) => Promise<number>>(async () => 0);
+  recalculateUnreadRef.current = recalculateUnread;
+
+  // ÚNICA fuente del reset a 0: persiste la frontera de lectura del chat en el
+  // último mensaje disponible. No basta con `unreadCount = 0` en memoria: el
+  // estado real de lectura queda persistado y sobrevive al reinicio de la app.
+  const markChatAsRead = useCallback(async (chatId: string) => {
+    if (!user) return;
+    try {
+      const local = await messageRepo.getMessages(chatId);
+      let lastId = "";
+      let lastAt = "";
+      for (const m of local) {
+        const ts = m.rawCreatedAt || m.timestamp || "";
+        if (ts > lastAt) {
+          lastAt = ts;
+          lastId = m.id || "";
+        }
+      }
+      setReadMarker(user.id, chatId, lastId, lastAt || new Date().toISOString());
+    } catch (e) {
+      logger.warn("[UNREAD] markAsRead failed", { error: e, chatId });
+      // Fallback: frontera a "ahora" para no dejar mensajes contados como leídos.
+      setReadMarker(user.id, chatId, "", new Date().toISOString());
+    }
+    await recalculateUnread(chatId);
+  }, [user, recalculateUnread]);
+
+  // Ref para los handlers de eventos declarados antes de markChatAsRead.
+  const markChatAsReadRef = useRef<(chatId: string) => Promise<void>>(async () => {});
+  markChatAsReadRef.current = markChatAsRead;
+
+  // Recalcula todos los chats con el marcador vigente. Se usa al volver a primer
+  // plano y tras refreshChats(), para que el badge no dependa de que React haya
+  // recibido exactamente un evento determinado.
+  // FASE E2 · RÁFAGA DE IDENTIDAD AL VOLVER DE BACKGROUND (eliminado).
+  //
+  // ANTES: el listener de `appStateChange` dispara este bucle al volver a
+  // foreground y aquí se llamaba `setChats` una vez POR CHAT. Cada llamada
+  // hacía `prev.map(c => ({ ...c, unreadCount }))`, así que TODOS los chats
+  // cambiaban de identidad N veces. Como
+  // `activeChat = chats.find(c => c.id === selectedChatId)`, el objeto `chat`
+  // que recibe ChatRoom se reemplazaba repetidamente durante la transición
+  // Chats → ChatRoom: el chat que se estaba revelando se re-renderizaba N
+  // veces en los frames siguientes. Eso era lo que hacía la transición
+  // claramente peor al volver de background que en cold start.
+  //
+  // AHORA: los N recuentos se acumulan y se aplican en UN SOLO `setChats`.
+  // `activeChat` cambia de identidad como máximo una vez.
+  //
+  // SEMÁNTICA IDÉNTICA, punto por punto:
+  //   · el recuento sigue viniendo de `computeUnread(user.id, chatId, local)`
+  //     sobre el MISMO `messageRepo.getMessages(chatId)`;
+  //   · sigue siendo secuencial y con `await` (no bloquea, no paraleliza);
+  //   · solo se escriben los chats con lectura exitosa —igual que antes,
+  //     donde el `catch` no escribía nada;
+  //   · el `setChats` sigue siendo un `map` sobre `prev`, así que el ORDEN de
+  //     los chats no cambia;
+  //   · los chats ausentes del mapa se devuelven sin tocar, con la MISMA
+  //     identidad: antes `map` también los devolvía igual.
+  const recalculateAllUnread = useCallback(async () => {
+    if (!user) return;
+    const ids = chatsRef.current.map(c => c.id);
+    const counts = new Map<string, number>();
+    for (const id of ids) {
+      await recalculateUnread(id, (chatId, count) => counts.set(chatId, count));
+    }
+    if (counts.size === 0) return;
+    setChats(prev => prev.map(c => {
+      if (!counts.has(c.id)) return c;
+      return { ...c, unreadCount: counts.get(c.id)! };
+    }));
+  }, [user, recalculateUnread]);
+  recalculateAllUnreadRef.current = recalculateAllUnread;
 
   // Handle message synced callback: replace tempId with server ID and update status
   const handleMessageSynced = useCallback((tempId: string, chatId: string, savedId: string) => {
@@ -1439,11 +1611,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     if (!user) return;
     const sub = subscribeToChats(user.id, async (event, chat) => {
       if (event === "INSERT") {
-        console.log(`[RACE-T2] Realtime INSERT chat.id=${chat.id} chat.name=${chat.name} | chats.length=${chats.length} | selectedChatId=${selectedChatId}`);
         // New chat — resolve the partner's avatar/name (never use the raw row avatar,
         // which may have been stamped with the *creator's* own avatar by the sender).
         const full = await getChatWithPartner(chat.id, user.id);
-        console.log(`[RACE-T2b] getChatWithPartner returned: ${full ? `id=${full.id} name=${full.name}` : 'null'} | calling setChats + refreshChats`);
         if (!full) return;
         setChats(prev => {
           const existing = prev.find(c => c.id === full.id);
@@ -1453,7 +1623,6 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         // FIX-B: refreshChats() removed — already handled by setChats above.
         // Keeping it here would trigger effect 932 which replaces the full chats state
         // before Supabase has propagated the new chat, causing activeChat=undefined (white screen).
-        console.log(`[RACE-T3] INSERT handler: skipped refreshChats() for chat.id=${chat.id} — setChats already added it`);
       } else if (event === "UPDATE") {
         setChats(prev => {
           const idx = prev.findIndex(c => c.id === chat.id);
@@ -1496,13 +1665,22 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           const isCurrentChat = currentScreenRef.current === "chat_room" && selectedChatIdRef.current === chat.id;
           const lastSent = lastSentAtRef.current[chat.id];
           const isOwnRecent = lastSent && (Date.now() - lastSent < 20000);
+          const isViewing = isCurrentChat || isOwnRecent;
+          const clearedAt = clearedAtMapRef.current[chat.id];
+          const isCleared = clearedAt && newRawTime && newRawTime <= clearedAt;
 
-          if (isCurrentChat || isOwnRecent) {
+          // El servidor avanzó (mensaje entrante) → liberar cualquier preview
+          // optimista pendiente: nunca congelar el preview ante un avance real.
+          delete pendingLocalPreviewRef.current[chat.id];
+          lastServerPreviewRawRef.current[chat.id] = newRawTime;
+
+          // La fila de la lista conserva SU comportamiento por rama: viendo el
+          // chat nunca se vacía el preview; con el chat cerrado se respeta la
+          // frontera de chat_clears. El contador NO se incrementa en ninguno de
+          // los dos casos: se deriva del marcador de lectura más abajo.
+          const updated = [...prev];
+          if (isViewing) {
             // Own message or currently viewing — update metadata only, no unread increment
-            // El servidor confirmó una versión avanzada → liberar preview pendiente.
-            delete pendingLocalPreviewRef.current[chat.id];
-            lastServerPreviewRawRef.current[chat.id] = newRawTime;
-            const updated = [...prev];
             updated[idx] = {
               ...existing,
               lastMessage: (chat.last_message || existing.lastMessage) as any,
@@ -1518,47 +1696,47 @@ const lastSentAtRef = useRef<Record<string, number>>({});
               lastMessageTimeRaw: newRawTime,
               updated_at: chat.updated_at,
             };
-            db.run("UPDATE chats SET updated_at = ? WHERE id = ?", [chat.updated_at, chat.id]);
-            return updated.sort(sortChats);
+          } else {
+            // Someone else sent a message while we're not viewing — increment unread
+            updated[idx] = {
+              ...existing,
+              lastMessage: isCleared ? "" : (chat.last_message || existing.lastMessage) as any,
+              lastMessageTime: isCleared
+                ? ""
+                : newRawTime
+                  ? (() => {
+                      const d = new Date(newRawTime);
+                      const now = new Date();
+                      return d.toDateString() === now.toDateString()
+                        ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                        : d.toLocaleDateString([], { day: "numeric", month: "short" });
+                    })()
+                  : existing.lastMessageTime,
+              lastMessageTimeRaw: newRawTime,
+              updated_at: chat.updated_at,
+            };
           }
-
-          // Someone else sent a message while we're not viewing — increment unread
-          // El servidor avanzó (mensaje entrante) → liberar cualquier preview
-          // optimista pendiente: nunca congelar el preview ante un avance real.
-          delete pendingLocalPreviewRef.current[chat.id];
-          lastServerPreviewRawRef.current[chat.id] = newRawTime;
-          const clearedAt = clearedAtMapRef.current[chat.id];
-          const isCleared = clearedAt && newRawTime && newRawTime <= clearedAt;
-          // La misma llegada puede venir por varios canales (realtime por
-          // profile_id/admin_id del creador, ping chat_unread_pings, FCM).
-          // Si el timestamp ya se contó, actualiza metadata pero no suma de nuevo.
-          const alreadyHandled = lastHandledMsgRef.current[chat.id] === newRawTime;
-          lastHandledMsgRef.current[chat.id] = newRawTime;
-          const updated = [...prev];
-          updated[idx] = {
-            ...existing,
-            lastMessage: isCleared ? "" : (chat.last_message || existing.lastMessage) as any,
-            lastMessageTime: isCleared
-              ? ""
-              : newRawTime
-                ? (() => {
-                    const d = new Date(newRawTime);
-                    const now = new Date();
-                    return d.toDateString() === now.toDateString()
-                      ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                      : d.toLocaleDateString([], { day: "numeric", month: "short" });
-                  })()
-                : existing.lastMessageTime,
-            lastMessageTimeRaw: newRawTime,
-            unreadCount: isCleared ? 0 : (alreadyHandled ? existing.unreadCount : existing.unreadCount + 1),
-            updated_at: chat.updated_at,
-          };
           db.run("UPDATE chats SET updated_at = ? WHERE id = ?", [chat.updated_at, chat.id]);
-          // Persistir el mensaje completo en SQLite (chat cerrado): reusa la
-          // misma rutina debounced que el puente FCM.
+
+          // Ingestión INCONDICIONAL, exactamente una vez por mensaje, esté el
+          // chat abierto o cerrado. Antes esta llamada vivía solo en la rama
+          // "chat cerrado" y el `return` de la rama isCurrentChat la saltaba:
+          // con el chat abierto el mensaje no llegaba a SQLite/idb ni al flujo
+          // del cuerpo, y el preview de la lista sí avanzaba igual.
+          // Inmediato con el chat abierto (el cuerpo lo necesita ya) y
+          // debounced con el chat cerrado, igual que antes.
           if (!isCleared) {
+            // Registrar la llegada es idempotente: si el mismo mensaje ya
+            // llegó por ping o FCM no vuelve a contar.
+            if (user) {
+              registerIncoming(user.id, chat.id, newRawTime);
+            }
             lastRealtimeUnreadRef.current[chat.id] = Date.now();
-            scheduleLightMessagePersist(chat.id);
+            // Recalcular cuando el mensaje ya está en la caché local: mismo
+            // mecanismo que FCM. Nunca `+1`.
+            scheduleLightMessagePersist(chat.id, !isViewing ? false : true, () => {
+              recalculateUnreadRef.current(chat.id);
+            });
           }
           return updated.sort(sortChats);
         });
@@ -1695,6 +1873,43 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   // ─── CALLER: Listen for call status UPDATE (callee accepted the call) ───
   // Replaced by onCalleeReady broadcast signal in webrtc.ts — no DB dependency needed.
 
+  // ─── BOOT GATE: destino FCM conocido antes del primer render de la lista ───
+  // Al tocar una notificación con la app cerrada, MainActivity escribe
+  // `redon_pending_open_chat` en onCreate (native, antes de que exista el JS) y
+  // el evento `open-chat` se pierde. Sin este gate, el primer render pinta la
+  // lista REAL de chats (currentScreen inicial = "chats") y recién después, en
+  // un useEffect + Preferences.get + refreshChats, se navega al chat: ese es el
+  // flash. Leyendo el pendiente al montar y ocultando la lista hasta saber el
+  // destino, el primer contenido visible es el ChatRoom.
+  //
+  // NO depende de `user` a propósito: el destino hace falta en los primeros
+  // frames, no después de restaurar la sesión. La navegación y el
+  // markChatAsRead NO se tocan aquí (siguen en la lógica existente).
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) {
+      setBootChatId(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const pending = await Preferences.get({ key: 'redon_pending_open_chat' });
+        const raw = pending?.value;
+        const data = raw ? JSON.parse(raw) : null;
+        const chatId =
+          data && typeof data === 'object' && data.chatId ? data.chatId : null;
+        if (!cancelled) setBootChatId(chatId || null);
+      } catch (e) {
+        logger.warn('[OPEN-CHAT] No se pudo leer el pendiente de arranque', { error: e });
+        // Sin pendiente legible no hay destino que esperar: se abre la lista.
+        if (!cancelled) setBootChatId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!user) return;
     const handleIncomingCall = async (e: Event) => {
@@ -1783,11 +1998,26 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     };
 
     const handleOpenChat = (e: Event) => {
-      const d = parseEventDetail((e as CustomEvent).detail);
+      // Acepta ambas formas del evento: CustomEvent con `detail` (plugin de
+      // Capacitor, ver pushCapacitor.ts) y Event plano de MainActivity, donde
+      // `chatId` queda en la RAÍZ del evento (Capacitor crea el evento con
+      // doc.createEvent('Events') y copia las claves sobre el evento).
+      const d =
+        parseEventDetail((e as CustomEvent).detail) ??
+        parseEventDetail(e);
       if (d?.chatId) {
+        // El evento trae el destino en el mismo tick: la navegación es
+        // inmediata, así que el boot gate ya no tiene nada que esperar y se
+        // libera para que la lista no quede enmascarada. La ruta caliente
+        // sigue comportándose exactamente igual que antes.
+        setBootChatId(null);
         setSelectedChatId(d.chatId);
         setCurrentScreen('chat_room');
-        setChats(prev => prev.map(c => (c.id === d.chatId ? { ...c, unreadCount: 0 } : c)));
+        // Abrir el chat marca el leído de forma persistente (no un reset visual).
+        markChatAsReadRef.current(d.chatId);
+        // Evento ya procesado (app viva): eliminar el pendiente para que la restauración
+        // no vuelva a abrir el chat en una futura vuelta a primer plano / montaje.
+        Preferences.remove({ key: 'redon_pending_open_chat' }).catch(() => {});
       }
     };
     const handleNewMessage = (e: Event) => {
@@ -1800,6 +2030,12 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       }
       logger.info('[EVENT] context', { selectedChatId, currentScreen });
       const isChatOpen = selectedChatId === d.chatId && currentScreen === 'chat_room';
+      // Registro idempotente de la llegada: si el mismo mensaje ya llegó por
+      // realtime o por el ping de grupo, su timestamp ya está en `pending` y no
+      // vuelve a contar.
+      if (user) {
+        registerIncoming(user.id, d.chatId, d.ts);
+      }
       // Check if chat exists first (synchronous), fetch only if missing.
       const chatExists = chatsRef.current.some(chat => chat.id === d.chatId);
       if (!chatExists) {
@@ -1815,7 +2051,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
               lastMessageTime: d.ts || (full as any).last_message_time || "",
               lastMessageTimeRaw: d.ts || (full as any).last_message_time || "",
               updated_at: d.ts || (full as any).updated_at || "",
-              unreadCount: 1,
+              unreadCount: 0,
             } as any, ...later].sort(sortChats);
           });
         });
@@ -1824,11 +2060,6 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           const idx = prev.findIndex(chat => chat.id === d.chatId);
           if (idx === -1) return prev;
           const updated = [...prev];
-          const alreadyHandled = !!d.ts && lastHandledMsgRef.current[d.chatId] === d.ts;
-          const realtimeRecently = Date.now() - (lastRealtimeUnreadRef.current[d.chatId] || 0) < 10000;
-          if (!isChatOpen && !alreadyHandled && !realtimeRecently) {
-            updated[idx] = { ...updated[idx], unreadCount: updated[idx].unreadCount + 1 };
-          }
           if (d.body) updated[idx].lastMessage = d.body;
           if (d.ts && d.ts > (updated[idx].lastMessageTimeRaw || "")) {
             const fcmTime = new Date(d.ts);
@@ -1847,7 +2078,11 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         // SQLite INMEDIATAMENTE (0ms) para que ChatRoom lo encuentre en caché
         // al abrir, sin depender del fetch remoto. La ruta Realtime del canal
         // chats-for conserva su debounce actual (agrupa ráfagas de eventos).
-        scheduleLightMessagePersist(d.chatId, true);
+        scheduleLightMessagePersist(d.chatId, true, () => {
+          // Recalcular DESPUÉS de persistir: así el contador cuenta el mensaje
+          // real y no solo el pendiente. Es la misma ruta que realtime y ping.
+          recalculateUnreadRef.current(d.chatId);
+        });
       } else {
         setRefetchTrigger(n => n + 1);
       }
@@ -1887,6 +2122,95 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     };
    }, [user?.id, selectedChatId, currentScreen, scheduleLightMessagePersist]);
 
+  // ─── STICKY NAVIGATE: arranque en frío desde notificación ────────────────
+  // Al tocar una notificación de mensaje con la app cerrada, el evento
+  // 'open-chat' se pierde (React aún no registró el listener). MainActivity
+  // persiste el intent en CapacitorStorage y lo restauramos acá.
+  //
+  // LO QUE NO SE HACE MÁS: la salida del arranque no la decide ningún plazo.
+  // Antes un timeout fijo de 3s liberaba el boot gate "por el simple paso del
+  // tiempo"; como SupabaseContext.loading puede seguir en true hasta 4.5s, a los
+  // 3s `chats` todavía estaba vacío, se pintaba la lista y el pendiente quedaba
+  // sin reintento (nunca se entraba al ChatRoom).
+  //
+  // LA SEÑAL REAL: `chatsLoaded === true`. La fija el mismo effect que hace
+  // setChats(), así que true significa "el proceso que puebla `chats` ya pudo
+  // ejecutarse". Es el único dato válido para decidir si el chat pendiente existe.
+  //
+  // REACTIVIDAD (sin timers): `chatsLoaded` es la dependencia. Mientras sea false
+  // el effect retorna y el boot gate sigue cerrado; al pasar a true, React vuelve
+  // a ejecutarlo y recién ahí se busca el pendiente en `chats`. Cero polling,
+  // cero setInterval, cero esperas artificiales, cero loops de reintento.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    // Boot gate todavía cerrado: aún no hay con qué decidir el destino.
+    if (!chatsLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const pending = await Preferences.get({ key: 'redon_pending_open_chat' });
+        if (cancelled) return;
+        if (!pending?.value) return;
+        const pendingData = JSON.parse(pending.value);
+        const pendingChatId = pendingData && typeof pendingData === 'object' && pendingData.chatId
+          ? pendingData.chatId
+          : null;
+        if (!pendingChatId) {
+          await Preferences.remove({ key: 'redon_pending_open_chat' });
+          return;
+        }
+        logger.info('[OPEN-CHAT] Pendiente recuperado del storage; lista ya cargada', {
+          chatId: pendingChatId,
+          found: chatsRef.current.some(c => c.id === pendingChatId),
+        });
+
+        const openStoredChat = async () => {
+          setSelectedChatId(pendingChatId);
+          setCurrentScreen('chat_room');
+          // El destino ya está resuelto: se libera el boot gate. Sin esto el
+          // gate se quedaba cerrado para siempre al volver atrás del chat
+          // (currentScreen deja de ser "chat_room" → chatRoomMounted false) y
+          // la app quedaba bloqueada en la boot surface.
+          setBootChatId(null);
+          // Abrir el chat marca el leído de forma persistente.
+          await markChatAsReadRef.current(pendingChatId);
+          await Preferences.remove({ key: 'redon_pending_open_chat' });
+          logger.info('[OPEN-CHAT] Pendiente procesado y eliminado', { chatId: pendingChatId });
+        };
+
+        // CASO 1: la lista real ya se cargó y el chat está → ChatRoom. La lista
+        // nunca llega a pintarse porque el gate recién se abre en el mismo
+        // batch que fija currentScreen/selectedChatId, y en ese render `activeChat`
+        // ya resuelve (chats.contains(pendingChatId) === true).
+        if (chatsRef.current.some(c => c.id === pendingChatId)) {
+          await openStoredChat();
+          return;
+        }
+
+        // CASO 2: la lista real ya se cargó y el chat NO está. La decisión ya
+        // está tomada con datos, así que se libera el gate de inmediato —nadie
+        // queda bloqueado en la boot surface si el chat ya no existe— y el
+        // pendiente NO se borra, para un reintento posterior. El refresh queda
+        // en segundo plano y sanea la lista sin volver a cerrar la puerta.
+        setBootChatId(null);
+        logger.warn('[OPEN-CHAT] Chat no disponible con la lista ya cargada; pendiente conservado', { chatId: pendingChatId });
+        try {
+          await refreshChats();
+        } catch (e) {
+          logger.warn('[OPEN-CHAT] refreshChats falló al recuperar pendiente', { error: e });
+        }
+      } catch (e) {
+        // Un fallo al procesar el pendiente no debe dejar la app en skeleton
+        // para siempre: se libera la puerta y se muestra la lista.
+        if (!cancelled) setBootChatId(null);
+        logger.warn('[OPEN-CHAT] Fallo al procesar pendiente (NO se borra)', { error: e });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatsLoaded]);
+
   useEffect(() => {
     if (externalMessageTrigger) {
       const chatTarget = "nelson"; // Default target
@@ -1896,7 +2220,6 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           if (c.id === chatTarget) {
             return {
               ...c,
-              unreadCount: currentScreen !== "chat_room" || selectedChatId !== chatTarget ? c.unreadCount + 1 : 0,
               lastMessage: externalMessageTrigger.text || "¡Archivo recibido!",
               lastMessageTime: externalMessageTrigger.timestamp,
               lastMessageTimeRaw: msgIso,
@@ -1907,6 +2230,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           return c;
         }).sort(sortChats)
       );
+      // Mismo camino que realtime/ping/FCM: registrar + recalcular, nunca sumar.
+      if (user) registerIncoming(user.id, chatTarget, msgIso);
+      if (currentScreen === "chat_room" && selectedChatId === chatTarget) {
+        markChatAsReadRef.current(chatTarget);
+      } else {
+        recalculateUnreadRef.current(chatTarget);
+      }
       onClearExternalMessageTrigger();
     }
   }, [externalMessageTrigger, currentScreen, selectedChatId, onClearExternalMessageTrigger]);
@@ -2086,27 +2416,290 @@ const lastSentAtRef = useRef<Record<string, number>>({});
 
   // activeChat derived from chats + selectedChatId
   const activeChat = chats.find((c) => c.id === selectedChatId);
-  const prevActiveChatRef = useRef(activeChat);
+
+  // Boot gate cerrado (la lista real NO debe pintarse) SOLO mientras no se sabe
+  // si hay un open-chat pendiente (`undefined`).
+  //
+  // Antes el gate también se cerraba cuando YA había destino y el ChatRoom
+  // todavía no estaba montado. Eso convertía la notificación en una ruta visual
+  // de arranque distinta: durante OPEN_CHAT se pintaba la boot surface
+  // (`bg-white` + ChatListSkeleton, línea 3953) en lugar de la pantalla real de
+  // Chats que sí se ve al abrir desde el escritorio. Un arranque por
+  // notificación ahora pinta exactamente lo mismo que uno por icono.
+  //
+  // El destino NO se pierde: `bootChatId` se sigue leyendo igual
+  // (`redon_pending_open_chat`) y el efecto de navegación sigue siendo el que
+  // consume el pendiente una vez que la lista está cargada. Solo se difiere el
+  // MOMENTO de esa navegación, nunca su resultado. La navegación no se toca.
+  const chatRoomMounted = currentScreen === "chat_room" && !!activeChat;
+  const bootGateClosed = bootChatId === undefined;
+
+  // Superficie de arranque (BOOT SURFACE): se renderiza fuera del cuerpo de
+  // Chats, así que no depende de la pestaña activa. Reúne los dos estados en
+  // los que todavía NO hay superficie definitiva:
+  //   · bootGateClosed → no se sabe el destino (undefined) o hay destino y el
+  //     ChatRoom aún no está montado.
+  //   · chatRoomPending → ya se navegó a "chat_room" pero `activeChat` sigue
+  //     undefined (el chat todavía no está en `chats`).
+  // Ambas exigen `!activeChat`, que es la condición que el overlay del ChatRoom
+  // exige para montarse, así que Chats y ChatRoom nunca coexisten.
+  // ─── PRECARGA REAL DEL CHUNK DE ChatRoom ────────────────────────────────
+  // CAUSA DEL FLASH BLANCO: `chatRoomChunk()` solo se invocaba dentro del flujo
+  // OPEN_CHAT (el signal de "destino listo"), así que en un arranque NORMAL el
+  // módulo jamás se adelantaba y el primer toque a un chat pintaba el fallback
+  // de Suspense hasta que el chunk terminaba de leerse.
+  //
+  // AQUÍ se invoca el MISMO `chatRoomChunk` de la línea 89 —mismo
+  // especificador "./ChatRoom"— que consume `React.lazy`. Por lo tanto no se crea
+  // un segundo chunk, no se duplica la definición de ChatRoom y `React.lazy` no
+  // se modifica: solo se adelanta la resolución del módulo que el lazy ya
+  // pediría más tarde.
+  //
+  // NO ES UNA ESPERA DEL ARRANQUE: es "fire and forget" dentro de un useEffect
+  // (que corre tras el commit) y se agenda en tiempo de inactividad con
+  // `timeout` de seguridad, de modo que nunca compite con el primer pintado ni
+  // retrasa Chats. El usuario puede usar la lista mientras el chunk viaja; si
+  // toca un chat antes de que termine, Suspense resuelve antes que antes porque
+  // la promesa en vuelo es la misma. No toca autenticación, SQLite,
+  // SyncService, Supabase, FCM, llamadas ni la navegación.
+  const chatRoomPreloadedRef = useRef(false);
   useEffect(() => {
-    if (currentScreen === "chat_room" && selectedChatId) {
-      const was = prevActiveChatRef.current;
-      const now = activeChat;
-      if (was && !now) {
-        console.log(`[RACE-T7] activeChat LOST: was=${was.id} now=UNDEFINED | selectedChatId=${selectedChatId} chats.length=${chats.length}`);
-      } else if (!was && now) {
-        console.log(`[RACE-T7] activeChat FOUND: id=${now.id} | selectedChatId=${selectedChatId} chats.length=${chats.length}`);
-      }
-    }
-    prevActiveChatRef.current = activeChat;
-  }, [activeChat, currentScreen, selectedChatId, chats.length]);
-  if (selectedChatId && currentScreen === "chat_room") {
-    const found = !!activeChat;
-    const chatIds = chats.map(c => c.id);
-    if (!found || chatIds.length !== (window as any).__lastRaceChatsLen) {
-      console.log(`[RACE-T6] activeChat=${found ? activeChat!.id : 'UNDEFINED'} | selectedChatId=${selectedChatId} | chats.length=${chats.length} | chatIds=[${chatIds.slice(0,5).join(',')}...]`);
-      (window as any).__lastRaceChatsLen = chatIds.length;
-    }
+    if (chatRoomPreloadedRef.current) return;
+    chatRoomPreloadedRef.current = true;
+    const warmChatRoom = () => {
+      chatRoomChunk().catch(() => {
+        // Si la precarga falla, React.lazy reintenta al abrir el chat: la
+        // precarga es una optimización, nunca un requisito.
+      });
+    };
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === "function") ric(warmChatRoom, { timeout: 2000 });
+    else setTimeout(warmChatRoom, 250);
+  }, []);
+
+  const chatRoomPending = currentScreen === "chat_room" && !activeChat;
+
+  // ─── FASE 2 · SEÑAL "DESTINO LISTO" → App.tsx ────────────────────────────
+  // Se reporta UNA sola vez por proceso, y solo cuando hubo un destino de
+  // arranque real (notificación). En el arranque normal no se emite nada: la
+  // liberación la hace App.tsx por su propio doble rAF, sin espera extra.
+  //
+  // NO es simplemente `chatRoomMounted === true`. Ese estado queda true en el
+  // mismo commit que fija currentScreen/selectedChatId, mientras el módulo
+  // lazy de ChatRoom puede seguir resolviéndose y React pintando el
+  // <Suspense fallback={<ChatListSkeleton />}> de la línea 3814. Por eso, antes
+  // de reportar, se espera `chatRoomChunk()`: con el módulo ya resuelto, el
+  // overlay del ChatRoom renderiza de forma síncrona y el árbol contiene el
+  // destino, no el skeleton.
+  //
+  // ESTA SEÑAL NO TOCA NAVEGACIÓN: solo lee chatRoomMounted / bootGateClosed /
+  // chatRoomPending, que quedan exactamente como estaban.
+  const onBootDestinationReadyRef = useRef(onBootDestinationReady);
+  useEffect(() => {
+    onBootDestinationReadyRef.current = onBootDestinationReady;
+  });
+
+  // Latch: recuerda que hubo un destino de arranque real. Se latchea con un
+  // bootChatId no nulo, que se lee ANTES de que el efecto de navegación lo
+  // resuelva (ese efecto hace bootChatId=null en el mismo commit que monta el
+  // chat), por eso no sirve el valor actual de bootChatId para discriminar.
+  const hadBootDestinationRef = useRef(false);
+  if (typeof bootChatId === "string" && bootChatId) {
+    hadBootDestinationRef.current = true;
   }
+  const bootDestinationSignaledRef = useRef(false);
+
+  // ChatRoom ya rindió su primer frame durante este arranque. La emite ChatRoom
+  // con useLayoutEffect (commit de su contenedor real) y se latchea con un ref
+  // para que la señal sea única por montaje. Es de SOLO LECTURA del flujo
+  // OPEN_CHAT: no escribe chats, currentScreen ni la navegación.
+  const [chatRoomFirstRender, setChatRoomFirstRender] = useState(false);
+  const chatRoomFirstRenderRef = useRef(false);
+  const handleChatRoomFirstRender = useCallback(() => {
+    if (chatRoomFirstRenderRef.current) return;
+    chatRoomFirstRenderRef.current = true;
+    setChatRoomFirstRender(true);
+  }, []);
+
+  // ─── FASE E1 · REVELAR EL CHATROOM SOBRE CHATS (sin superficie intermedia) ──
+  // Antes, al navegar a un chat la capa de tabs recibía `display:none` y el
+  // overlay `absolute inset-0 z-50 bg-white` aparecía de inmediato: entre ambos
+  // commit y paint quedaba una superficie BLANCA opaca que ningún contenido
+  // cubría. Ese era el origen de la discontinuidad, no `Suspense` ni el chunk.
+  //
+  // AHORA Chats NO se oculta durante la preparación: sigue pintado como capa
+  // inferior. El overlay del ChatRoom nace con `opacity: 0` y solo pasa a `1`
+  // cuando ChatRoom emite `onFirstRenderReady` —la marca que YA existía, emitida
+  // en su `useLayoutEffect` + `requestAnimationFrame`, es decir cuando su primer
+  // frame ya fue solicitado al compositor. No se crea ningún otro mecanismo de
+  // "primer render": se reutiliza tal cual, y ahora se pasa SIEMPRE, no solo en
+  // el arranque por notificación.
+  //
+  // NO es un cross-fade: no hay `transition`, el revelado es inmediato. No hay
+  // skeleton, spinner, fondo falso ni blur nuevos. Solo se deja de tapar la capa
+  // inferior un frame antes de que exista algo que la tape.
+  //
+  // GUARD POR CHAT: el revelado guarda el `id` del chat preparado y la capa solo
+  // se destapa si ese id coincide con el `activeChat` actual, así que una señal
+  // tardía de un ChatRoom anterior no puede revelar un chat distinto. Como
+  // ChatRoom emite una sola vez por montaje (`firstRenderSignaledRef`) y aquí se
+  // lee `activeChatIdRef` —el chat vigente en ese commit— el id es correcto.
+  const [chatRoomRevealedId, setChatRoomRevealedId] = useState<string | null>(null);
+  const activeChatIdRef = useRef<string | null>(null);
+  activeChatIdRef.current = activeChat?.id ?? null;
+  const handleChatRoomRevealed = useCallback(() => {
+    setChatRoomRevealedId(activeChatIdRef.current);
+  }, []);
+
+  // Capas del tab que deben seguir pintadas mientras el ChatRoom se prepara.
+  // Es puramente visual: `currentScreen` NO cambia, la navegación es idéntica.
+  // El `pt-[170px]` también se mantiene, porque quitarlo durante la preparación
+  // haría que la lista de chats saltara hacia arriba justo en el frame que debe
+  // quedarse quieto.
+  const chatsLayerPainted = currentScreen === "chats" || currentScreen === "chat_room";
+
+  // ─── FASE E3 · PREDECODIFICAR EL WALLPAPER DEL CHATROOM ───────────────────
+  // Nunca debe romper la app: cualquier fallo aquí es silencioso a propósito,
+  // porque el wallpaper se seguiría mostrando igual por su cuenta al pintar.
+  const warmChatRoomWallpaper = useCallback(() => {
+    try { warmChatBackdrop(); } catch { /* noop */ }
+  }, []);
+
+  // Al montar, en tiempo de inactividad: igual que la precarga del chunk, no
+  // compite con el primer pintado de Chats ni retrasa el arranque.
+  useEffect(() => {
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === "function") ric(warmChatRoomWallpaper, { timeout: 2000 });
+    else setTimeout(warmChatRoomWallpaper, 250);
+  }, [warmChatRoomWallpaper]);
+
+  // Al volver a foreground. Es el recorrido que la auditoría marcó como el más
+  // sensible: el WebView puede purgar imágenes ya decodificadas, y entonces el
+  // `background-image` del chat vuelve a necesitarse justo en el frame de la
+  // transición. Listener PROPIO y aislado: no se toca el listener de FCM que
+  // vive más arriba, ni SQLite, SyncService, Supabase ni realtime.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let listener: { remove: () => Promise<void> } | null = null;
+    let removed = false;
+    const setup = async () => {
+      const { App } = await import("@capacitor/app");
+      listener = await App.addListener("appStateChange", ({ isActive }) => {
+        if (!isActive || removed) return;
+        invalidateChatBackdropPreload();
+        warmChatRoomWallpaper();
+      });
+    };
+    setup();
+    return () => { removed = true; listener?.remove(); };
+  }, [warmChatRoomWallpaper]);
+
+  // Rearma el revelado al salir del chat o al cambiar de chat. Así la siguiente
+  // entrada vuelve a esperar su primer frame útil en vez de destaparse sobre el
+  // frame en blanco de un montaje recién montado. No escribe `currentScreen`,
+  // `selectedChatId` ni `chats`: es estado de presentación.
+  useEffect(() => {
+    if (currentScreen !== "chat_room" || !activeChat) {
+      setChatRoomRevealedId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentScreen, activeChat?.id]);
+
+  useEffect(() => {
+    if (bootDestinationSignaledRef.current) return;
+    if (!onBootDestinationReadyRef.current) return;
+    // Normal launch: there is no destination to wait for.
+    if (!hadBootDestinationRef.current) return;
+
+    // A. The destination resolved: the ChatRoom overlay is mounted.
+    const destinationMounted = chatRoomMounted;
+    // B. The destination cannot be resolved (chat absent from the list, or the
+    //    pending read failed). The navigation effect already released the gate,
+    //    so holding the native coverage would strand it on the boot surface.
+    //    NOT an invented "ready": the gate decided on data, not on a timer.
+    //    `chatsLoaded` es lo que hace falta aquí: el caso B solo lo produce el
+    //    efecto de navegación, que corre precisamente cuando la lista cargó.
+    //    Sin este requisito, abrir el gate durante OPEN_CHAT encendería esta
+    //    señal con la lista todavía vacía y la cobertura se retiraría sobre una
+    //    superficie sin datos.
+    const gateReleasedWithoutDestination =
+      chatsLoaded && !bootGateClosed && !chatRoomPending && !chatRoomMounted;
+
+    if (!destinationMounted && !gateReleasedWithoutDestination) return;
+
+    // Montar el módulo NO equivale a tener una superficie que pintar: el
+    // contenedor del ChatRoom recién queda comprometido en su primer render.
+    // Con destino montado se exige esa señal real, y con ella la cobertura del
+    // splash se retira sobre un ChatRoom ya pintado en lugar de sobre un hueco.
+    // El caso B no tiene destino que pintar, así que no la espera.
+    if (destinationMounted && !chatRoomFirstRender) return;
+
+    let cancelled = false;
+    (async () => {
+      // A. Guarantee the lazy module is resolved before reporting.
+      try {
+        await chatRoomChunk();
+      } catch {
+        // The chunk failed; the destination cannot be presented either way.
+        // The boot gate/pending path keeps its own recovery.
+      }
+      if (cancelled || bootDestinationSignaledRef.current) return;
+      bootDestinationSignaledRef.current = true;
+      logger.info("[OPEN-CHAT] Destino listo; la superficie nativa puede liberarse", {
+        destinationMounted,
+        gateReleasedWithoutDestination,
+        firstRenderSeen: chatRoomFirstRender,
+      });
+      onBootDestinationReadyRef.current?.();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatRoomMounted, bootGateClosed, chatRoomPending, chatRoomFirstRender, chatsLoaded]);
+
+  // ── Señal mínima: "el destino inicial normal ya está montado" ───────────────
+  // Invariante anti-pantalla-blanca del arranque normal. FullSplash no puede
+  // retirarse antes de que Chats tenga contenido real, porque la raíz de
+  // PhoneSimulator es `bg-white` y la lista de Chats se monta detrás de un
+  // <Suspense>; sin esta señal, entre el retiro del splash y el primer commit
+  // de la lista queda expuesto ese blanco.
+  //
+  // ESTA SEÑAL NO TOCA NAVEGACIÓN NI LA CARGA DE CHATS: solo LEE dos estados
+  // que ya existen y no los escribe.
+  //   · `chatsLoaded` lo fija el MISMO effect que hace setChats() (la lista
+  //     inicial ya pudo poblarse), en lugar de un plazo.
+  //   · `currentScreen` arranca en "chats", así que describe exactamente el
+  //     destino inicial del arranque normal.
+  //
+  // Se limita a arranques SIN destino pendiente: si hubo bootChatId (notificación)
+  // no se emite y la liberación sigue siendo responsabilidad exclusiva de
+  // onBootDestinationReady, cuyo flujo queda intacto.
+  const onInitialChatsReadyRef = useRef(onInitialChatsReady);
+  useEffect(() => {
+    onInitialChatsReadyRef.current = onInitialChatsReady;
+  });
+
+  const initialChatsReady = chatsLoaded && currentScreen === "chats";
+  const initialChatsSignaledRef = useRef(false);
+
+  useEffect(() => {
+    if (initialChatsSignaledRef.current) return;
+    if (!onInitialChatsReadyRef.current) return;
+    // Arranque desde notificación: no es el destino inicial normal.
+    if (hadBootDestinationRef.current) return;
+    if (!initialChatsReady) return;
+    initialChatsSignaledRef.current = true;
+    logger.info("[BOOT] Chats inicial listo; el splash puede retirarse", {
+      chatsLoaded,
+      currentScreen,
+    });
+    onInitialChatsReadyRef.current();
+  }, [initialChatsReady, chatsLoaded, currentScreen]);
 
   const handleSendMessageInRoom = (newMsg: Message) => {
     if (!selectedChatId) return;
@@ -2721,16 +3314,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   }, [chats]);
 
   const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }): Promise<string | null> => {
-    const T0 = Date.now();
     const displayName = profile.contactName || profile.name;
     const existing = getChatByPartnerId(profile.id);
     if (existing) {
-      console.log(`[RACE-T0] handleStartChatFromSynced EXISTING chat ${existing.id} chats=${chats.length} selectedChatId=${selectedChatId} (+${Date.now()-T0}ms)`);
       setSelectedChatId(existing.id);
       setCurrentScreen("chat_room");
       return existing.id;
     }
-    console.log(`[RACE-T0] handleStartChatFromSynced creating NEW chat for partner ${profile.id} (+${Date.now()-T0}ms)`);
     try {
       const chat = await createChatInSupabase({
         name: displayName,
@@ -2739,7 +3329,6 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         admin_id: user?.id || "",
       });
       if (chat?.id) {
-        console.log(`[RACE-T0b] chat CREATED id=${chat.id} (+${Date.now()-T0}ms) — adding to local chats, setting selectedChatId + chat_room`);
         setChats(prev => {
           if (prev.some(c => c.id === chat.id)) return prev;
           return [{
@@ -2939,6 +3528,10 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     if (user?.id && !isExpelled && !chatId.startsWith("chat_biz_") && !chatId.startsWith("chat_state_")) {
       try {
         await apiDeleteChat(chatId, user.id);
+        // Frontera local de borrado: al conservar el servidor el mismo chat_id
+        // (chat_clears hidden), el reabrir filtra por getLocalClearedAt ANTES del
+        // primer pintado y no parpadean los mensajes de la conversación anterior.
+        messageRepo.setLocalClearedAt(chatId, new Date().toISOString()).catch(() => {});
         removeChatFromContext(chatId);
         deletedChatIdsRef.current.add(chatId);
         setChats(prev => prev.filter(c => c.id !== chatId));
@@ -2983,6 +3576,9 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         const now = new Date().toISOString();
         await clearForMe(chat.id);
         setClearAtMap(prev => ({ ...prev, [chat.id]: now }));
+        // Los mensajes borrados ya no existen: el marcador avanza a "ahora"
+        // para que un recálculo posterior no los vuelva a contar.
+        if (user) setReadMarker(user.id, chat.id, "", now);
       }
       showToast("Mensajes eliminados");
     } catch (e) {
@@ -3550,10 +4146,37 @@ try {
           "font-sans"
         }`}>
           
-          {/* FULL-SCREEN SCREENS (rendered as overlays so the tabs tree stays mounted) */}
-          {currentScreen === "chat_room" && activeChat && (
+          {/* BOOT SURFACE — única superficie visible durante el arranque hacia un
+              destino pendiente. Va al MISMO nivel que el overlay del ChatRoom
+              (hermano del wrapper de pestañas), no dentro del cuerpo de Chats:
+              así tapa la app entera y las pestañas no tienen forma de asomarse.
+              Cubre los dos estados incompletos:
+                · bootGateClosed  → no sabemos el destino, o hay destino y el
+                                    ChatRoom todavía no está montado.
+                · chatRoomPending  → ya navegamos a "chat_room" pero el chat aún
+                                    no está en `chats` (activeChat undefined).
+              Ambas son excluyentes con el ChatRoom: exigen !activeChat, que es
+              justo la condición que el overlay de ChatRoom exige para montar. */}
+          {(bootGateClosed || chatRoomPending) && (
             <div className="absolute inset-0 z-50 bg-white">
-              <React.Suspense fallback={<ChatListSkeleton />}>
+              {/* Mismo skeleton que el ChatRoom ya usa como fallback de carga,
+                  para que el salto a la conversación no dé un tirón. */}
+              <ChatListSkeleton />
+            </div>
+          )}
+          {currentScreen === "chat_room" && activeChat && (
+            // El `bg-white` se conserva: es la base real del chat para los fondos
+            // de patrón y los transparentes. Lo que cambia es la opacidad, para
+            // que este overlay no tape a Chats hasta tener su primer frame útil.
+            <div
+              className="absolute inset-0 z-50 bg-white"
+              style={{ opacity: chatRoomRevealedId === activeChat.id ? 1 : 0 }}
+            >
+              {/* El fallback ya NO es un blanco vacío: pinta el wallpaper de
+                  destino (misma fuente de verdad que ChatRoom). El `bg-white`
+                  del wrapper se conserva intacto porque es la base real del
+                  chat para los fondos de patrón/transparentes. */}
+              <React.Suspense fallback={<ChatRoomBackdropFallback />}>
               <ChatRoom
                 key={activeChat.id}
                 chat={activeChat}
@@ -3603,6 +4226,10 @@ try {
                 onChatDeleted={(chatId) => {
                   removeChatFromContext(chatId);
                   deletedChatIdsRef.current.add(chatId);
+                  // Frontera local de borrado: mismo mecanismo que en
+                  // handleDeleteChat, para que una reapertura (mismo chat_id
+                  // conservado por chat_clears) pinte vacía desde el frame 1.
+                  messageRepo.setLocalClearedAt(chatId, new Date().toISOString()).catch(() => {});
                   setChats(prev => prev.filter(c => c.id !== chatId));
                   if (expelledChatsRef.current.has(chatId)) {
                     expelledChatsRef.current.delete(chatId);
@@ -3636,6 +4263,13 @@ try {
                 refetchTrigger={refetchTrigger}
                 onRegisterBackHandler={(handler) => { chatRoomBackHandlerRef.current = handler; }}
                 onOpenProfile={handleOpenProfile}
+                onFirstRenderReady={() => {
+                  // E1: revelado de la capa, para TODO acceso a un chat.
+                  handleChatRoomRevealed();
+                  // La señal de "destino listo" del arranque OPEN_CHAT se
+                  // conserva intacta y con su mismo latch por proceso.
+                  if (hadBootDestinationRef.current) handleChatRoomFirstRender();
+                }}
               />
               </React.Suspense>
             </div>
@@ -3727,8 +4361,14 @@ try {
           )}
 
           {/* Tab screen (Chats, Contacts, States, Channels, Rates, Business, Profile) */}
+          {/* FASE E1: `chat_room` sale de la lista de `hidden` a propósito. Chats
+              deja de recibir `display:none` y queda pintado como capa inferior
+              mientras el ChatRoom se prepara y hasta que se revela. El resto de
+              overlays a pantalla completa (qr_scanner, my_qr, add_contact, …)
+              sigue ocultándolo exactamente igual que antes: solo se exceptúa el
+              chat, que es el único caso cuyo destino se compone encima. */}
           <div className={`flex-1 flex flex-col overflow-hidden h-full relative ${
-            currentScreen === "chat_room" || currentScreen === "qr_scanner" || currentScreen === "my_qr" ||
+            currentScreen === "qr_scanner" || currentScreen === "my_qr" ||
             currentScreen === "add_contact" || currentScreen === "add_contact_manual" ||
             currentScreen === "synced_contacts" || currentScreen === "create_group"
               ? "hidden"
@@ -3742,6 +4382,7 @@ try {
                 registeredUserAvatar={registeredUser?.avatar}
                 onNavigateToQr={() => setCurrentScreen("qr_scanner")}
                 onNavigateToProfile={() => setCurrentScreen("profile")}
+                keepChatsVisible={currentScreen === "chat_room"}
               />
 
               {/* STATES TAB — outside main content for stable flex layout */}
@@ -3753,11 +4394,11 @@ try {
 
               {/* Main Tab Content Body */}
               <div className={`flex-1 overflow-y-auto bg-white relative flex flex-col h-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] ${
-                currentScreen === "chats" ? "pt-[170px]" : ""
+                chatsLayerPainted ? "pt-[170px]" : ""
               } ${currentScreen === "states" ? "hidden" : ""}`}>
                 
                 {/* CHATS LIST */}
-                <div className={`flex-1 flex flex-col min-h-0 ${currentScreen === "chats" ? "" : "hidden"}`}>
+                <div className={`flex-1 flex flex-col min-h-0 ${chatsLayerPainted ? "" : "hidden"}`}>
                     {/* Recent Section Header */}
                     <div className="px-4 pt-3.5 pb-[14px]">
                       <div className="flex justify-between items-center px-1 mb-1">
@@ -3851,7 +4492,8 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                               }
                               setSelectedChatId(chat.id);
                               setCurrentScreen("chat_room");
-                              setChats(prev => prev.map(c => c.id === chat.id ? { ...c, unreadCount: 0 } : c));
+                              // Abrir el chat marca el leído de forma persistente.
+                              markChatAsRead(chat.id);
                             }}
                             onTouchStart={onTouchStart}
                             onTouchMove={onTouchMove}
@@ -3885,7 +4527,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                           >
                             <div className="relative shrink-0" style={{ width: 62, height: 62 }}>
                               <div style={{ borderRadius: '62% 38% 55% 45% / 45% 55% 40% 60%', background: 'conic-gradient(from 0deg, #5EB7FF, #C65EFF, #4ADE80, #5EB7FF)', padding: 2 }}>
-                                <div className={`rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden ${chat.isGroup ? "border-2 border-purple-500" : chat.status === "online" ? "border-2 border-emerald-500" : ""}`} style={{ width: 56, height: 56 }}>
+                                <div className={`rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden ${chat.isGroup ? "border-2 border-purple-500" : ""}`} style={{ width: 56, height: 56 }}>
                                   {displayAvatar ? (
                                     <CachedImage src={displayAvatar} alt={chat.name} className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover" loading="lazy" />
                                   ) : chat.isGroup ? (
@@ -3906,9 +4548,6 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                                   )}
                                 </div>
                               </div>
-                              {!chat.isGroup && chat.status === "online" && (
-                                <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-white z-10"></span>
-                              )}
                               {!chat.isGroup && chat.partnerUserId && blockedUsers.some(u => u.id === chat.partnerUserId) && (
                                 <span className="absolute bottom-0 right-0 w-4 h-4 bg-rose-500 rounded-full border-2 border-white z-10 flex items-center justify-center">
                                   <svg xmlns="http://www.w3.org/2000/svg" className="w-2 h-2 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
@@ -3932,7 +4571,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                                 )}
                                 
                                 {chat.unreadCount > 0 ? (
-                                  <span className="bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center shadow-sm shrink-0">
+                                  <span className="bg-[#0a4d52] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center shadow-sm shrink-0">
                                     {chat.unreadCount > 99 ? "99+" : chat.unreadCount}
                                   </span>
                                 ) : (
@@ -5283,7 +5922,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                 )}
 
                 {/* Floating action button with menu */}
-                {currentScreen === "chats" && (
+                {(currentScreen === "chats" || chatsLayerPainted) && (
                   <FabMenu
                     showActionMenu={showActionMenu}
                     setShowActionMenu={setShowActionMenu}

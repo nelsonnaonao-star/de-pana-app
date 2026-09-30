@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { X, Ban, Trash2, UserPlus, Check, ShieldCheck, CheckCircle } from "lucide-react";
@@ -16,12 +16,13 @@ import AttachmentTray from "./chat/overlays/AttachmentTray";
 import PollFormModal from "./chat/overlays/PollFormModal";
 import { useSupabase } from "../contexts/SupabaseContext";
 import CachedImage from "./CachedImage";
-import { getMessages, markAsRead, clearForMe, setEphemeralTimer } from "../services/messages";
+import { getMessages, clearForMe, setEphemeralTimer } from "../services/messages";
+import { enqueueReadReceipt } from "../services/readReceiptQueue";
 import { deleteChat as apiDeleteChat } from "../services/chats";
 import { addContact } from "../services/contacts";
 import { supabase } from "../lib/supabase";
 import toast from "react-hot-toast";
-import { CHAT_BACKGROUNDS } from "./chat/chatConstants";
+import { resolveChatBackdrop } from "./chat/chatBackdrop";
 import { useOfflineQueue } from "../hooks/useOfflineQueue";
 import { useGroupManagement } from "../hooks/chat/useGroupManagement";
 import { useChatRealtime, MessageEventPayload } from "../hooks/chat/useChatRealtime";
@@ -48,14 +49,47 @@ interface ChatRoomProps {
   readReceipts?: boolean;
   onRegisterBackHandler?: (handler: (() => boolean) | null) => void;
   onOpenProfile?: () => void;
+  // Señal de "el contenedor real del ChatRoom ya fue comprometido al árbol".
+  // La usa SOLO el arranque desde notificación (OPEN_CHAT) para no retirar la
+  // cobertura del splash antes de que exista una superficie de ChatRoom que
+  // pintar. Es de solo lectura hacia arriba: no altera navegación ni carga.
+  onFirstRenderReady?: () => void;
 }
 
-export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, onChatMessagesChanged, currentUserId, currentUserName, refetchTrigger, readReceipts = true, onRegisterBackHandler, onOpenProfile }: ChatRoomProps) {
-  console.log(`[RACE-T1] ChatRoom RENDER chat.id=${chat.id} chat.name=${chat.name}`);
-  (window as any).__chatRoomMountTime = Date.now();
+export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, callInProgress, onForwardMessage, onChatDeleted, onMessageDeleted, onChatCleared, onChatUpdated, onChatMessagesChanged, currentUserId, currentUserName, refetchTrigger, readReceipts = true, onRegisterBackHandler, onOpenProfile, onFirstRenderReady }: ChatRoomProps) {
   const { user, profile, contacts, refreshContacts } = useSupabase();
   const uid = currentUserId ?? user?.id;
   const uname = currentUserName ?? profile?.name ?? user?.email;
+
+  // ── "Primer render listo" ───────────────────────────────────────────────────
+  // `useLayoutEffect` corre DESPUÉS del commit y ANTES de que el navegador
+  // pinte; es decir, cuando este punto se alcanza, el contenedor real del
+  // ChatRoom ya está en el árbol y el compositor tiene todo lo que necesita
+  // para producir un frame. Esa es exactamente la garantía que necesita el
+  // arranque OPEN_CHAT para retirar la cobertura del splash sin exponer un
+  // hueco.
+  //
+  // NO espera mensajes, SQLite, red, Supabase, imágenes, stickers ni GIFs:
+  // el punto de señal es el commit del contenedor, no la carga de contenido.
+  // Un ref local garantiza UNA sola emisión por montaje, aunque React vuelva a
+  // renderizar o a rodar efectos (StrictMode, remontajes).
+  const firstRenderSignaledRef = useRef(false);
+  const onFirstRenderReadyRef = useRef(onFirstRenderReady);
+  useEffect(() => {
+    onFirstRenderReadyRef.current = onFirstRenderReady;
+  });
+
+  useLayoutEffect(() => {
+    if (firstRenderSignaledRef.current) return;
+    const cb = onFirstRenderReadyRef.current;
+    if (!cb) return;
+    firstRenderSignaledRef.current = true;
+    // rAF: confirma que el frame ya fue solicitado al compositor, de modo que
+    // al retirar la cobertura el ChatRoom está pintado y no solo comprometido.
+    requestAnimationFrame(() => {
+      onFirstRenderReadyRef.current?.();
+    });
+  }, []);
 
   const { isOnline, queueMessage, isPending } = useOfflineQueue(
     chat.id,
@@ -128,7 +162,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       fileSize: m.document_size || undefined,
       mimeType: m.mime_type || undefined,
       reactions: m.reactions,
-      status: (m.status === "read" ? "read" : m.status === "delivered" ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
+      status: (m.status === "read" ? "read" : m.status === "delivered" || m.delivered_at ? "delivered" : m.sender_id === uid ? "sent" : undefined) as Message["status"],
       forwarded: m.forwarded || false,
       edited: m.edited || false,
       replyToId: m.reply_to_id,
@@ -266,28 +300,70 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     setMessages(prev => safeMergeMessages(prev, serverMessages));
   }, []);
 
+  // ── Persistencia por DELTAS (anti write-amplification) ─────────────────
+  // El fingerprint compara SOLO campos persistibles para decidir qué mensajes
+  // escribir como deltas (nuevo/modificado). La caché ya persistida (snapshot del
+  // padre + filas de SQLite al cargar) se "siembra" para que una re-apertura del
+  // chat NO reescriba filas existentes ante cada cambio del estado.
+  const fingerprint = (m: Message): string => JSON.stringify([
+    m.id, m.type, m.text, m.rawCreatedAt, m.timestamp, m.mediaUrl, m.fileName,
+    m.fileSize, m.duration, m.posterUrl, m.localVideoUrl, m.status, m.edited,
+    m.synced, m.clientTempId, m.replyToId, m.replyToText, m.replyToSender,
+    m.pollQuestion, m.pollOptions, m.price, m.forwarded,
+    m.sender_id, m.senderId, m.is_deleted,
+  ]);
+  const persistedFpRef = useRef<Map<string, string>>(new Map());
+
+  // Sembrar el snapshot heredado del padre (ya persistido en sesiones previas vía
+  // onChatMessagesChanged). Los pendientes (synced=false) NO se siembran: siempre
+  // se escriben, para que un envío en cola jamás se pierda por un skip del delta.
+  useEffect(() => {
+    const seed = Array.isArray(chat.messages) ? chat.messages : [];
+    for (const m of seed) {
+      if (m && m.id && m.synced !== false) persistedFpRef.current.set(m.id, fingerprint(m));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Fetch initial messages: cache-first, then network refresh
   useEffect(() => {
-    console.log(`[RACE-T1] ChatRoom MOUNTED/EFFECT — chat.id=${chat.id} uid=${uid} messages=${messages.length} (+${Date.now() - (window as any).__chatRoomMountTime || '?'}ms from render)`);
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     if (chat.id) {
       setHasMoreOlder(true);
 
-      // 1. Load cached messages immediately (offline-first)
-      messageRepo.getMessages(chat.id).then(async cached => {
+      // 1. Load cached messages immediately (offline-first). reconcileResolvedOrphans
+      // reconcilia ANTES del pintado cualquier temp huérfana con confirmación
+      // verificable, de modo que la primera ronda ya muestra una sola entidad
+      // canónica sin depender del refetch de red.
+      messageRepo.reconcileResolvedOrphans(chat.id).then(async cached => {
         // 1a. Mostrar historial local INMEDIATAMENTE, sin esperar a chat_clears
         // ni a ninguna otra consulta de red (red lenta/caída no bloquea el render).
-        if (cached.length > 0) {
+        // La caché de SQLite recién leída YA está persistida: sembrarla para no
+        // reescribirla (los pendientes synced=false sí se escribirán en el delta).
+        for (const m of cached) {
+          if (m && m.id && m.synced !== false) persistedFpRef.current.set(m.id, fingerprint(m));
+        }
+        // Frontera chat_clears LOCAL: aplicarla ANTES del primer pintado para que
+        // los mensajes borrados no parpadeen al reabrir (el servidor se consulta
+        // abajo solo para detectar borrados remotos NUEVOS).
+        let visible = cached;
+        const localBoundary = await messageRepo.getLocalClearedAt(chat.id);
+        if (localBoundary) {
+          visible = cached.filter(m => {
+            const ts = m.rawCreatedAt || m.timestamp || "";
+            return !ts || ts > localBoundary;
+          });
+        }
+        if (visible.length > 0) {
           // Merge consciente: elimina tems optimistas viejos (relojito) cuando la
           // caché ya tiene la fila confirmada, y no duplica por id.
-          setMessages(prev => safeMergeMessages(prev, cached));
+          setMessages(prev => safeMergeMessages(prev, visible));
           setHasMoreOlder(true);
         }
 
-        // 1b. Frontera cleared_at en SEGUNDO PLANO: se consulta después de
-        // mostrar el caché para no retrasar la aparición del historial.
-        // Si falla la red, se conservan los mensajes locales (best effort).
-        let filtered = cached;
+        // 1b. Frontera cleared_at en SEGUNDO PLANO (solo cambios NUEVOS): si el
+        // servidor devuelve una marca más reciente que la frontera local, se
+        // persiste y re-filtra. La misma marca no se vuelve a consultar/aplicar.
         if (uid) {
           try {
             const { data: clearData } = await supabase
@@ -296,20 +372,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
               .eq("chat_id", chat.id)
               .eq("user_id", uid)
               .maybeSingle();
-            if (clearData?.cleared_at) {
-              filtered = cached.filter(m => {
-                const ts = m.rawCreatedAt || m.timestamp || "";
-                return ts > clearData.cleared_at;
-              });
-              // Ajustar solo los mensajes visibles a la frontera tras recibir
-              // cleared_at (flash temporal aceptado si no hay dato local).
+            const clearedAt = (clearData?.cleared_at as string | undefined);
+            if (clearedAt && (!localBoundary || clearedAt > localBoundary)) {
+              await messageRepo.setLocalClearedAt(chat.id, clearedAt);
               setMessages(prev => prev.filter(m => {
                 const ts = m.rawCreatedAt || m.timestamp || "";
-                return ts > (clearData.cleared_at as string);
+                return !ts || ts > (clearedAt as string);
               }));
             }
           } catch {
-            // If query fails, use unfiltered cache (best effort)
+            // Si la consulta falla, se mantiene la frontera local ya aplicada.
           }
         }
 
@@ -323,13 +395,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             if (apiMessages && apiMessages.length > 0) {
               const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
               mergeServerMessages(mapped);
-              messageRepo.saveMessages(chat.id, mapped);
               const latest = mapped.reduce((max, m) => (m.rawCreatedAt && m.rawCreatedAt > max ? m.rawCreatedAt : max), '');
               if (latest) lastSyncTimestampRef.current = latest;
               if (apiMessages.length < 50) setHasMoreOlder(false);
               console.log('[CHAT] ✅ setMessages called with', mapped.length, 'messages');
             } else {
-              if (filtered.length === 0) setHasMoreOlder(false);
+              if (visible.length === 0) setHasMoreOlder(false);
               console.log('[CHAT] ⚠️ getMessages returned 0 messages');
             }
           }).catch((err) => {
@@ -367,7 +438,11 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
   // Refetch only newer messages when refetchTrigger changes (FCM push received)
   useEffect(() => {
-    if (chat.id && refetchTrigger && refetchTrigger > 0 && messages.length > 0) {
+    // Un trigger válido NUNCA se descarta por `messages.length === 0`: con el
+    // chat recién abierto y aún sin pintar, ese gate consumía el trigger sin
+    // pedir nada y, al ser un contador monótono, ese valor ya no se reintentaba
+    // (deps = [chat.id, refetchTrigger]) hasta salir y volver a entrar al chat.
+    if (chat.id && refetchTrigger && refetchTrigger > 0) {
       getMessages(chat.id, { limit: 50 }).then(apiMessages => {
         if (apiMessages && apiMessages.length > 0) {
           const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
@@ -407,7 +482,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       const older = await getMessages(chat.id, { limit: 50, before: oldestTs });
       if (older && older.length > 0) {
         const mapped = older.map(mapApiMsg).filter(Boolean) as Message[];
-        messageRepo.saveMessages(chat.id, mapped);
+        // Persistencia por deltas: el effect de fingerprint se encarga de escribir
+        // las filas nuevas tras setMessages (evita reescribir el historial completo).
         setMessages(prev => safeMergeMessages(prev, mapped));
         if (older.length < 50) setHasMoreOlder(false);
       } else {
@@ -420,10 +496,21 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     }
   }, [chat.id, loadingOlder, hasMoreOlder]);
 
-  // Save messages to cache whenever they change (immediate, no debounce)
+  // Save to cache via DELTAS: solo se escriben mensajes nuevos/modificados para el
+  // chat. Las filas ya persistidas (sembradas desde el snapshot del padre/SQLite)
+  // no se reescriben ante cada cambio de estado → evita write-amplification.
   useEffect(() => {
-    if (chat.id && messages.length > 0) {
-      messageRepo.saveMessages(chat.id, messages);
+    if (!chat.id || messages.length === 0) return;
+    const dirty: Message[] = [];
+    for (const m of messages) {
+      if (!m?.id) continue;
+      const sig = fingerprint(m);
+      if (persistedFpRef.current.get(m.id) === sig) continue;
+      persistedFpRef.current.set(m.id, sig);
+      dirty.push(m);
+    }
+    if (dirty.length > 0) {
+      messageRepo.saveMessages(chat.id, dirty);
     }
   }, [chat.id, messages]);
 
@@ -566,7 +653,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           return [...prev, mapped];
         });
         if (readReceipts) {
-          markAsRead(chat.id, uid, uname).catch(err => console.error("[ChatRoom] markAsRead on new message failed:", err));
+          enqueueReadReceipt(chat.id, uid, uname);
         }
       } else {
         // Eco de un mensaje propio. Reconciliación INSTANTÁNEA por temp_id:
@@ -645,6 +732,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           }
           if (updated.status === "read" && m.status !== "read") {
             copy.status = "read"; changed = true;
+          } else if (updated.delivered_at && m.status !== "read" && m.status !== "delivered") {
+            copy.status = "delivered"; changed = true;
           }
           if (updated.edited && updated.text !== m.text) {
             copy.text = updated.text; copy.edited = true; changed = true;
@@ -832,17 +921,38 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   };
 
   // ── Auto-scroll to bottom on new messages or chat open ──
-  const scrollToBottom = () => {
-    if (virtuosoRef.current && messages.length > 0) {
-      virtuosoRef.current.scrollToIndex({ index: messages.length - 1, behavior: "auto" });
+  const scrollToBottom = useCallback(() => {
+    if (virtuosoRef.current && dedupedMessages.length > 0) {
+      virtuosoRef.current.scrollToIndex({ index: dedupedMessages.length - 1, behavior: "auto" });
     }
-  };
+  }, [dedupedMessages.length]);
+
+  // Al ABRIR el chat se aterriza SIEMPRE abajo, aunque atBottomRef esté en false.
+  // Virtuoso arranca arriba por defecto y dispara atBottomStateChange(false) en
+  // su primer paint (los effects del hijo corren antes que los del padre), así
+  // que sin este scroll forzado el ref guard de abajo se quedaba en false y el
+  // chat jamás llegaba al último mensaje.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (virtuosoRef.current && dedupedMessages.length > 0) {
+        virtuosoRef.current.scrollToIndex({ index: dedupedMessages.length - 1, behavior: "auto" });
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.id]);
+
   // Solo pega el scroll abajo si ya estás abajo; si estás leyendo hacia arriba,
-  // no te brinca (evita el parpadeo de "desaparece y aparece").
+  // no te brinca (evita el parpadeo de "desaparece y aparece"). Excepción: el
+  // mensaje PROPIO siempre se muestra (optimista al enviar), sin importar dónde
+  // estés scrolleando.
   const atBottomRef = useRef(true);
 
   useEffect(() => {
-    if (messages.length > 0 && atBottomRef.current) {
+    if (messages.length === 0) return;
+    const last = dedupedMessages[dedupedMessages.length - 1];
+    const ownMessage = last?.sender === "me";
+    if (atBottomRef.current || ownMessage) {
       const timer = setTimeout(scrollToBottom, 50);
       return () => clearTimeout(timer);
     }
@@ -932,11 +1042,16 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     };
   }, [recordingType]);
 
-  // Read receipts on mount and when new messages arrive
+  // Read receipts on mount, when new messages arrive, and on return to foreground
   useEffect(() => {
-    if (chat.id && uid && uname && readReceipts) {
-      markAsRead(chat.id, uid, uname).catch(err => console.error("[ChatRoom] markAsRead on mount failed:", err));
-    }
+    if (!(chat.id && uid && uname && readReceipts)) return;
+    const mark = () => enqueueReadReceipt(chat.id, uid, uname);
+    mark();
+    const onVis = () => {
+      if (document.visibilityState === "visible") mark();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
   }, [chat.id, uid, uname, readReceipts]);
 
 
@@ -1056,32 +1171,19 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
   }, [editingMessage, replyTo, showAttachments, activeReactionMenu, showSearch, showGifPicker, pendingBg, showCustomizer, showDeleteConfirm, showGroupInfo, showDropdown, onRegisterBackHandler]);
 
 
-  const isCustomBg = selectedBgId === "custom" && !!customBgImage;
-  const bgPreset = isCustomBg ? undefined : CHAT_BACKGROUNDS.find(bg => bg.id === selectedBgId);
-  const rawBg = isCustomBg
-    ? `url("${customBgImage}") center/cover no-repeat`
-    : (bgPreset?.value || "#f8fafc");
-  const isPatternBg = rawBg.startsWith("pattern:");
-  const isGradientBg = rawBg.startsWith("linear-gradient");
-  const isImageBg = rawBg.startsWith("url");
-
-  const patternParts = isPatternBg ? rawBg.replace("pattern:", "").split("|") : [];
-  const patternTheme = (patternParts[0] || "stars") as "stars" | "bubbles" | "dots" | "constellation" | "waves" | "sparkle";
-  const patternFrom = patternParts[1] || "blue";
-  const patternTo = patternParts[2] || "purple";
-
-  const containerBgStyle: React.CSSProperties = isPatternBg
-    ? { background: "transparent" }
-    : isGradientBg
-      ? { backgroundImage: rawBg }
-      : isImageBg
-        ? {
-            backgroundImage: rawBg.replace(/ center\/cover no-repeat$/, ''),
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            backgroundRepeat: "no-repeat",
-          }
-        : { backgroundColor: rawBg };
+  // Resolución del wallpaper. La lógica vive en `chat/chatBackdrop.ts` para que
+  // el fallback de espera de PhoneSimulator resuelva EXACTAMENTE el mismo fondo
+  // sin duplicarla. Sustituye 1:1 al bloque que estaba aquí; el resultado
+  // (containerBgStyle / isPatternBg / patternTheme / patternFrom / patternTo y
+  // la condición del overlay oscuro) es idéntico, así que el ChatRoom no cambia.
+  const {
+    containerBgStyle,
+    isPatternBg,
+    patternTheme,
+    patternFrom,
+    patternTo,
+    needsDarkOverlay,
+  } = resolveChatBackdrop(selectedBgId, customBgImage);
 
   return (
     <div 
@@ -1099,7 +1201,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         />
       )}
       {/* Subtle dark overlay only for dark Unsplash backgrounds */}
-      {!isPatternBg && !isGradientBg && selectedBgId !== "default" && selectedBgId !== "wepa" && selectedBgId !== "wepa_light" && selectedBgId !== "wepa_neon" && selectedBgId !== "minimal_white" && selectedBgId !== "olive" && selectedBgId !== "pink" && (
+      {needsDarkOverlay && (
         <div className="absolute inset-0 bg-black/15 pointer-events-none z-0"></div>
       )}
 
@@ -1331,6 +1433,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
           ref={virtuosoRef}
           className="h-full"
           data={showSearch && searchQuery.trim() ? filteredMessages : dedupedMessages}
+          computeItemKey={(_, msg) => msg.id}
+          initialTopMostItemIndex={dedupedMessages.length > 0 ? dedupedMessages.length - 1 : 0}
           followOutput="smooth"
           atBottomStateChange={(isAtBottom) => { atBottomRef.current = isAtBottom; }}
           startReached={() => {
@@ -1365,7 +1469,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                 <>
                 {senderLabel && (
                   <div className="flex px-1.5 mb-1">
-                    <span className="text-[11px] font-bold" style={{ color: senderColor(msg.sender_id || msg.senderId) }}>{senderLabel}</span>
+                    <span
+                      className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-white/70 backdrop-blur-sm shadow-sm"
+                      style={{ color: senderColor(msg.sender_id || msg.senderId) }}
+                    >
+                      {senderLabel}
+                    </span>
                   </div>
                 )}
                 <MessageBubbleWithCache
@@ -1422,7 +1531,6 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 onSelect={(url, type) => {
               const now = Date.now();
               if (now - pickerLastSelectRef.current < 500) {
-                console.warn("[GIF] onSelect ignorado (doble disparo)", { url, type });
                 return;
               }
               pickerLastSelectRef.current = now;

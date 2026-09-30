@@ -1,6 +1,11 @@
 const CACHE_NAME = "chat-media-cache";
 const blobUrlMap = new Map<string, string>();
 
+// Dedupe de descargas EN VUELO: si dos mensajes con la misma URL se resuelven a
+// la vez (p.ej. GIF/sticker recién enviado en un chat con muchos mensajes), solo
+// un fetch/cache.put ocurre; el resto espera la misma promesa y comparte el blob.
+const inflightMap = new Map<string, Promise<string>>();
+
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -31,32 +36,42 @@ export async function getCachedMedia(url: string): Promise<string> {
   const existing = blobUrlMap.get(url);
   if (existing) return existing;
 
-  try {
-    const cache = await caches.open(CACHE_NAME);
-    const cachedResponse = await cache.match(url);
+  const inflight = inflightMap.get(url);
+  if (inflight) return inflight;
 
-    if (cachedResponse) {
-      const blob = await cachedResponse.blob();
+  const promise = (async (): Promise<string> => {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      const cachedResponse = await cache.match(url);
+
+      if (cachedResponse) {
+        const blob = await cachedResponse.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        blobUrlMap.set(url, blobUrl);
+        ensureCacheSize();
+        return blobUrl;
+      }
+
+      const fetchResponse = await fetchWithTimeout(url, { cache: "force-cache" });
+      if (!fetchResponse.ok) return url;
+
+      const cacheClone = fetchResponse.clone();
+      cache.put(url, cacheClone);
+
+      const blob = await fetchResponse.blob();
       const blobUrl = URL.createObjectURL(blob);
       blobUrlMap.set(url, blobUrl);
       ensureCacheSize();
       return blobUrl;
+    } catch {
+      return url;
+    } finally {
+      inflightMap.delete(url);
     }
+  })();
 
-    const fetchResponse = await fetchWithTimeout(url, { cache: "force-cache" });
-    if (!fetchResponse.ok) return url;
-
-    const cacheClone = fetchResponse.clone();
-    cache.put(url, cacheClone);
-
-    const blob = await fetchResponse.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    blobUrlMap.set(url, blobUrl);
-    ensureCacheSize();
-    return blobUrl;
-  } catch {
-    return url;
-  }
+  inflightMap.set(url, promise);
+  return promise;
 }
 
 export function getCachedMediaSync(url: string): string | null {

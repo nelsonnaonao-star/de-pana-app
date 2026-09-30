@@ -281,6 +281,7 @@ router.post('/webhook', async (req, res) => {
     }
 
     let senderName = 'RED ON';
+    let senderAvatar = '';
     try {
       const { data: profile, error } = await supabase
         .from('profiles')
@@ -289,6 +290,7 @@ router.post('/webhook', async (req, res) => {
         .single();
       if (!error && profile) {
         senderName = profile.name || 'RED ON';
+        senderAvatar = profile.avatar_url || '';
       }
     } catch (err) {
       // ignore
@@ -406,6 +408,7 @@ router.post('/webhook', async (req, res) => {
                   type: 'message',
                   chatId: chat_id,
                   contactId: sender_id,
+                  avatarUrl: senderAvatar || undefined,
                   is_group: isGroup ? 'true' : 'false',
                   msgType: msgType || undefined,
                   fileUrl: file_url || undefined,

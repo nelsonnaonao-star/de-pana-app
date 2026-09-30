@@ -7,6 +7,7 @@ interface SimulatorTabHeaderProps {
   registeredUserAvatar?: string;
   onNavigateToQr: () => void;
   onNavigateToProfile: () => void;
+  keepChatsVisible?: boolean;
 }
 
 export default function SimulatorTabHeader({
@@ -16,11 +17,15 @@ export default function SimulatorTabHeader({
   registeredUserAvatar,
   onNavigateToQr,
   onNavigateToProfile,
+  keepChatsVisible,
 }: SimulatorTabHeaderProps) {
   return (
     <>
-      {currentScreen === "chats" && (
-        <div className="absolute top-0 left-0 right-0 text-white px-5 pt-6 pb-12 overflow-hidden z-20 h-[170px] pointer-events-none">
+      {(currentScreen === "chats" || keepChatsVisible) && (
+        <div
+          className="absolute top-0 left-0 right-0 text-white px-5 pt-6 pb-12 overflow-hidden z-20 h-[170px] pointer-events-none"
+          style={{ paddingTop: "calc(1.5rem + env(safe-area-inset-top))" }}
+        >
           <svg
             viewBox="0 0 320 180"
             className="absolute inset-0 w-full h-full z-0 select-none"
@@ -61,49 +66,67 @@ export default function SimulatorTabHeader({
               placeholder="Search"
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              className="w-full bg-white text-slate-800 placeholder-slate-400 text-xs pl-10 pr-4 py-2.5 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100 outline-none transition-all focus:ring-2 focus:ring-teal-400/20"
+              className="w-full bg-white text-slate-800 placeholder-slate-500 text-xs pl-10 pr-4 py-2.5 rounded-full shadow-[0_4px_12px_rgba(0,0,0,0.15)] border border-slate-100 outline-none transition-all focus:ring-2 focus:ring-teal-400/20"
             />
           </div>
         </div>
       )}
 
       {currentScreen === "states" && (
-        <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+        <div
+          className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left"
+          style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top))" }}
+        >
           <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Momentos en Wepa</h3>
           <p className="text-[10px] text-teal-100/85">Visualiza y responde a estados</p>
         </div>
       )}
 
       {currentScreen === "channels" && (
-        <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+        <div
+          className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left"
+          style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top))" }}
+        >
           <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Canales Informativos</h3>
           <p className="text-[10px] text-teal-100/85">Sigue canales seguros y oficiales</p>
         </div>
       )}
 
       {currentScreen === "calls" && (
-        <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+        <div
+          className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left"
+          style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top))" }}
+        >
           <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Historial de Llamadas</h3>
           <p className="text-[10px] text-teal-100/85">Llamadas recientes de audio y video</p>
         </div>
       )}
 
       {currentScreen === "rates" && (
-        <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+        <div
+          className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left"
+          style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top))" }}
+        >
           <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Tasas de Cambio</h3>
           <p className="text-[10px] text-teal-100/85">Calculadora de divisas oficial</p>
         </div>
       )}
 
       {currentScreen === "business" && (
-        <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+        <div
+          className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left"
+          style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top))" }}
+        >
           <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Modo Emprendedor</h3>
           <p className="text-[10px] text-teal-100/85">Folletería digital interactiva</p>
         </div>
       )}
 
       {currentScreen === "profile" && (
-        <div className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left">
+        <div
+          className="bg-[#0a4d52] text-white px-5 py-5 shrink-0 text-left"
+          style={{ paddingTop: "calc(1.25rem + env(safe-area-inset-top))" }}
+        >
           <h3 className="text-sm font-bold uppercase tracking-wider text-teal-300">Tu Perfil Seguro</h3>
           <p className="text-[10px] text-teal-100/85">Datos e información de sesión</p>
         </div>

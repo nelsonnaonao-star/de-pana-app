@@ -9,7 +9,7 @@ import {
 import { Share } from "@capacitor/share";
 import { Capacitor } from "@capacitor/core";
 import { Chat, Message } from "../types";
-import CachedImage from "./CachedImage";
+import CachedImage, { precacheImage } from "./CachedImage";
 import MediaEditor from "./MediaEditor";
 import EmprendedorAccessModal from "./EmprendedorAccessModal";
 import { supabase } from "../lib/supabase";
@@ -897,6 +897,7 @@ export default function BusinessPanel({
                         setUploadingImage(true);
                         try {
                           const url = await uploadChatMedia(file, "flyers");
+                          await precacheImage(url);
                           setUpFlyerUrl(url);
                         } catch (err) {
                           console.error("Error uploading flyer image:", err);

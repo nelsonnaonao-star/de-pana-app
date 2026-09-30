@@ -2,6 +2,7 @@ import { db } from "../DatabaseService";
 import { getItem, setItem, removeItem, getKeys } from "../../storageService";
 import type { Message } from "../../../types";
 import { logger } from "../../../lib/logger";
+import { getReconciledSavedId } from "../../../lib/reconciledIds";
 import { editMessage as apiEditMessage } from "../../messages";
 
 const CACHE_PREFIX = "redon_cache_msgs_";
@@ -30,6 +31,14 @@ async function getPendingEdits(): Promise<PendingEdit[]> {
   }
   return pendingEditsCache;
 }
+
+// ── Frontera local de chat_clears ────────────────────────────────────────
+// Persiste una copia LOCAL de la frontera de borrado por chat. Se usa al reabrir
+// para filtrar el historial cacheado ANTES del primer pintado (evita que los
+// mensajes borrados remotos parpadeen) y para saber si el servidor tiene una
+// marca más reciente que aplicar. Es un complemento aditivo: getMessages() NO
+// filtra, para no cambiar el comportamiento de sus otros llamadores.
+const CLEARED_PREFIX = "redon_cleared_at_";
 
 function toRow(msg: Message, chatId: string): Record<string, unknown> {
   return {
@@ -138,6 +147,25 @@ function rowValues(msg: Message, chatId: string): unknown[] {
 }
 
 export class MessageRepository {
+  /**
+   * Una temp (id con prefijo temp_ o msg_, pendiente, synced=false) solo se descarta del resultado
+   * cuando hay EVIDENCIA de que ya corresponde a un mensaje confirmado:
+   *   (A) una fila confirmada que referencia explícitamente este temp
+   *       (clientTempId/temp_id devuelto por el servidor), o
+   *   (B) el mapa tempId->savedId resolvió a una fila confirmada presente.
+   * Los pendientes legítimos SIN confirmación jamás se eliminan de la vista.
+   */
+  private isResolvedTemp(chatId: string, m: Message, all: Message[]): boolean {
+    if (m.synced !== false) return false;
+    if (m.sender !== "me") return false;
+    const id = m.id;
+    if (!id || !(id.startsWith("temp_") || id.startsWith("msg_"))) return false;
+    if (all.some((x) => x.id !== id && x.clientTempId === id && x.synced !== false)) return true;
+    const savedId = getReconciledSavedId(chatId, id);
+    if (savedId && all.some((x) => x.id === savedId && x.synced !== false)) return true;
+    return false;
+  }
+
   async getMessages(chatId: string): Promise<Message[]> {
     let sqliteRows: Message[] | null = null;
     if (db.ready) {
@@ -155,18 +183,28 @@ export class MessageRepository {
     // SQLite puede no tener los pendientes si no estaba listo al enviar (o si
     // executeSet falló de forma transitoria). Fusionar garantiza que un mensaje
     // local/pendiente jamás desaparezca al reabrir la app.
-    const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
-    const cache = Array.isArray(raw) ? raw : [];
+    let cache: Message[] = [];
+    try {
+      const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+      cache = Array.isArray(raw) ? raw : [];
+    } catch (e) {
+      logger.warn("[MessageRepo] getMessages cache read error", { error: e });
+    }
+    // Evidencia combinada (SQLite + idb): idéntico criterio conservador en ambos
+    // almacenes para no devolver una temp con confirmación verificable.
+    const evidence = [...(sqliteRows ?? []), ...cache];
     if (sqliteRows !== null) {
-      const seen = new Set(sqliteRows.map((m) => m.id));
+      const canonical = sqliteRows.filter((m) => !this.isResolvedTemp(chatId, m, evidence));
+      const seen = new Set(canonical.map((m) => m.id));
       const pendientes = cache.filter(
         (m) =>
           !seen.has(m.id) &&
           (m.synced === false ||
             m.status === "sending" ||
-            m.status === "error")
+            m.status === "error") &&
+          !this.isResolvedTemp(chatId, m, evidence)
       );
-      const merged = [...sqliteRows, ...pendientes];
+      const merged = [...canonical, ...pendientes];
       merged.sort((a, b) => {
         const ta = a.rawCreatedAt || a.timestamp || "";
         const tb = b.rawCreatedAt || b.timestamp || "";
@@ -174,7 +212,7 @@ export class MessageRepository {
       });
       return merged;
     }
-    return cache;
+    return cache.filter((m) => !this.isResolvedTemp(chatId, m, evidence));
   }
 
   async saveMessages(chatId: string, messages: Message[]): Promise<void> {
@@ -473,56 +511,188 @@ export class MessageRepository {
   }
 
   /**
+   * Espera a que SQLite esté listo (si no lo está) con un tope acotado. Evita
+   * la carrera de "la BD aún no arrancó al confirmar el envío".
+   */
+  private async waitForDbReady(maxMs = 8000): Promise<boolean> {
+    if (db.ready) return true;
+    await db.whenReady(maxMs);
+    return db.ready;
+  }
+
+  /**
+   * Sustitución tempId -> savedId en SQLite, atómica e idempotente:
+   * - Captura el rowid de la fila temp ANTES del UPDATE; tras mover a savedId
+   *   borra cualquier gemela (eco previo / delta de caché) conservando la fila
+   *   recién reconciliada, no la más vieja.
+   * - Sí la fila temp ya no existe (instancia ya reconciliada), solo deduplica
+   *   gemelas de savedId. Ejecutarla N veces es seguro (idempotente).
+   * - Reintenta ante fallos transitorios (carrera de escrituras / busy).
+   * - NO calles errores técnicos: si tras los reintentos falla, lanza para que
+   *   el llamador (que hace .catch y log) lo vea.
+   */
+  private async reconcileSqlite(chatId: string, tempId: string, saved: Message): Promise<void> {
+    const row = toRow(saved, chatId);
+    const cols = INSERT_COLS.filter((c) => c !== "id");
+    const values = cols.map((c) => row[c]);
+    const UPDATE_SQL = `UPDATE messages SET id = ?, ${cols.map((c) => `${c} = ?`).join(", ")} WHERE chat_id = ? AND id = ?`;
+    const DEDUPE_SQL =
+      "DELETE FROM messages WHERE chat_id = ? AND id = ? AND rowid NOT IN (SELECT MIN(rowid) FROM messages WHERE chat_id = ? AND id = ?)";
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const found = await db.query(
+          "SELECT rowid FROM messages WHERE chat_id = ? AND id = ? LIMIT 1",
+          [chatId, tempId]
+        );
+        const movedRowid = found.length > 0 && found[0].rowid != null ? Number(found[0].rowid) : null;
+        const ok = await db.run(UPDATE_SQL, [saved.id, ...values, chatId, tempId]);
+        if (!ok) throw new Error(`reconcileTemp UPDATE falló (intento ${attempt}/3)`);
+        const dedupeOk = movedRowid !== null
+          ? await db.run("DELETE FROM messages WHERE chat_id = ? AND id = ? AND rowid != ?", [chatId, saved.id, movedRowid])
+          : await db.run(DEDUPE_SQL, [chatId, saved.id, chatId, saved.id]);
+        if (!dedupeOk) throw new Error("reconcileTemp dedupe falló");
+        return;
+      } catch (e) {
+        lastError = e;
+        logger.warn("[MessageRepo] reconcileSqlite intento fallido", { attempt, error: e });
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 150 * attempt));
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Refleja la reconciliación en la caché idb eliminando la temp y dejando UNA
+   * sola entrada canónica (dedupe por id dentro de la caché).
+   */
+  private async reconcileCache(chatId: string, tempId: string, saved: Message): Promise<void> {
+    const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+    if (!Array.isArray(raw)) return;
+    const next = raw.filter((r) => r.id !== tempId && r.id !== saved.id);
+    next.push(saved);
+    next.sort((a, b) => {
+      const ta = a.rawCreatedAt || a.timestamp || "";
+      const tb = b.rawCreatedAt || b.timestamp || "";
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
+    await setItem(`${CACHE_PREFIX}${chatId}`, next.slice(-MAX_CACHED));
+  }
+
+  /**
    * SUSTITUCIÓN ATÓMICA DE ID: reemplaza en el MISMO STATEMENT el tempId por el
    * savedId de Supabase (estado sent, synced = 1). Cualquier re-lectura de SQLite
    * a partir de entonces devuelve el id REAL y sent, sin ventana donde el registro
    * "retroceda" a tempId/synced=false. Se elimina además cualquier fila gemela
    * (un eco previo pudo insertar el savedId mientras el temp aún existía).
+   *
+   * La caché idb SIEMPRE se reconcilia aunque SQLite falle (es la red de fallback).
+   * El SQLite guarda su fallo técnico hasta el final: si tras reintentos sigue
+   * fallando, se lanza para visibilidad real (los llamadores hacen .catch + log).
    */
   async reconcileTemp(chatId: string, tempId: string, saved: Message): Promise<void> {
-    // NUNCA debe rechazar ni bloquear al llamador (si el UPDATE falla, la UI ya se
-    // marcó sent vía React; SQLite converge con la siguiente escritura/lectura).
-    if (db.ready) {
+    const ready = await this.waitForDbReady();
+    let sqliteError: unknown = null;
+    if (ready) {
       try {
-        const row = toRow(saved, chatId);
-        const cols = INSERT_COLS.filter((c) => c !== "id").map((c) => `${c} = ?`);
-        const values = INSERT_COLS.filter((c) => c !== "id").map((c) => row[c]);
-        await db.run(
-          `UPDATE messages SET id = ?, ${cols.join(", ")} WHERE chat_id = ? AND id = ?`,
-          [saved.id, ...values, chatId, tempId]
-        );
+        await this.reconcileSqlite(chatId, tempId, saved);
       } catch (e) {
-        logger.warn("[MessageRepo] reconcileTemp UPDATE error", { error: e });
+        sqliteError = e;
+        logger.warn("[MessageRepo] reconcileTemp SQLite falló tras reintentos", {
+          error: e,
+          chatId,
+          tempId,
+          savedId: saved.id,
+        });
       }
-      // Dedupe de filas gemelas: si Realtime ya insertó el savedId mientras el
-      // temp existía, se conserva UNA sola fila. Si el UPDATE no afectó filas
-      // (temp ya favorecido), solo nos aseguramos de no dejar duplicados.
-      try {
-        await db.run(
-          `DELETE FROM messages WHERE id = ? AND chat_id = ? AND rowid NOT IN (SELECT MIN(rowid) FROM messages WHERE id = ? AND chat_id = ?)`,
-          [saved.id, chatId, saved.id, chatId]
-        );
-      } catch (e) {
-        logger.warn("[MessageRepo] reconcileTemp dedupe error", { error: e });
-      }
+    } else {
+      logger.warn("[MessageRepo] reconcileTemp sin SQLite listo (solo caché)", { chatId, tempId });
     }
     try {
-      const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
-      if (raw && raw.length > 0) {
-        const idx = raw.findIndex((r) => r.id === tempId);
-        if (idx !== -1) {
-          raw[idx] = saved;
-          await setItem(`${CACHE_PREFIX}${chatId}`, raw);
-        } else {
-          await setItem(`${CACHE_PREFIX}${chatId}`, raw.filter((r) => r.id !== tempId));
-        }
-      }
+      await this.reconcileCache(chatId, tempId, saved);
     } catch (e) {
       logger.warn("[MessageRepo] reconcileTemp cache error", { error: e });
     }
     // Si el usuario editó el mensaje mientras su envío seguía en curso (temp sin
     // reconciliar), aplicar el edit pendiente sobre la fila ya confirmada.
     await this.consumePendingEdit(chatId, tempId, saved);
+    if (sqliteError) throw sqliteError;
+  }
+
+  private isPendingTemp(m: Message): boolean {
+    if (m.synced !== false) return false;
+    if (m.sender !== "me") return false;
+    const id = m.id;
+    return !!id && (id.startsWith("temp_") || id.startsWith("msg_"));
+  }
+
+  /**
+   * Barrido de huérfanas al REABRIR el chat, ANTES del primer pintado local.
+   * Solo se reconcilia/elimina una temp pendiente cuando existe evidencia de
+   * confirmación:
+   *   - una fila confirmada que referencia este temp (clientTempId/temp_id), o
+   *   - el mapa tempId->savedId resolvió a una fila confirmada presente, o
+   *   - el mapa tempId->savedId registrado (POST confirmado) sin twin local ->
+   *     se CONVIERTE la temp en la identidad canónica (id=savedId, synced=true).
+   * Los pendientes legítimos sin evidencia se conservan intactos.
+   * Devuelve la lista canónica (mismo resultado consistente que getMessages).
+   */
+  async reconcileResolvedOrphans(chatId: string): Promise<Message[]> {
+    if (!db.ready) await db.whenReady(1500);
+
+    try {
+      let sqlite: Message[] = [];
+      if (db.ready) {
+        try {
+          const rows = await db.query("SELECT * FROM messages WHERE chat_id = ?", [chatId]);
+          sqlite = rows.map(fromRow).filter((m): m is Message => m !== null);
+        } catch (e) {
+          logger.warn("[MessageRepo] reconcileResolvedOrphans sqlite read error", { error: e });
+        }
+      }
+      let cache: Message[] = [];
+      try {
+        const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
+        cache = Array.isArray(raw) ? raw : [];
+      } catch (e) {
+        logger.warn("[MessageRepo] reconcileResolvedOrphans cache read error", { error: e });
+      }
+      // Evidencia combinada (SQLite + idb) sin duplicados por id (prioridad SQLite).
+      const byId = new Map<string, Message>();
+      for (const m of [...sqlite, ...cache]) {
+        if (m && m.id && !byId.has(m.id)) byId.set(m.id, m);
+      }
+      const all = Array.from(byId.values());
+
+      for (const temp of all) {
+        if (!this.isPendingTemp(temp)) continue;
+        const savedId = getReconciledSavedId(chatId, temp.id as string);
+        const twin = all.find(
+          (x) =>
+            x.id !== temp.id &&
+            ((savedId && x.id === savedId) || x.clientTempId === temp.id)
+        );
+        const confirmedTwin = twin && twin.synced !== false ? twin : undefined;
+        if (confirmedTwin) {
+          // Evidencia inequívoca: la temp ya corresponde a una fila confirmada.
+          await this.deleteMessage(chatId, temp.id as string);
+          if (db.ready) await this.upsertMessage(chatId, confirmedTwin);
+        } else if (savedId) {
+          // POST confirmado (mapa tempId->savedId) sin twin local: convertir la
+          // fila pendiente en la identidad canónica (idempotente).
+          const canonical: Message = { ...temp, id: savedId, status: "sent" as const, synced: true };
+          try {
+            await this.reconcileTemp(chatId, temp.id as string, canonical);
+          } catch (e) {
+            logger.warn("[MessageRepo] reconcileResolvedOrphans convert error", { error: e, tempId: temp.id });
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn("[MessageRepo] reconcileResolvedOrphans error", { error: e });
+    }
+
+    return this.getMessages(chatId);
   }
 
   /**
@@ -601,6 +771,27 @@ export class MessageRepository {
       }
     }
     await removeItem(`${CACHE_PREFIX}${chatId}`);
+  }
+
+  async getLocalClearedAt(chatId: string): Promise<string | undefined> {
+    try {
+      const val = await getItem<string>(CLEARED_PREFIX + chatId);
+      return typeof val === "string" && val.length > 0 ? val : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async setLocalClearedAt(chatId: string, clearedAt: string | undefined): Promise<void> {
+    try {
+      if (clearedAt) {
+        await setItem(CLEARED_PREFIX + chatId, clearedAt);
+      } else {
+        await removeItem(CLEARED_PREFIX + chatId);
+      }
+    } catch {
+      // Best effort: sin frontera local el historial simplemente se muestra completo.
+    }
   }
 }
 

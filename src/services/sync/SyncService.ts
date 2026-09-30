@@ -5,6 +5,7 @@ import { supabase } from "../../lib/supabase";
 import { messageRepo } from "../database/repositories/MessageRepository";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
 import { sendMessage as apiSendMessage } from "../messages";
+import { flushPendingReadReceipts } from "../readReceiptQueue";
 import { uploadChatMedia } from "../storage";
 import { Capacitor } from "@capacitor/core";
 import { logger } from "../../lib/logger";
@@ -108,6 +109,12 @@ class SyncService {
 
     window.addEventListener("online", this.onBrowserOnline);
     this.setupRealtimeOracle();
+
+    // Poblar el contexto de usuario REAL desde el primer momento. NO se espera
+    // (await): si el fetch a Supabase cuelga, el timer y el drenaje que ya están
+    // en marcha no deben bloquearse. cachedUid se refuerza además con cada
+    // queueMessage(uid).
+    this.getCurrentUid().catch(() => {});
 
     if (Capacitor.getPlatform() !== "web") {
       try {
@@ -271,6 +278,9 @@ class SyncService {
    */
   requestFlush(abortActive = false): void {
     dbg("requestFlush called; abortActive=", abortActive, "processing=", this.processing, "flushRequested=", this.flushRequested);
+    // Recibos de lectura pendientes: aprovechar cada señal de red/foreground
+    // para reintentar el markAsRead fallido (fire-and-forget interno).
+    flushPendingReadReceipts();
     if (abortActive) {
       // Señal real recuperada: romper el sleep de backoff en curso (clearTimeout
       // inmediato), resetear throttle y marcar isNetworkRecovery para que el
@@ -301,6 +311,10 @@ class SyncService {
    * Si falla, queda en cola local con retries y se reintenta automáticamente al volver la red.
    */
   async queueMessage(chatId: string, message: any, ownerUserId?: string): Promise<void> {
+    // El UID del llamador es la fuente de verdad del contexto de la cola:
+    // mantener cachedUid actualizado para que getAllUnsynced filtre por cuenta
+    // y sendSingle no envíe pendientes de otra sesión.
+    if (ownerUserId) this.cachedUid = ownerUserId;
     const tempId = message.id;
     const queued: QueuedMessage = {
       tempId,
@@ -430,6 +444,19 @@ class SyncService {
         logger.info(`[SyncService] processing ${pending.length} legacy pending messages`);
         for (const item of pending) {
           try {
+            // Guarda de identidad (cross-account): si conocemos al usuario actual
+            // y el sender_id del pendiente pertenece a OTRA cuenta, la fila NO se
+            // envía (quedaría firmada como otra sesión), NO se borra, NO se
+            // convierte. Se omite y se deja pendiente: el comportamiento seguro
+            // existente (no-tocar) es el que mantiene la consistencia.
+            if (
+              this.cachedUid &&
+              item.message.sender_id &&
+              item.message.sender_id !== this.cachedUid
+            ) {
+              dbg("processQueue: skip pendiente de otra cuenta (sender_id != cachedUid)", item.message.id, item.message.sender_id, "!=", this.cachedUid);
+              continue;
+            }
             // Saltar media blob: no existe fuera de la sesión y su reintento
             // corrompería el mensaje (envío sin audio/imagen).
             // EXCEPCIÓN: voice_note/audio → intentar re-upload desde IDB.
@@ -469,9 +496,18 @@ class SyncService {
             // El temp ya fue CONFIRMADO en el servidor (tempId->savedId registrado
             // al triunfar el POST o al reconciliar su eco de Realtime). Es un
             // "temp fantasma" que quedó synced:false por una carrera de caché:
-            // reenviarlo crearía una fila NUEVA (duplicado). Jamás reenviar.
-            if (getReconciledSavedId(item.chatId, item.message.id)) {
-              dbg("processQueue: skip ya reconciliado (no reenviar)", item.message.id);
+            // reenviarlo crearía una fila NUEVA (duplicado). Jamás reenviar; pero
+            // tampoco dejar el huérfano abandonado: completar la reconciliación
+            // local (idempotente) para converger a la identidad canónica.
+            const savedId = getReconciledSavedId(item.chatId, item.message.id);
+            if (savedId) {
+              dbg("processQueue: temp ya reconciliado -> limpieza local (no reenviar)", item.chatId, item.message.id, "->", savedId);
+              this.reconcileQuietly(item.chatId, item.message.id, {
+                ...(item.message as any),
+                id: savedId,
+                status: "sent",
+                synced: true,
+              });
               continue;
             }
             // Throttle: no reintentar el mismo mensaje más de una vez por minuto.
@@ -530,16 +566,31 @@ class SyncService {
       dbg("sendSingle: ya reconciliado -> no reenviar", msg.id, "->", alreadySent);
       return { id: alreadySent };
     }
-    // Los mensajes pendientes en cola pueden haberse guardado sin sender_id
-    // (payloads de builds anteriores o caché idb desactualizada). El servidor
-    // rechaza con "chat_id y sender_id requeridos". Si falta sender_id,
-    // SKIP en vez de impersonar al usuario actual (previene corrupción de
-    // identidad cuando la cola tiene mensajes de otra sesión).
-    const senderId = (msg.sender_id as string) || (msg.senderId as string);
-    if (!senderId) {
-      dbg("sendSingle: skip message without sender_id", msg.id);
-      return null;
-    }
+    // Catch-all de último recurso: una excepción inesperada que NO sea
+    // HTTP/network (parseo, media, estado de la app) NUNCA debe marcar el
+    // mensaje como synced, ni borrarlo, ni regenerar client_id/temp_id. Solo se
+    // registra una vez para diagnóstico y se devuelve null: el pendiente sigue
+    // en cola (synced=0) y el mecanismo de retry/backoff existente lo reintenta.
+    // El check de sender_id ocurría dentro del try: si cachedUid existe y el
+    // sender_id no coincide, NO se envía (pertenece a otra cuenta).
+    try {
+      // Los mensajes pendientes en cola pueden haberse guardado sin sender_id
+      // (payloads de builds anteriores o caché idb desactualizada). El servidor
+      // rechaza con "chat_id y sender_id requeridos". Si falta sender_id,
+      // SKIP en vez de impersonar al usuario actual (previene corrupción de
+      // identidad cuando la cola tiene mensajes de otra sesión).
+      const senderId = (msg.sender_id as string) || (msg.senderId as string);
+      if (!senderId) {
+        dbg("sendSingle: skip message without sender_id", msg.id);
+        return null;
+      }
+      // Guarda cross-account también en el caso singular (queueMessage/trySend):
+      // si el mensaje pertenece a otra cuenta, jamás enviarlo como si fuera del
+      // usuario actual. Se mantiene pendiente (no se borra ni se convierte).
+      if (this.cachedUid && senderId !== this.cachedUid) {
+        dbg("sendSingle: skip pendiente de otra cuenta (sender_id != cachedUid)", msg.id, senderId, "!=", this.cachedUid);
+        return null;
+      }
     let imageUrl: string | undefined;
     let audioUrl: string | undefined;
     let videoUrl: string | undefined;
@@ -614,6 +665,7 @@ class SyncService {
     // y dejamos que el siguiente ciclo reintente cuando vuelva la señal).
     const ATTEMPT_TIMEOUT_MS = 12000;
     let lastError: unknown;
+    let terminalFailure = false;
     let saved: any = null;
 
     const attemptWithTimeout = (timeoutMs: number, fn: () => Promise<any>): Promise<any> => {
@@ -675,6 +727,7 @@ class SyncService {
         // de este chat"). Cortar aquí; el ciclo siguiente aún lo reevalúa.
         const errStatus = (err as any)?.status;
         if (typeof errStatus === "number" && errStatus >= 400 && errStatus < 500 && errStatus !== 429) {
+          terminalFailure = true;
           dbg("sendSingle: error permanente 4xx, sin reintentos", msg.id, errStatus);
           break;
         }
@@ -692,6 +745,22 @@ class SyncService {
 
     if (!saved?.id) {
       logger.error(`[SyncService] all ${MAX_RETRIES} attempts failed`, { messageId: msg.id, error: lastError });
+      // Marcar como "error" para que la burbuja deje de girar el spinner "enviando"
+      // al reabrir el chat. Si el fallo es PERMANENTE (4xx) cerrar la sincronización
+      // (synced=true) para que el drenaje deje de reenviarlo cada 15s (loop infinito
+      // con la burbuja en "carga"); el usuario lo ve con el ícono de error. Si el
+      // fallo es transitorio (timeout/red), synced se mantiene false para reenviar
+      // y reconciliar a "sent" cuando vuelva la señal.
+      try {
+        await messageRepo.upsertMessage(chatId, {
+          ...(msg as any),
+          status: "error",
+          synced: terminalFailure ? true : (msg.synced ?? false),
+        });
+        logger.warn("[SyncService] backfilled message status=error", { messageId: msg.id, terminal: terminalFailure });
+      } catch (persistErr) {
+        logger.warn("[SyncService] no se pudo persistir status=error", { messageId: msg.id, error: persistErr });
+      }
       return;
     }
 
@@ -706,6 +775,18 @@ class SyncService {
       dbg("sendSingle: ALL ATTEMPTS FAILED for", msg.id);
     }
     return saved;
+    } catch (unexpectedErr) {
+      // Excepción inesperada (NO HTTP/network): el mensaje NO se marca synced,
+      // NO se elimina y NO se regenera su client_id/temp_id. Se registra UNA vez
+      // para diagnóstico y se devuelve null para que el pendiente permanezca en
+      // cola (synced=0) y lo retome el mecanismo de retry/backoff existente.
+      dbg("sendSingle: unexpected exception, pending kept", (msg as any)?.id);
+      logger.warn("[SyncService] sendSingle unexpected exception, keeping pending for retry", {
+        messageId: (msg as any)?.id,
+        error: unexpectedErr,
+      });
+      return null;
+    }
   }
 
   // Sustitución atómica tempId -> savedId en SQLite SIN bloquear ni rechazar:

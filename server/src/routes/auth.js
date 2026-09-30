@@ -33,8 +33,10 @@ const emailRecoveryLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Espera 15 minutos.' },
 });
 
+const MAX_RESET_ATTEMPTS = 5;
+
 function generateCode() {
-  return String(randomInt(1000, 10000));
+  return String(randomInt(100000, 1000000));
 }
 
 function sanitizeInput(str) {
@@ -96,6 +98,7 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
         code,
         phone: profile.real_email,
         expires_at: expiresAt,
+        attempts: 0,
       });
 
     // Mask email for response (e.g. j***@gmail.com)
@@ -231,16 +234,17 @@ router.post('/verify-reset-code', verifyLimiter, async (req, res) => {
     if (!profileId || !code) return res.status(400).json({ error: 'ID de perfil y código requeridos' });
 
     const cleanProfileId = sanitizeInput(profileId);
-    const cleanCode = sanitizeInput(code).replace(/\D/g, '').slice(0, 4);
-    if (cleanCode.length !== 4) return res.status(400).json({ error: 'Código inválido' });
+    const cleanCode = sanitizeInput(code).replace(/\D/g, '').slice(0, 6);
+    if (cleanCode.length !== 6) return res.status(400).json({ error: 'Código inválido' });
 
     const now = new Date().toISOString();
 
-    const { data: records, error } = await supabaseAdmin
+    // Registro activo del perfil = último código sin usar y vigente.
+    // (send-reset-code invalida los anteriores, así que hay a lo sumo uno.)
+    const { data: record, error } = await supabaseAdmin
       .from('password_reset_codes')
-      .select('id, profile_id, phone, expires_at')
+      .select('id, profile_id, code, phone, expires_at, attempts, used')
       .eq('profile_id', cleanProfileId)
-      .eq('code', cleanCode)
       .eq('used', false)
       .gt('expires_at', now)
       .order('id', { ascending: false })
@@ -249,11 +253,36 @@ router.post('/verify-reset-code', verifyLimiter, async (req, res) => {
     const elapsed = Date.now() - startedAt;
     if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
 
-    if (error || !records || records.length === 0) {
+    if (error) {
+      console.error('[EMAIL-RECOVERY] Verify error:', error);
+      return res.status(500).json({ error: 'Error al verificar el código' });
+    }
+
+    // Sin registro activo: no existe, expirado, ya usado o bloqueado por intentos.
+    if (!record) {
       return res.status(400).json({ error: 'Código inválido o expirado' });
     }
 
-    res.json({ message: 'Código verificado', email: records[0].phone });
+    // Código correcto: NO consume intento, continúa el flujo normal.
+    if (record.code === cleanCode) {
+      return res.json({ message: 'Código verificado', email: record.phone });
+    }
+
+    // Código incorrecto: incrementa intentos; al llegar a 5 el código se bloquea.
+    const nextAttempts = (record.attempts || 0) + 1;
+    if (nextAttempts >= MAX_RESET_ATTEMPTS) {
+      await supabaseAdmin
+        .from('password_reset_codes')
+        .update({ attempts: nextAttempts, used: true })
+        .eq('id', record.id);
+    } else {
+      await supabaseAdmin
+        .from('password_reset_codes')
+        .update({ attempts: nextAttempts })
+        .eq('id', record.id);
+    }
+
+    return res.status(400).json({ error: 'Código inválido o expirado' });
   } catch (err) {
     console.error('[EMAIL-RECOVERY] Verify error:', err);
     res.status(500).json({ error: 'Error al verificar el código' });
@@ -274,7 +303,7 @@ router.post('/update-password', verifyLimiter, async (req, res) => {
 
     const cleanProfileId = sanitizeInput(profileId);
     const cleanEmail = sanitizeInput(email).toLowerCase().trim();
-    const cleanCode = sanitizeInput(code).replace(/\D/g, '').slice(0, 4);
+    const cleanCode = sanitizeInput(code).replace(/\D/g, '').slice(0, 6);
     const now = new Date().toISOString();
 
     const { data: records, error: fetchError } = await supabaseAdmin
@@ -285,6 +314,7 @@ router.post('/update-password', verifyLimiter, async (req, res) => {
       .eq('code', cleanCode)
       .eq('used', false)
       .gt('expires_at', now)
+      .lt('attempts', MAX_RESET_ATTEMPTS)
       .order('id', { ascending: false })
       .limit(1);
 

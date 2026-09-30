@@ -7,8 +7,10 @@ import {
 import { BusinessFlyer } from "./BusinessPanel";
 import { STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED, ANIMATION_PRESETS, STICKER_TEMPLATES_PRO } from "./editor/editorConstants";
 import EditorTabPanels from "./editor/EditorTabPanels";
+import { renderEditedMedia, EditedMediaBadgeOverlay } from "./editor/renderEditedMedia";
 import { supabase } from "../lib/supabase";
 import { saveMediaToGalleryDirect } from "../services/mediaUtils";
+import { uploadChatMedia } from "../services/storage";
 import { Capacitor } from "@capacitor/core";
 import { getMusicLibrary, MusicTrack } from "../services/stickerService";
 
@@ -21,6 +23,32 @@ interface MediaEditorProps {
   initialMediaType?: "image" | "video";
 }
 
+// Convierte un data URL raster a Blob sin depender de red (compatible con WebView).
+// Sólo se usa para data:image/...;base64,... — nunca para el SVG placeholder.
+function dataUrlToBlob(dataUrl: string): Blob {
+  const commaIdx = dataUrl.indexOf(",");
+  if (commaIdx === -1) throw new Error("data URL inválida");
+  const header = dataUrl.slice(0, commaIdx);
+  const idx = header.indexOf(";");
+  const mime = (idx === -1 ? header.slice(5) : header.slice(5, idx)) || "application/octet-stream";
+  const binary = atob(dataUrl.slice(commaIdx + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+// Colores equivalentes a las clases Tailwind de STICKER_TEMPLATES_PRO.
+// Se usan para rasterizar el sticker con fidelidad en el canvas.
+const STICKER_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  oferta: { bg: "#dc2626", text: "#ffffff", border: "#ffffff" },
+  nuevo: { bg: "#14b8a6", text: "#ffffff", border: "#ffffff" },
+  top: { bg: "#fbbf24", text: "#020617", border: "#020617" },
+  delivery: { bg: "#4f46e5", text: "#ffffff", border: "#ffffff" },
+  vip: { bg: "#9333ea", text: "#ffffff", border: "#ffffff" },
+  last: { bg: "#f97316", text: "#ffffff", border: "#ffffff" },
+  quality: { bg: "#2563eb", text: "#ffffff", border: "#ffffff" },
+  promo: { bg: "#ec4899", text: "#ffffff", border: "#ffffff" },
+};
 
 export default function MediaEditor({ 
   onPublishFlyer, 
@@ -86,6 +114,7 @@ export default function MediaEditor({
 
   // Ref holders
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasAreaRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
 
@@ -299,37 +328,158 @@ export default function MediaEditor({
   const defaultImageSource = STATIC_PRESET_IMAGES[activePresetIdx].url;
   const currentImageSource = uploadedImage || defaultImageSource;
 
+  // Publicación de flyer: evita doble submit / doble upload y muestra error reintentable
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
   // Handle Export and submit flyer
-  const handleExportAndPublishFlyer = () => {
-    if (isStateMode && onPublishState) {
-      onPublishState(
-        currentImageSource, 
-        editorMode, 
-        bannerTitle
-      );
-      return;
+  // Rasteriza la imagen final con filtros, textos, stickers y marca de agua.
+  // Devuelve null (y se conserva el comportamiento anterior) para video o si falla.
+  const bakeEditedImage = async (): Promise<string | null> => {
+    if (editorMode === "video" || currentImageSource.startsWith("data:video")) return null;
+    const area = canvasAreaRef.current;
+    if (!area) return null;
+    const rect = area.getBoundingClientRect();
+    if (rect.width < 10 || rect.height < 10) return null;
+
+    const badges: EditedMediaBadgeOverlay[] = [];
+
+    if (isPremiumUnlocked) {
+      badges.push({
+        text: "Red On VIP Premium",
+        fontSizePx: 5.5,
+        fontWeight: 900,
+        textColor: "#ffffff",
+        background: "#14b8a6",
+        gradient: ["#14b8a6", "#4f46e5"],
+        borderWidthPx: 1,
+        borderColor: "rgba(255,255,255,0.25)",
+        radiusPx: -1,
+        padXPx: 6,
+        padYPx: 1.5,
+        rotationDeg: 0,
+        anchor: "top-left",
+        offsetXPx: 10,
+        offsetYPx: 10,
+      });
+    } else {
+      badges.push({
+        text: "Creado en Red On",
+        fontSizePx: 5.5,
+        fontWeight: 900,
+        textColor: "#e2e8f0",
+        background: "rgba(0,0,0,0.6)",
+        borderWidthPx: 1,
+        borderColor: "rgba(255,255,255,0.1)",
+        radiusPx: -1,
+        padXPx: 5,
+        padYPx: 1.5,
+        rotationDeg: 0,
+        anchor: "top-left",
+        offsetXPx: 10,
+        offsetYPx: 10,
+      });
     }
 
-    const finalFlyer: BusinessFlyer = {
-      id: "flyer_pro_" + Date.now(),
-      businessName: bannerTitle || "Mi Marca Pro",
-      description: bannerProduct || "Promoción exclusiva",
-      location: "Caracas, Distrito Capital",
-      flyerUrl: currentImageSource,
-      isGenerated: true,
-      templateId: "sunset",
-      productName: bannerProduct,
-      price: bannerPrice,
-      musicUrl: activeMusic?.file_url || undefined,
-      musicName: activeMusic?.title || undefined,
-      views: 1,
-      clicks: 0,
-      ownerName: "Nelson Castro (Socio Premium)",
-      ownerAvatar: "",
-      ownerPhone: "+58 412 1234567"
-    };
+    if (selectedStickerIdx >= 0 && STICKER_TEMPLATES_PRO[selectedStickerIdx]) {
+      const sticker = STICKER_TEMPLATES_PRO[selectedStickerIdx];
+      const colors = STICKER_COLORS[sticker.id] || { bg: "#14b8a6", text: "#ffffff", border: "#ffffff" };
+      badges.push({
+        text: sticker.text,
+        fontSizePx: 7,
+        fontWeight: 900,
+        textColor: colors.text,
+        background: colors.bg,
+        borderWidthPx: 2,
+        borderColor: colors.border,
+        radiusPx: 4,
+        padXPx: 8,
+        padYPx: 4,
+        rotationDeg: 12,
+        anchor: "top-right",
+        offsetXPx: 14,
+        offsetYPx: 56,
+      });
+    }
 
-    onPublishFlyer(finalFlyer);
+    try {
+      return await renderEditedMedia({
+        source: currentImageSource,
+        filterCss: buildCombinedFilterCss(),
+        containerWidth: rect.width,
+        containerHeight: rect.height,
+        text: bannerTitle.trim()
+          ? {
+              text: bannerTitle,
+              offsetX: textPos.x,
+              offsetY: textPos.y,
+              scale: textSizePercent / 100,
+              fontSizePx: 14,
+              maxWidthRatio: 0.92,
+            }
+          : null,
+        badges,
+        bottomGradient: true,
+      });
+    } catch (err) {
+      console.error("[MediaEditor] No se pudo renderizar el diseño del flyer:", err);
+      return null;
+    }
+  };
+
+  const handleExportAndPublishFlyer = async () => {
+    if (isPublishing) return;
+    setIsPublishing(true);
+    setPublishError(null);
+
+    try {
+      const baked = await bakeEditedImage();
+
+      if (isStateMode && onPublishState) {
+        onPublishState(baked || currentImageSource, editorMode, bannerTitle);
+        return;
+      }
+
+      // El diseño rasterizado siempre es un data URL PNG base64; el video o los
+      // fallos conservan el flujo anterior (subir sólo si es raster base64).
+      const isBase64Raster =
+        currentImageSource.startsWith("data:image/") &&
+        currentImageSource.includes(";base64,");
+
+      let flyerUrl: string;
+      if (baked) {
+        flyerUrl = await uploadChatMedia(dataUrlToBlob(baked), "flyers");
+      } else if (isBase64Raster) {
+        flyerUrl = await uploadChatMedia(dataUrlToBlob(currentImageSource), "flyers");
+      } else {
+        flyerUrl = currentImageSource;
+      }
+
+      const finalFlyer: BusinessFlyer = {
+        id: "flyer_pro_" + Date.now(),
+        businessName: bannerTitle || "Mi Marca Pro",
+        description: bannerProduct || "Promoción exclusiva",
+        location: "Caracas, Distrito Capital",
+        flyerUrl,
+        isGenerated: false,
+        productName: bannerProduct,
+        price: bannerPrice,
+        musicUrl: activeMusic?.file_url || undefined,
+        musicName: activeMusic?.title || undefined,
+        views: 1,
+        clicks: 0,
+        ownerName: "Nelson Castro (Socio Premium)",
+        ownerAvatar: "",
+        ownerPhone: "+58 412 1234567"
+      };
+
+      onPublishFlyer(finalFlyer);
+    } catch (err) {
+      console.error("[MediaEditor] Error al publicar el flyer:", err);
+      setPublishError("No se pudo publicar tu flyer. Revisa tu conexión e intenta de nuevo.");
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   // Guardar el flyer como imagen en la galería del dispositivo
@@ -340,8 +490,9 @@ export default function MediaEditor({
     try {
       setIsSavingToDevice(true);
       setSaveMessage(null);
+      const baked = await bakeEditedImage();
       const fileName = `redon-flyer-${Date.now()}.png`;
-      await saveMediaToGalleryDirect(currentImageSource, fileName);
+      await saveMediaToGalleryDirect(baked || currentImageSource, fileName);
       setSaveMessage("Guardada en tu galería (álbum RED ON) ✅");
     } catch (err) {
       console.error("[MediaEditor] Error al guardar en galería:", err);
@@ -400,7 +551,7 @@ export default function MediaEditor({
       `}} />
 
       {/* IMAGE CANVAS (flex-1 to fill remaining space) */}
-      <div className="relative flex-1 w-full min-h-0 overflow-hidden">
+      <div ref={canvasAreaRef} className="relative flex-1 w-full min-h-0 overflow-hidden">
         {/* Image with filters */}
         <div 
           style={{ 
@@ -549,53 +700,61 @@ export default function MediaEditor({
 
       {/* TOP FLOATING BAR */}
       <div className="absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/80 via-black/50 to-transparent px-3 pt-2 pb-6 pointer-events-none">
-        <div className="flex items-center justify-between pointer-events-auto">
-          <button
-            onClick={onGoToFeed}
-            className="bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-[11px] font-bold px-3.5 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-1"
-          >
-            ✕ Volver
-          </button>
+        <div className="flex flex-col gap-2 pointer-events-auto">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button
+              onClick={onGoToFeed}
+              className="bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-[11px] font-bold px-3.5 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-1 shrink-0"
+            >
+              ✕ Volver
+            </button>
 
-          <div className="flex bg-black/60 p-0.5 rounded-lg border border-white/10 text-[10px] font-bold">
-            <button
-              onClick={() => { setEditorMode("image"); setIsVideoPlaying(false); }}
-              className={`px-3 py-1 rounded transition-all cursor-pointer ${
-                editorMode === "image" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <ImageIcon className="w-4 h-4 inline mr-1" /> Foto
-            </button>
-            <button
-              onClick={() => setEditorMode("video")}
-              className={`px-3 py-1 rounded transition-all cursor-pointer ${
-                editorMode === "video" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <Video className="w-4 h-4 inline mr-1" /> Video
-            </button>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={handleSaveToDevice}
-              disabled={isSavingToDevice}
-              className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-extrabold text-[11px] px-4 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5"
-            >
-              <Download className="w-4 h-4" /> {isSavingToDevice ? "Guardando..." : "Guardar"}
-            </button>
-            {isStateMode && (
+            <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+              <button
+                onClick={handleSaveToDevice}
+                disabled={isSavingToDevice}
+                className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-extrabold text-[11px] px-3 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <Download className="w-4 h-4" /> {isSavingToDevice ? "Guardando..." : "Guardar"}
+              </button>
               <button
                 onClick={handleExportAndPublishFlyer}
-                className="bg-teal-500 hover:bg-teal-400 text-white font-extrabold text-[11px] px-4 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5"
+                disabled={isPublishing}
+                className="bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-white font-extrabold text-[11px] px-3 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
               >
-                <Check className="w-4 h-4" /> Publicar
+                <Check className="w-4 h-4" /> {isPublishing ? "Publicando..." : isStateMode ? "Publicar" : "Exportar & Publicar"}
               </button>
-            )}
+            </div>
+          </div>
+
+          <div className="flex justify-center">
+            <div className="flex bg-black/60 p-0.5 rounded-lg border border-white/10 text-[10px] font-bold shrink-0">
+              <button
+                onClick={() => { setEditorMode("image"); setIsVideoPlaying(false); }}
+                className={`px-3 py-1 rounded transition-all cursor-pointer ${
+                  editorMode === "image" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <ImageIcon className="w-4 h-4 inline mr-1" /> Foto
+              </button>
+              <button
+                onClick={() => setEditorMode("video")}
+                className={`px-3 py-1 rounded transition-all cursor-pointer ${
+                  editorMode === "video" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <Video className="w-4 h-4 inline mr-1" /> Video
+              </button>
+            </div>
           </div>
           {saveMessage && (
             <div className="absolute right-2 top-10 z-30 bg-black/90 text-white text-[8px] font-bold px-2.5 py-1.5 rounded-lg shadow-xl border border-white/10">
               {saveMessage}
+            </div>
+          )}
+          {publishError && (
+            <div className="absolute right-2 top-20 z-30 bg-red-600/95 text-white text-[8px] font-bold px-2.5 py-1.5 rounded-lg shadow-xl border border-white/10">
+              {publishError}
             </div>
           )}
         </div>

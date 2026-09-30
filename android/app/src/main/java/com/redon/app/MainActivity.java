@@ -17,12 +17,14 @@ import android.view.WindowManager;
 import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.splashscreen.SplashScreen;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
 
     private static final String TAG = "MainActivity";
     private static final String PENDING_CALL_KEY = "redon_pending_call";
+    private static final String PENDING_OPEN_CHAT_KEY = "redon_pending_open_chat";
     private static MainActivity instance;
 
     public static Object getCapacitorBridge() {
@@ -32,6 +34,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);
@@ -52,6 +55,10 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        // Mantiene getIntent() sincronizado con el intent recibido (launchMode
+        // singleTask + FLAG_ACTIVITY_CLEAR_TOP: los toques posteriores de
+        // notificación entran por aquí y no por onCreate).
+        setIntent(intent);
         handleCallIntent(intent);
     }
 
@@ -115,6 +122,11 @@ public class MainActivity extends BridgeActivity {
                 } catch (Exception e) {
                     Log.e(TAG, "Failed to trigger open-chat JS event", e);
                 }
+                // Respaldo para arranque en frío: si React aún no registró el listener
+                // 'open-chat', este evento se pierde; el pendiente lo restaura PhoneSimulator
+                // al montar / volver a primer plano. Igual patrón que persistPendingCall.
+                persistPendingOpenChat(chatId, intent.getStringExtra("contactId"),
+                    intent.getStringExtra("title"), intent.getStringExtra("body"));
             }
         } else if ("android.intent.action.MAIN".equals(action) && chatId != null) {
             // El intent del launcher puede conservar "extras" colgados de un push
@@ -144,6 +156,25 @@ public class MainActivity extends BridgeActivity {
             Log.d(TAG, "Persisted pending answer: " + json);
         } catch (Exception e) {
             Log.e(TAG, "Failed to persist pending answer", e);
+        }
+    }
+
+    // Persistencia temporal del intent de navegación OPEN_CHAT (respaldo de arranque
+    // en frío). Guarda chatId/contactId y, si llegan en el intent, title/body.
+    private void persistPendingOpenChat(String chatId, String contactId, String title, String body) {
+        try {
+            org.json.JSONObject payload = new org.json.JSONObject();
+            payload.put("chatId", chatId != null ? chatId : "");
+            payload.put("contactId", contactId != null ? contactId : "");
+            if (title != null) payload.put("title", title);
+            if (body != null) payload.put("body", body);
+            getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE)
+                .edit()
+                .putString(PENDING_OPEN_CHAT_KEY, payload.toString())
+                .apply();
+            Log.d(TAG, "Persisted pending open-chat: " + payload);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to persist pending open-chat", e);
         }
     }
 

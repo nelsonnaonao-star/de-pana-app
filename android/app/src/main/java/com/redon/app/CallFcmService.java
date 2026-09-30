@@ -13,11 +13,25 @@ import android.media.AudioAttributes;
 import android.net.Uri;
 import android.os.Build;
 import android.util.Log;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Shader;
 import androidx.core.app.NotificationCompat;
 import com.capacitorjs.plugins.pushnotifications.PushNotificationsPlugin;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class CallFcmService extends FirebaseMessagingService {
 
@@ -349,6 +363,163 @@ public class CallFcmService extends FirebaseMessagingService {
         }
     }
 
+    private static final int AVATAR_LOAD_TIMEOUT_MS = 3000;
+    private static final int AVATAR_MAX_BYTES = 1048576;
+
+    // Replica exacta de hashUrl() de src/components/CachedImage.tsx para reutilizar
+    // el MISMO caché de la webview: getFilesDir()/image_cache/<hash>.<ext>.
+    private static String hashUrl(String url) {
+        int hash = 0;
+        for (int i = 0; i < url.length(); i++) {
+            hash = hash * 31 + url.charAt(i);
+        }
+        long abs = hash < 0 ? -(long) hash : (long) hash;
+        return Long.toString(abs, 36);
+    }
+
+    // Replica de getExtension() de CachedImage.tsx (mismo resultado por URL).
+    private static String avatarExtension(String url) {
+        Matcher m = Pattern.compile("\\.(\\w{3,4})(\\?|$)").matcher(url);
+        if (m.find()) return m.group(1).toLowerCase();
+        if (url.contains("gif")) return "gif";
+        if (url.contains("webp")) return "webp";
+        if (url.contains("png")) return "png";
+        return "jpg";
+    }
+
+    private static String avatarCacheFileName(String url) {
+        return hashUrl(url) + "." + avatarExtension(url);
+    }
+
+    // Carga el avatar del remitente en un worker: primero el caché compartido
+    // image_cache/ (mismo archivo que escribe CachedImage.tsx) y, si no existe,
+    // descarga con timeout corto y lo guarda con el mismo naming. Con cualquier
+    // problema (timeout, HTTP, stream, bitmap inválido, archivo corrupto) devuelve
+    // null: la foto es OPCIONAL y jamás debe impedir la notificación.
+    private static Bitmap loadAvatarBitmap(String cacheDir, String avatarUrl) {
+        File dir = new File(cacheDir);
+        if (!dir.exists()) dir.mkdirs();
+        File file = new File(dir, avatarCacheFileName(avatarUrl));
+        if (file.exists()) {
+            Bitmap cached = BitmapFactory.decodeFile(file.getAbsolutePath());
+            if (cached != null) return cached;
+        }
+        HttpURLConnection conn = null;
+        InputStream in = null;
+        try {
+            URL url = new URL(avatarUrl);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(AVATAR_LOAD_TIMEOUT_MS);
+            conn.setReadTimeout(AVATAR_LOAD_TIMEOUT_MS);
+            conn.setInstanceFollowRedirects(true);
+            conn.setRequestMethod("GET");
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) return null;
+            in = conn.getInputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int total = 0;
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                out.write(buf, 0, n);
+                total += n;
+                if (total > AVATAR_MAX_BYTES) return null;
+            }
+            byte[] bytes = out.toByteArray();
+            Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            if (bmp == null) return null;
+            // Guardar los BYTES crudos tal cual los almacenaría CachedImage.tsx
+            // (base64 del cuerpo de la respuesta) para no duplicar ni romper el caché.
+            try {
+                FileOutputStream fos = new FileOutputStream(file);
+                try {
+                    fos.write(bytes);
+                } finally {
+                    fos.close();
+                }
+            } catch (Exception ignored) {
+            }
+            return bmp;
+        } catch (Exception e) {
+            Log.w(TAG, "Avatar load failed: " + e.getMessage());
+            return null;
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (Exception ignored) {
+                }
+            }
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    // Avatar cuadrado con bordes redondeados para la notificación (estilo avatar
+    // de la lista de chats): COPIA del Bitmap original recortada a esquinas
+    // redondeadas. Ante cualquier problema devuelve el Bitmap original intacto:
+    // la máscara jamás deja la notificación sin avatar. Solo para la notificación:
+    // caché y Bitmap original jamás cambian.
+    private static Bitmap createRoundedAvatarBitmap(Bitmap source) {
+        if (source == null || source.isRecycled()) return source;
+        try {
+            int w = source.getWidth();
+            int h = source.getHeight();
+            if (w <= 0 || h <= 0) return source;
+
+            // Escala pragmática para la notificación (≈256px) conservando la proporción.
+            int side = Math.min(w, h);
+            int outW = Math.max(160, Math.round(w * (256f / side)));
+            int outH = Math.max(160, Math.round(h * (256f / side)));
+            Bitmap scaled = Bitmap.createScaledBitmap(source, outW, outH, true);
+            try {
+                Bitmap output = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(output);
+                canvas.drawColor(0x00000000); // fondo transparente explícito
+                Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                paint.setFilterBitmap(true);
+                paint.setShader(new BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
+                float radius = Math.min(outW, outH) * 0.24f;
+                canvas.drawRoundRect(0f, 0f, outW, outH, radius, radius, paint);
+                return output;
+            } finally {
+                if (scaled != source) scaled.recycle();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Rounded avatar mask failed, using original", e);
+            return source;
+        }
+    }
+
+    // Publica la notificación SIN foto de inmediato y, en un hilo en segundo plano
+    // (daemon), actualiza con el LargeIcon si la foto carga. Nunca bloquea el hilo
+    // principal ni retrasa la entrega de la notificación.
+    private void maybeAttachAvatar(
+        NotificationCompat.Builder builder, int notificationId, String avatarUrl
+    ) {
+        if (avatarUrl == null || avatarUrl.isEmpty()) return;
+        // Directory.Data del plugin Filesystem (mismísimo directorio de CachedImage.tsx).
+        final String cacheDir = getFilesDir().getAbsolutePath() + File.separator + "image_cache";
+        final NotificationCompat.Builder b = builder;
+        final int id = notificationId;
+        final String url = avatarUrl;
+        Thread worker = new Thread(() -> {
+            Bitmap bmp = loadAvatarBitmap(cacheDir, url);
+            if (bmp == null) return;
+            try {
+                // Avatar cuadrado con bordes redondeados para la notificación (copia).
+                // Si la máscara falla se conserva el Bitmap original. El caché no se toca.
+                Bitmap notificationAvatar = createRoundedAvatarBitmap(bmp);
+                b.setLargeIcon(notificationAvatar);
+                NotificationManager nm2 = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm2 != null) nm2.notify(id, b.build());
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to attach avatar LargeIcon", e);
+            }
+        });
+        worker.setDaemon(true);
+        worker.start();
+    }
+
     private void showMessageNotification(RemoteMessage message) {
         String title = message.getData().get("title");
         String body = message.getData().get("body");
@@ -417,6 +588,7 @@ public class CallFcmService extends FirebaseMessagingService {
         if (nm != null) {
             nm.notify(notificationId, builder.build());
         }
+        maybeAttachAvatar(builder, notificationId, message.getData().get("avatarUrl"));
     }
 
     private void showForegroundMessageNotification(RemoteMessage message) {
@@ -462,5 +634,6 @@ public class CallFcmService extends FirebaseMessagingService {
         if (nm != null) {
             nm.notify(notificationId + 100000, builder.build());
         }
+        maybeAttachAvatar(builder, notificationId + 100000, message.getData().get("avatarUrl"));
     }
 }

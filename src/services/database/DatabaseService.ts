@@ -172,41 +172,50 @@ class DatabaseService {
     }
   }
 
-  async execute(statements: string): Promise<void> {
-    if (!this._ready) return;
+  // Las escrituras devuelven true/false en lugar de lanzar: los repositorios las
+  // encadenan con await y deciden según el resultado. El estado "no ready" o el
+  // fallo subyacente se traducen a false (los logs internos se conservan).
+  async execute(statements: string): Promise<boolean> {
+    if (!this._ready) return false;
     try {
       await CapacitorSQLite.execute({
         database: DB_NAME,
         statements,
       });
+      return true;
     } catch (err) {
       console.warn("[DatabaseService] execute error:", err);
+      return false;
     }
   }
 
-  async run(statement: string, values?: unknown[]): Promise<void> {
-    if (!this._ready) return;
+  async run(statement: string, values?: unknown[]): Promise<boolean> {
+    if (!this._ready) return false;
     try {
       await CapacitorSQLite.executeSet({
         database: DB_NAME,
         set: [{ statement, values: values || [] }],
       });
+      return true;
     } catch (err) {
       console.warn("[DatabaseService] run error:", err);
+      return false;
     }
   }
 
   async executeSet(
     set: { statement: string; values?: unknown[] }[]
-  ): Promise<void> {
-    if (!this._ready) return;
+  ): Promise<boolean> {
+    if (!this._ready) return false;
     try {
       await CapacitorSQLite.executeSet({
         database: DB_NAME,
         set: set.map((s) => ({ statement: s.statement, values: s.values || [] })),
       });
+      return true;
     } catch (err) {
       console.warn("[DatabaseService] executeSet error:", err);
+      return false;
     }
   }
 }

@@ -13,7 +13,7 @@ function formatTime(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-const DEFAULT_ORB_SIZE = 60;
+const DEFAULT_ORB_SIZE = 56;
 
 
 
@@ -229,7 +229,7 @@ export default function AudioMessagePlayer({
               position: "absolute",
               inset: 6,
               borderRadius: "50%",
-              overflow: "hidden",
+              overflow: "visible",
             }}
           >
             <BrandOrb size={orbSize - 12} animate={isPlaying} />

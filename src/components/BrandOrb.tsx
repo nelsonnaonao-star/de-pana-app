@@ -44,7 +44,12 @@ export default function BrandOrb({ size = 60, animate = true }: BrandOrbProps) {
   return (
     <div
       className="relative shrink-0"
-      style={{ width: size, height: size }}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        boxShadow: "0 1px 2px rgba(0,0,0,0.45), 0 3px 7px rgba(0,0,0,0.2)",
+      }}
     >
       <div
         className="relative"
@@ -53,7 +58,11 @@ export default function BrandOrb({ size = 60, animate = true }: BrandOrbProps) {
           inset: 0,
           borderRadius: "50%",
           overflow: "hidden",
-          background: "#0A2E28",
+          border: "1px solid rgba(255,255,255,0.14)",
+          background:
+            "radial-gradient(circle at 50% 38%, #1A6154 0%, #11473D 30%, #0A2E28 60%, #05201B 100%)",
+          boxShadow:
+            "inset 0 1px 2px rgba(255,255,255,0.1), inset 0 -3px 7px rgba(0,0,0,0.38)",
         }}
       >
         <div
@@ -61,12 +70,12 @@ export default function BrandOrb({ size = 60, animate = true }: BrandOrbProps) {
             ...blobBase,
             animation: "orb-morph-1 3.2s ease-in-out infinite",
             animationPlayState: animate ? "running" : "paused",
-            width: 32 * scale,
-            height: 32 * scale,
-            left: 8 * scale,
-            top: 8 * scale,
+            width: 33 * scale,
+            height: 33 * scale,
+            left: 6 * scale,
+            top: 6 * scale,
             background: "#5EB7FF",
-            filter: `blur(${9 * scale}px)`,
+            filter: `blur(${10 * scale}px)`,
             opacity: 0.9,
           }}
         />
@@ -75,12 +84,12 @@ export default function BrandOrb({ size = 60, animate = true }: BrandOrbProps) {
             ...blobBase,
             animation: "orb-morph-2 2.6s ease-in-out infinite",
             animationPlayState: animate ? "running" : "paused",
-            width: 24 * scale,
-            height: 24 * scale,
-            left: 12 * scale,
+            width: 26 * scale,
+            height: 26 * scale,
+            left: 11 * scale,
             top: 12 * scale,
             background: "#C65EFF",
-            filter: `blur(${8 * scale}px)`,
+            filter: `blur(${9 * scale}px)`,
             opacity: 0.8,
           }}
         />
@@ -89,12 +98,12 @@ export default function BrandOrb({ size = 60, animate = true }: BrandOrbProps) {
             ...blobBase,
             animation: "orb-morph-3 3.8s ease-in-out infinite",
             animationPlayState: animate ? "running" : "paused",
-            width: 20 * scale,
-            height: 20 * scale,
-            left: 14 * scale,
+            width: 23 * scale,
+            height: 23 * scale,
+            left: 15 * scale,
             top: 14 * scale,
             background: "#4ADE80",
-            filter: `blur(${7 * scale}px)`,
+            filter: `blur(${8 * scale}px)`,
             opacity: 0.65,
           }}
         />

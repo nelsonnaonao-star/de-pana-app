@@ -4,6 +4,31 @@ import { getMessaging } from 'firebase-admin/messaging';
 
 const router = Router();
 
+const SUPABASE_HOST = 'akgsylutbpgolurkcavh.supabase.co';
+const BUCKET = 'chat-images';
+
+// Extracción ESTRICTA del path de Storage para un flyer. No reutiliza
+// extractPath() de media.js (que devuelve data:/blob: tal cual). Aquí SOLO se
+// aceptan URLs http(s) reales del proyecto que apunten a chat-images/flyers/.
+// Cualquier otro formato (data:, blob:, '', undefined, host ajeno, otras rutas
+// del bucket) devuelve null → no se borra ningún objeto.
+function extractFlyerStoragePath(url) {
+  if (!url || typeof url !== 'string') return null;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== SUPABASE_HOST) return null;
+    const marker = `/storage/v1/object/public/${BUCKET}/`;
+    if (!parsed.pathname.includes(marker)) return null;
+    const path = decodeURIComponent(parsed.pathname.split(marker)[1] || '');
+    if (!path || path.includes('..') || path.startsWith('/')) return null;
+    if (!path.startsWith('flyers/')) return null;
+    return path;
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeInput(str) {
   if (typeof str !== 'string') return '';
   return str.replace(/[<>]/g, '').trim().slice(0, 2000);
@@ -722,17 +747,54 @@ router.delete('/flyers/:id', async (req, res) => {
   try {
     const { data: flyer, error: fetchErr } = await supabaseAdmin
       .from('business_flyers')
-      .select('user_id')
+      .select('user_id, flyer_url')
       .eq('id', req.params.id)
       .maybeSingle();
+    if (fetchErr) throw fetchErr;
     if (flyer && req.userId !== flyer.user_id && req.userRole !== 'service_role') {
       return res.status(403).json({ error: 'No autorizado' });
     }
+
+    // Sólo se obtiene un path de Storage si flyer_url es una URL real del
+    // proyecto apuntando a chat-images/flyers/. data:/blob:/''/undefined/etc.
+    // devuelven null → nunca se borra ningún objeto en esos casos.
+    let storagePath = null;
+    if (flyer) {
+      storagePath = extractFlyerStoragePath(flyer.flyer_url);
+      if (storagePath) {
+        const { count } = await supabaseAdmin
+          .from('business_flyers')
+          .select('id', { count: 'exact', head: true })
+          .eq('flyer_url', flyer.flyer_url)
+          .neq('id', req.params.id);
+        if ((count ?? 0) > 0) {
+          console.warn(`[CONTENT] flyer ${req.params.id} comparte flyer_url con otra fila; se conserva el objeto Storage ${storagePath}`);
+          storagePath = null;
+        }
+      }
+    }
+
     const { error } = await supabaseAdmin
       .from('business_flyers')
       .delete()
       .eq('id', req.params.id);
     if (error) throw error;
+
+    if (storagePath) {
+      try {
+        const { error: removeErr } = await supabaseAdmin.storage
+          .from(BUCKET)
+          .remove([storagePath]);
+        if (removeErr) {
+          console.error(`[CONTENT] flyer ${req.params.id} eliminado, pero falló el borrado del objeto Storage ${storagePath}: ${removeErr.message}`);
+        } else {
+          console.log(`[CONTENT] flyer ${req.params.id} eliminado → objeto Storage borrado: ${storagePath}`);
+        }
+      } catch (removeException) {
+        console.error(`[CONTENT] flyer ${req.params.id} eliminado, pero excepción al borrar el objeto Storage ${storagePath}:`, removeException?.message || removeException);
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     console.error('[CONTENT] flyer delete error:', err);

@@ -479,7 +479,7 @@ router.post('/mark-read', async (req, res) => {
       const newReadBy = [...currentReadBy, { userId: user_id, name, readAt: now }];
       const { error: updateError } = await supabaseAdmin
         .from('messages')
-        .update({ status: 'read', read_at: now, read_by: newReadBy })
+        .update({ status: 'read', read_at: now, read_by: newReadBy, delivered_at: now })
         .eq('id', msg.id);
       if (!updateError) updated++;
     }

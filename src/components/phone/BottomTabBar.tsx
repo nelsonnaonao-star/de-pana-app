@@ -22,7 +22,10 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
   if (isEditingMedia) return null;
 
   return (
-    <div className="border-t border-slate-100 bg-white py-2.5 shrink-0 z-20">
+    <div
+      className="border-t border-slate-100 bg-white py-2.5 shrink-0 z-20"
+      style={{ paddingBottom: "calc(0.625rem + env(safe-area-inset-bottom))" }}
+    >
       <div className="grid grid-cols-6 text-center px-1">
         {TABS.map((tab) => {
           const Icon = tab.icon;
@@ -42,7 +45,7 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
               }`}>
                 <Icon className="w-7 h-7" strokeWidth={isActive ? 2.5 : 2} />
                 {showBadge && (
-                  <span className="absolute -top-1 -right-2 bg-[#25D366] text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded-full border border-white z-30 shadow-sm">
+                  <span className="absolute -top-1 -right-2 bg-[#0a4d52] text-white text-[9px] font-bold w-4 h-4 flex items-center justify-center rounded-full border border-white z-30 shadow-sm">
                     {totalUnread > 99 ? "99+" : totalUnread}
                   </span>
                 )}

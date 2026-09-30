@@ -10,6 +10,7 @@ import { revokeCachedMedia } from "../../services/mediaCache";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
 import { inFlightMessageIds, syncService } from "../../services/sync/SyncService";
 import { generateVideoThumbnail } from "../../utils/videoThumbnail";
+import { precacheImage } from "../../components/CachedImage";
 import toast from "react-hot-toast";
 
 function formatFileSize(bytes: number): string {
@@ -324,6 +325,11 @@ setMessages(prev => [...prev, newMsg]);
       return;
     }
     const url = value;
+    // Intentar dejar una copia persistente local (image_cache) para que el
+    // mensaje no dependa de volver a descargar de Giphy al reabrir. Se ejecuta
+    // en paralelo (sin await) para no bloquear el envío: un fallo de precache
+    // jamás impide enviar el mensaje.
+    precacheImage(url).catch(() => {});
     const tempId = `temp_${Date.now()}_stkr`;
     const clientId = newClientId();
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -363,7 +369,7 @@ const saved = await apiSendMessage({
            sender_id: uid,
            sticker_url: type === "sticker" ? url : undefined,
            gif_url: type === "gif" ? url : undefined,
-           image_url: url,
+           image_url: type === "sticker" || type === "gif" ? undefined : url,
          });
 const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
            recordReconciledId(chatId, tempId, saved.id);
@@ -411,7 +417,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
           const sendingMsg: Message = {
             id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type, mediaUrl: localUrl,
             fileName: `${type}_${Date.now()}.${ext}`, fileSize: `${(fileBlob.size / 1024).toFixed(0)}KB`,
-            status: "sending", synced: false,
+            status: "sending", synced: false, clientId: clientIdCamera, sender_id: uid,
           };
           setMessages(prev => [...prev, sendingMsg]);
           onSendMessage(sendingMsg);
@@ -515,10 +521,12 @@ pendingSendIdsRef.current.add(tempId);
           status: "sending",
           synced: false,
           posterUrl,
+          clientId: clientIdFile,
+          sender_id: uid,
         };
         setMessages(prev => [...prev, sendingMsg]);
         onSendMessage(sendingMsg);
-        messageRepo.upsertMessage(chatId, sendingMsg);
+        messageRepo.upsertMessage(chatId, sendingMsg, uid);
         pendingSendIdsRef.current.add(tempId);
         inFlightMessageIds.add(tempId);
         bubbleCreated = true;
@@ -869,6 +877,8 @@ pendingSendIdsRef.current.add(tempId);
       posterUrl: currentRecordingType === "video" ? posterUrl : undefined,
       status: "sending",
       synced: false,
+      clientId,
+      sender_id: uid,
     };
     setMessages(prev => [...prev, newMsg]);
     onSendMessage(newMsg);

@@ -17,15 +17,52 @@ interface CachedImageProps {
 
 // Memory cache (session-level) keyed by `src` — survives remounts so avatars
 // never show a placeholder when the same URL was already resolved this session.
+// ACOTADA: las URLs de chats recientes caben de sobra y el evict (LRU + tope de
+// bytes) impide que el mapa crezca sin límite en sesiones largas.
+const MEMORY_CACHE_MAX_ENTRIES = 60;
+const MEMORY_CACHE_MAX_BYTES = 32 * 1024 * 1024; // 32 MB de data URLs en memoria
 const memoryCache = new Map<string, string>();
+let memoryCacheBytes = 0;
+
+function memoryCacheSet(key: string, value: string): void {
+  const prev = memoryCache.get(key);
+  if (prev !== undefined) memoryCacheBytes -= prev.length;
+  memoryCache.delete(key);
+  memoryCache.set(key, value); // refresca la posición LRU (más reciente al final)
+  memoryCacheBytes += value.length;
+  while (
+    memoryCache.size > MEMORY_CACHE_MAX_ENTRIES ||
+    memoryCacheBytes > MEMORY_CACHE_MAX_BYTES
+  ) {
+    const oldest = memoryCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    const old = memoryCache.get(oldest);
+    if (old !== undefined) memoryCacheBytes -= old.length;
+    memoryCache.delete(oldest);
+  }
+}
+
+function memoryCacheDelete(key: string): void {
+  const prev = memoryCache.get(key);
+  if (prev !== undefined) memoryCacheBytes -= prev.length;
+  memoryCache.delete(key);
+}
 
 // URLs que fallaron al cargar en esta sesión. Se muestran directamente como
 // fallback de iniciales (verdes) en lugar de intentar una y otra vez, que era
 // lo que producía el parpadeo del avatar cuando el contacto no tiene foto o la
 // URL quedó rota (foto borrada/token expirado).
 const brokenSet = new Set<string>();
+
+export function isCachedImageReady(url?: string): boolean {
+  return !!url && !brokenSet.has(url) && memoryCache.has(url);
+}
 // Timestamp del último error por URL para throttle de reintentos silenciosos.
 const lastErrorAt = new Map<string, number>();
+// Intentos silenciosos ya consumidos por URL (timer). Pasado el tope, la URL
+// solo reintenta ante un evento de red real (online/networkStatusChange).
+const retryCountMap = new Map<string, number>();
+const MAX_SILENT_RETRIES = 3;
 // Mínima separación entre reintentos de una misma URL rota.
 const RETRY_GAP_MS = 15000;
 
@@ -56,6 +93,11 @@ function getExtension(url: string): string {
   return "jpg";
 }
 
+// Lee el archivo cacheado y devuelve su data URL base64. Si el archivo no
+// existe/falla, devuelve null (el llamador cae a fetchAsDataUrl).
+// NOTA: se usan data URLs (no blob URLs) por compatibilidad: los blob: URLs con
+// <img> en el WebView Android hicieron que los stickers oficiales de WEPA
+// entraran en ciclos de reintento sin estabilizarse.
 async function getCachedFile(fileName: string): Promise<string | null> {
   const ext = fileName.split(".").pop() || "jpg";
   const mime = ext === "gif" ? "image/gif" : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
@@ -82,7 +124,10 @@ async function getCachedFile(fileName: string): Promise<string | null> {
   }
 }
 
-async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<Response> {
+// Timeout amplio (25s): GIFs/stickers oficiales pesados (1-5 MB+) pueden tardar
+// más de 8s en redes lentas; un abort prematuro producía network_error → ciclos
+// de reintento y la percepción de "carga infinita".
+async function fetchWithTimeout(url: string, timeoutMs = 25000): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -93,26 +138,108 @@ async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<Response
   }
 }
 
-// Descarga la imagen y la devuelve como data URL. Devuelve null si la URL está
-// rota, sin red, o el fetch falla. La clave: NO se renderiza un <img> con la
-// URL remota sin antes verificar que descarga correctamente (eso eliminaba el
-// parpadeo: el <img> fallaba y se alternaba verde ↔ gris en cada reintento).
-async function fetchAsDataUrl(url: string): Promise<string | null> {
+// Resultado tipado del fetch: distingue un error HTTP (URL rota, marca estable)
+// de un fallo de red (transitorio, reintenta con cooldown o al recuperar red).
+// La clave: NO se renderiza un <img> con la URL remota sin antes verificar que
+// descarga correctamente (eso eliminaba el parpadeo: el <img> fallaba y se
+// alternaba verde ↔ gris en cada reintento).
+type FetchDataUrlResult =
+  | { kind: "ok"; dataUrl: string }
+  | { kind: "http_error" }
+  | { kind: "network_error" };
+
+const inflightMap = new Map<string, Promise<FetchDataUrlResult>>();
+
+async function fetchAsDataUrl(url: string): Promise<FetchDataUrlResult> {
   try {
     const resp = await fetchWithTimeout(url);
-    if (!resp.ok) return null;
+    if (!resp.ok) return { kind: "http_error" };
     const blob = await resp.blob();
+    // Nunca cachear respuestas que no son imágenes (HTML/JSON/error docs): un
+    // fichero así quedaba almacenado en image_cache y fallaba para siempre.
+    if (!blob.type || !blob.type.startsWith("image/")) return { kind: "http_error" };
     const reader = new FileReader();
     const dataUrl = await new Promise<string | null>((resolve) => {
       reader.onloadend = () =>
         resolve(typeof reader.result === "string" ? reader.result : null);
       reader.readAsDataURL(blob);
     });
-    return dataUrl;
-  } catch (e) {
-    logger.warn("[CachedImage] fetch failed", { error: e, url });
-    return null;
+    if (!dataUrl) return { kind: "network_error" };
+    return { kind: "ok", dataUrl };
+  } catch {
+    return { kind: "network_error" };
   }
+}
+
+function resolveImageDataUrl(url: string): Promise<FetchDataUrlResult> {
+  const existing = memoryCache.get(url);
+  if (existing) return Promise.resolve({ kind: "ok", dataUrl: existing });
+
+  const inflight = inflightMap.get(url);
+  if (inflight) return inflight;
+
+  const isNative = Capacitor.isNativePlatform();
+  const ext = getExtension(url);
+  const fileName = `${hashUrl(url)}.${ext}`;
+  let promise: Promise<FetchDataUrlResult>;
+  promise = (async (): Promise<FetchDataUrlResult> => {
+    try {
+      if (isNative) {
+        const cached = await getCachedFile(fileName);
+        if (cached) {
+          memoryCacheSet(url, cached);
+          return { kind: "ok", dataUrl: cached };
+        }
+      }
+
+      const result = await fetchAsDataUrl(url);
+      if (result.kind !== "ok") return result;
+
+      memoryCacheSet(url, result.dataUrl);
+      if (isNative) {
+        const base64 = result.dataUrl.split(",")[1] || "";
+        if (base64) {
+          await Filesystem.writeFile({
+            path: `image_cache/${fileName}`,
+            data: base64,
+            directory: Directory.Data,
+            recursive: true,
+          }).catch((e) => {
+            logger.warn("[CachedImage] writeFile failed for image_cache", { fileName, error: e });
+          });
+        }
+      }
+      return result;
+    } finally {
+      if (inflightMap.get(url) === promise) {
+        inflightMap.delete(url);
+      }
+    }
+  })();
+  inflightMap.set(url, promise);
+  return promise;
+}
+
+// Precarga una URL en la caché (memoria + filesystem) para que el componente
+// la renderice de inmediato en el primer montaje, sin mostrar el placeholder
+// verde. Se usa justo después de un upload para que la vista previa y el feed
+// aparezcan instantáneos. Ignora URLs rotas ya conocidas en esta sesión.
+export async function precacheImage(url: string): Promise<void> {
+  if (!url || brokenSet.has(url)) return;
+  if (memoryCache.has(url)) return;
+
+  const result = await resolveImageDataUrl(url);
+  if (result.kind !== "ok") return;
+}
+
+// Borra el estado de URL "rota" de esta sesión para una URL concreta. Lo usa el
+// botón "Reintentar" de los mensajes: permite una nueva descarga inmediata sin
+// depender del timer silencioso ni de un evento de red.
+export function clearCachedImageRetryState(url: string): void {
+  brokenSet.delete(url);
+  retryCountMap.delete(url);
+  lastErrorAt.delete(url);
+  memoryCacheDelete(url);
 }
 
 export default function CachedImage({
@@ -167,51 +294,24 @@ export default function CachedImage({
 
     if (!isCapacitor) {
       // Web: el <img> carga directamente; un error cae en handleError.
-      memoryCache.set(src, src);
+      memoryCacheSet(src, src);
       setDisplaySrc(src);
       setHasError(false);
       return;
     }
 
-    const ext = getExtension(src);
-    const fileName = `${hashUrl(src)}.${ext}`;
     let cancelled = false;
 
     (async () => {
-      console.log("[CACHEDIMG-DEBUG] src recibido:", src, "isCapacitor:", isCapacitor);
-      const cached = await getCachedFile(fileName);
+      const result = await resolveImageDataUrl(src);
       if (cancelled) return;
-      if (cached) {
-        console.log("[CACHEDIMG-DEBUG] filesystem cache HIT:", fileName);
-        memoryCache.set(src, cached);
-        setDisplaySrc(cached);
-        setHasError(false);
-        return;
-      }
-      // Verificar la URL ANTES de renderizarla: si está rota, el fallback verde
-      // se mantiene y no se llega a montar un <img> que falle.
-      const dataUrl = await fetchAsDataUrl(src);
-      console.log("[CACHEDIMG-DEBUG] resultado fetchAsDataUrl:", dataUrl ? "OK (length=" + dataUrl.length + ")" : "NULL/FALLO");
-      if (cancelled) return;
-      if (dataUrl) {
-        const base64 = dataUrl.split(",")[1] || "";
-        if (base64) {
-          await Filesystem.writeFile({
-            path: `image_cache/${fileName}`,
-            data: base64,
-            directory: Directory.Data,
-            recursive: true,
-          }).catch(() => {});
-        }
-        memoryCache.set(src, dataUrl);
-        setDisplaySrc(dataUrl);
+      if (result.kind === "ok") {
+        setDisplaySrc(result.dataUrl);
         setHasError(false);
       } else {
-        brokenSet.add(src);
-        lastErrorAt.set(src, Date.now());
-        memoryCache.delete(src);
-        setDisplaySrc(null);
-        setHasError(true);
+        memoryCacheDelete(src);
+        setDisplaySrc(src);
+        setHasError(false);
       }
     })();
 
@@ -222,11 +322,11 @@ export default function CachedImage({
     const current = memoryCache.get(src);
     if (current?.startsWith("data:")) {
       // Un dato cacheado que por alguna razón falló: olvidarlo y reintentar.
-      memoryCache.delete(src);
+      memoryCacheDelete(src);
     } else {
       brokenSet.add(src);
       lastErrorAt.set(src, Date.now());
-      memoryCache.delete(src);
+      memoryCacheDelete(src);
     }
     setHasError(true);
     setDisplaySrc(null);
@@ -239,18 +339,34 @@ export default function CachedImage({
   // se mantiene sin parpadear, y si ya responde, se muestra la foto.
   useEffect(() => {
     if (!hasError || !src || !brokenSet.has(src)) return;
-    const tryAgain = () => {
+    // Reintento ante un evento de red real (online/wifi): resetea el budget de
+    // reintentos silenciosos (quizá la URL rota era un fallo transitorio).
+    const onOnline = () => {
       const last = lastErrorAt.get(src) ?? 0;
       if (Date.now() - last < RETRY_GAP_MS) return;
       brokenSet.delete(src);
-      memoryCache.delete(src);
+      retryCountMap.delete(src);
+      memoryCacheDelete(src);
       setRetryTick((t) => t + 1);
     };
-    window.addEventListener("online", tryAgain);
+    // Reintento SILENCIOSO por timer con cooldown y tope: no se apaga el fallback
+    // ni se monta un <img> de inmediato; el effect principal vuelve a verificar, y
+    // si sigue rota el verde se mantiene sin parpadear. No encadena polling infinito.
+    const silentRetryTimer = setTimeout(() => {
+      const last = lastErrorAt.get(src) ?? 0;
+      if (Date.now() - last < RETRY_GAP_MS) return;
+      const attempts = retryCountMap.get(src) ?? 0;
+      if (attempts >= MAX_SILENT_RETRIES) return; // rota estable: esperar a red
+      retryCountMap.set(src, attempts + 1);
+      brokenSet.delete(src);
+      memoryCacheDelete(src);
+      setRetryTick((t) => t + 1);
+    }, RETRY_GAP_MS);
+    window.addEventListener("online", onOnline);
     let netHandler: { remove: () => Promise<void> } | null = null;
     if (isCapacitor) {
       Network.addListener("networkStatusChange", (status) => {
-        if (status.connected) tryAgain();
+        if (status.connected) onOnline();
       })
         .then((handle) => {
           netHandler = handle;
@@ -258,7 +374,8 @@ export default function CachedImage({
         .catch(() => {});
     }
     return () => {
-      window.removeEventListener("online", tryAgain);
+      clearTimeout(silentRetryTimer);
+      window.removeEventListener("online", onOnline);
       if (netHandler) {
         netHandler.remove();
         netHandler = null;

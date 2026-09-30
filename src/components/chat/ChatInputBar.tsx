@@ -70,7 +70,10 @@ export default function ChatInputBar({
       )}
 
       {/* FLOATING CHAT INPUT AREA */}
-      <div className="px-3 pb-4 pt-2 bg-transparent relative z-10 shrink-0 flex items-center gap-1.5 overflow-hidden">
+      <div
+        className="px-3 pb-4 pt-2 bg-transparent relative z-10 shrink-0 flex items-center gap-1.5 overflow-hidden"
+        style={{ paddingBottom: "calc(1rem + env(safe-area-inset-bottom))" }}
+      >
         {recordingType ? (
           recordingType === "video" ? (
             <div className="flex-1 bg-teal-900/95 backdrop-blur-md rounded-2xl border border-teal-800/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] text-white animate-fade-in overflow-hidden">
@@ -194,7 +197,7 @@ export default function ChatInputBar({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") onSendText();
                 }}
-                className="flex-1 min-w-0 bg-transparent text-xs py-1.5 outline-none border-none text-slate-800 placeholder-slate-400 font-medium"
+                className="flex-1 min-w-0 bg-transparent text-xs py-1.5 outline-none border-none text-slate-800 placeholder-slate-500 font-medium"
               />
 
               <button 

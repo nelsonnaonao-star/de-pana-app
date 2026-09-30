@@ -128,7 +128,7 @@ export async function uploadChatMedia(
   blob: Blob,
   folder: string = "uploads"
 ): Promise<string> {
-  const isImage = folder.startsWith("image") || folder.startsWith("uploads");
+  const isImage = folder.startsWith("image") || folder.startsWith("uploads") || folder.startsWith("flyers");
   const toUpload = isImage ? await compressImage(blob) : blob;
   return uploadDirectToSupabase(toUpload, folder);
 }

@@ -185,6 +185,21 @@ export async function register(
     logger.warn("[REGISTER] Auto-confirm falló", { error: e });
   }
 
+  // En producción signUp NO devuelve sesión (confirmación de email activa).
+  // El upsert de abajo usa el rol authenticated (RLS + grants de columnas);
+  // sin sesión corre como anon y la BD lo rechaza ("permission denied for table
+  // profiles"), dejando el perfil recién creado sin username/phone e invisible.
+  // Por eso garantizamos una sesión ANTES de escribir el perfil.
+  let session = data.session;
+  if (!session) {
+    const signInRes = await trySignIn(`${cleanUsername}@redon.app`, password);
+    if (signInRes.error) {
+      logger.error("[REGISTER] Sign-in tras registro falló", { error: signInRes.error });
+      throw new Error(signInRes.error.message || "No se pudo iniciar sesión tras el registro.");
+    }
+    session = signInRes.data.session;
+  }
+
   const { error: upsertError } = await supabase.from("profiles").upsert({
     id: data.user.id,
     name,
@@ -200,11 +215,7 @@ export async function register(
     throw new Error(upsertError.message || "Error al crear perfil");
   }
 
-  let token = data.session?.access_token || "";
-  if (!token) {
-    const signInRes = await trySignIn(`${cleanUsername}@redon.app`, password);
-    if (signInRes.data.session) token = signInRes.data.session.access_token;
-  }
+  const token = session?.access_token || "";
 
   toast.success("Cuenta creada exitosamente");
   return {

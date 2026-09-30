@@ -6,10 +6,12 @@ import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
 import AudioMessagePlayer from "./AudioMessagePlayer";
 import { saveMediaToGalleryDirect, shareMedia, openDocument } from "../../services/mediaUtils";
 import { getCachedVideoPath, cacheVideoUrl } from "../../services/videoCache";
+import { getCachedMedia, getCachedMediaSync } from "../../services/mediaCache";
 import { Capacitor } from "@capacitor/core";
-import CachedImage from "../CachedImage";
+import CachedImage, { clearCachedImageRetryState, isCachedImageReady } from "../CachedImage";
 import toast from "react-hot-toast";
 import { generateVideoThumbnailFromElement } from "../../utils/videoThumbnail";
+import MsgTicks from "./MsgTicks";
 
 const URL_PATTERN = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
 
@@ -20,6 +22,38 @@ function getStoryReplyMediaKind(replyToText?: string): "image" | "video" | "text
   if (/^data:video\//i.test(replyToText) || /\.(mp4|webm|mov|m4v|ogv|ogg)(\?|#|$)/i.test(replyToText)) return "video";
   if (/^https?:\/\//i.exec(replyToText)) return "image";
   return "text";
+}
+
+// Cache de media (blobUrlMap + Cache API) para audio/vídeo: arranca SÍNCRONO con
+// el blob ya resuelto (getCachedMediaSync) y "mejora" de forma asíncrona a un
+// blob local si la capa de caché lo tiene o puede descargarlo — evita re-descargas
+// al re-abrir el chat. URLs blob:/data: (media local recién enviada) se pasan tal
+// cual. getCachedMedia igualmente puebla blobUrlMap para futuras sesiones.
+function useCachedMediaUrl(url?: string): string | undefined {
+  const [resolved, setResolved] = useState<string | undefined>(url);
+  useEffect(() => {
+    if (!url) {
+      setResolved(undefined);
+      return;
+    }
+    if (url.startsWith("blob:") || url.startsWith("data:")) {
+      setResolved(url);
+      return;
+    }
+    let cancelled = false;
+    const cached = getCachedMediaSync(url);
+    if (cached) {
+      setResolved(cached);
+      return;
+    }
+    setResolved(url);
+    getCachedMedia(url).then((blobUrl) => {
+      if (cancelled || !blobUrl || blobUrl === url) return;
+      setResolved(blobUrl);
+    });
+    return () => { cancelled = true; };
+  }, [url]);
+  return resolved;
 }
 
 function renderMessageText(text: string, isGlass: boolean) {
@@ -329,11 +363,22 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
   handleAddReaction: (id: string, emoji: string) => void;
   handleReplyMessage: (m: Message) => void;
 }) {
-  const [imgLoaded, setImgLoaded] = useState(false);
+  const [imgLoaded, setImgLoaded] = useState(() => isCachedImageReady(msg.mediaUrl));
   const [imgError, setImgError] = useState(false);
   const [showViewer, setShowViewer] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
   const isSending = msg.status === "sending";
   const isEmojiOnly = isSticker && msg.mediaUrl && isEmoji(msg.mediaUrl);
+
+  const handleImageRetry = () => {
+    if (!msg.mediaUrl) return;
+    // Limpia brokenSet/retryCountMap/cooldown de esta URL y remonta CachedImage
+    // (key={retryKey}) para una descarga inmediata, sin esperar al timer de 15s.
+    clearCachedImageRetryState(msg.mediaUrl);
+    setImgError(false);
+    setImgLoaded(false);
+    setRetryKey((k) => k + 1);
+  };
 
   return (
     <>
@@ -379,29 +424,40 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           </div>
         ) : (
           <>
-        {!imgLoaded && !imgError && (
+        {!imgLoaded && !imgError && msg.mediaUrl && (
           <div className={`${isSticker ? "w-[190px] h-[190px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
             <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
           </div>
         )}
 
-        {imgError && (
-          <div className={`${isSticker ? "w-[190px] h-[190px]" : "w-[220px] h-[200px]"} bg-slate-100 rounded-xl flex items-center justify-center`}>
+        {(imgError || !msg.mediaUrl) && (
+          <div className={`${isSticker ? "w-[190px] h-[190px]" : "w-[220px] h-[200px]"} bg-slate-100 rounded-xl flex flex-col items-center justify-center gap-2`}>
             <span className="text-slate-400 text-xs">No se pudo cargar</span>
+            {imgError && msg.mediaUrl && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleImageRetry(); }}
+                className="text-teal-600 text-[10px] font-bold px-3 py-1 rounded-full bg-teal-500/10 hover:bg-teal-500/20 transition-all cursor-pointer active:scale-95"
+              >
+                Reintentar
+              </button>
+            )}
           </div>
         )}
 
-        <CachedImage
-          src={msg.mediaUrl || ""}
-          alt={isSticker ? "Sticker" : "Image"}
-          loading="eager"
-          onLoad={() => setImgLoaded(true)}
-          onError={() => setImgError(true)}
-          className={`${isSticker
-            ? "max-w-[210px] max-h-[210px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
-            : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
-          } ${!imgLoaded ? "invisible" : ""}`}
-        />
+        {msg.mediaUrl && (
+          <CachedImage
+            key={retryKey}
+            src={msg.mediaUrl}
+            alt={isSticker ? "Sticker" : "Image"}
+            loading="eager"
+            onLoad={() => { setImgLoaded(true); setImgError(false); }}
+            onError={() => setImgError(true)}
+            className={`${isSticker
+              ? "max-w-[210px] max-h-[210px] object-contain filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.45)] select-none"
+              : "max-w-[280px] max-h-[300px] object-contain rounded-xl select-none"
+            } ${!imgLoaded ? "invisible" : ""}`}
+          />
+        )}
         </>)}
 
         {imgLoaded && !isSending && (
@@ -413,7 +469,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           </button>
         )}
 
-        {isSending && imgLoaded && (
+        {isSending && !imgLoaded && (
           <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center pointer-events-none">
             <div className="bg-white/90 rounded-full p-2">
               <Loader2 className="w-5 h-5 text-[#0a4d52] animate-spin" />
@@ -431,12 +487,12 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
           <span>{msg.timestamp}</span>
           {isMe && (
-            <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
+            <span className={`leading-none ${msg.status === "read" ? "text-cyan-500" : "text-slate-400"}`}>
               {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
               {msg.status === "error" && <span className="text-red-400 font-bold">!</span>}
-              {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
-              {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
-              {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+              {msg.status === "sent" && <MsgTicks status="sent" />}
+              {msg.status === "delivered" && <MsgTicks status="delivered" />}
+              {msg.status === "read" && <MsgTicks status="read" />}
             </span>
           )}
         </div>
@@ -459,6 +515,14 @@ export default React.memo(function MessageBubble({
   const { bubbleRef, menuRef, dropDown } = useMenuDropDirection(activeReactionMenu === msg.id);
   const isFile = msg.type === "file";
   const longPressRef = useRef(false);
+  const cacheableMediaUrl =
+    msg.type === "audio" ||
+    msg.type === "voice_note" ||
+    msg.type === "video" ||
+    msg.type === "video_note"
+      ? msg.mediaUrl
+      : undefined;
+  const cachedMediaUrl = useCachedMediaUrl(cacheableMediaUrl);
 
   const openFileMessage = useCallback(async () => {
     if (!msg.mediaUrl) return;
@@ -616,18 +680,18 @@ export default React.memo(function MessageBubble({
       <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
         <div className={`flex flex-col ${isMe ? "items-end" : "items-start"} gap-0.5`}>
           <span className="text-7xl leading-none select-none px-1">{msg.text}</span>
-          <div className={`flex items-center gap-1 px-2 text-[9px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
+          <div className={`flex items-center gap-1 px-2 text-[11px] opacity-80 ${isGlass ? "text-gray-600" : ""}`}>
             {msg.edited && <span className="italic opacity-60">editado</span>}
             {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
             <span>{msg.timestamp}</span>
             {isMe && (
-              <span className={`text-[10px] leading-none ${msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"}`}>
+              <span className={`text-[10px] leading-none ${msg.status === "read" ? "text-cyan-500" : isGlass ? "text-gray-500" : "text-slate-400"}`}>
                 {msg.status === "sending" && "🕒"}
                 {msg.status === "error" && <span className="text-red-400 font-bold">!</span>}
-                {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
-                {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
-                {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
-                {!msg.status && <span className="text-[13px] leading-none">✓</span>}
+                {msg.status === "sent" && <MsgTicks status="sent" />}
+                {msg.status === "delivered" && <MsgTicks status="delivered" />}
+                {msg.status === "read" && <MsgTicks status="read" />}
+                {!msg.status && <MsgTicks status="sent" />}
               </span>
             )}
           </div>
@@ -757,7 +821,7 @@ export default React.memo(function MessageBubble({
         {msg.type === "audio" && msg.mediaUrl && (
           <div className="w-fit">
             <AudioMessagePlayer
-              audioUrl={msg.mediaUrl}
+              audioUrl={cachedMediaUrl || ""}
               msgId={msg.id}
               isMe={isMe}
               isGlass={isGlass}
@@ -767,7 +831,7 @@ export default React.memo(function MessageBubble({
         )}
 
         {msg.type === "audio" && !msg.mediaUrl && (
-          <div className="flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? 'bg-black/5' : 'bg-black/5 dark:bg-white/5'}">
+          <div className={`flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? 'bg-black/5' : 'bg-black/5 dark:bg-white/5'}`}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-white/20">
               <Play className="w-4 h-4 ml-0.5" />
             </div>
@@ -779,7 +843,7 @@ export default React.memo(function MessageBubble({
         )}
 
         {msg.type === "file" && (
-          <div className="flex items-center gap-2.5 p-1 rounded-xl min-w-[200px] ${isGlass ? 'bg-black/5' : 'bg-black/5 dark:bg-white/5'}">
+          <div className={`flex items-center gap-2.5 p-1 rounded-xl min-w-[200px] ${isGlass ? 'bg-black/5' : 'bg-black/5 dark:bg-white/5'}`}>
             <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-amber-500/20 text-amber-500">
               <span className="text-[13px] font-black leading-none">📄</span>
             </div>
@@ -804,12 +868,11 @@ export default React.memo(function MessageBubble({
 
         {msg.type === "voice_note" && msg.mediaUrl && (
           <AudioMessagePlayer
-            audioUrl={msg.mediaUrl}
+            audioUrl={cachedMediaUrl || ""}
             msgId={msg.id}
             isMe={isMe}
             isGlass={isGlass}
             duration={msg.duration}
-            orbSize={52}
           />
         )}
 
@@ -890,20 +953,20 @@ export default React.memo(function MessageBubble({
           );
         })()}
 
-        <div className={`flex items-center justify-end gap-1 mt-1 text-[9px] opacity-70 ${isGlass ? "text-gray-600" : ""}`}>
+        <div className={`flex items-center justify-end gap-1 mt-1 text-[11px] opacity-80 ${isGlass ? "text-gray-600" : ""}`}>
           {msg.edited && <span className="italic opacity-60">editado</span>}
           {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
           <span>{msg.timestamp}</span>
           {isMe && (
             <span className={`text-[10px] leading-none ${
-              msg.status === "read" ? "text-teal-400" : isGlass ? "text-gray-500" : "text-slate-400"
+              msg.status === "read" ? "text-cyan-500" : isGlass ? "text-gray-500" : "text-slate-400"
             }`}>
               {msg.status === "sending" && "🕒"}
-              {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
-              {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
-              {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+              {msg.status === "sent" && <MsgTicks status="sent" />}
+              {msg.status === "delivered" && <MsgTicks status="delivered" />}
+              {msg.status === "read" && <MsgTicks status="read" />}
               {msg.status === "error" && <span className="text-red-400">⚠️</span>}
-              {!msg.status && <span className="text-[13px] leading-none">✓</span>}
+              {!msg.status && <MsgTicks status="sent" />}
             </span>
           )}
         </div>
@@ -972,12 +1035,14 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
 }) {
   const [showViewer, setShowViewer] = useState(false);
   const isSending = msg.status === "sending";
+  const cachedVideoUrl = useCachedMediaUrl(msg.localVideoUrl || msg.mediaUrl);
+  const cachedPosterUrl = useCachedMediaUrl(msg.posterUrl);
 
   return (
     <>
       {showViewer && (
         <VideoViewer
-          src={msg.localVideoUrl || msg.mediaUrl!}
+          src={cachedVideoUrl || msg.localVideoUrl || msg.mediaUrl!}
           msg={msg}
           onClose={() => setShowViewer(false)}
           handleForwardMessage={handleForwardMessage}
@@ -1010,9 +1075,9 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
       >
         <div className="relative bg-black overflow-hidden rounded-xl shadow-md border border-white/10" style={{ width: 260, height: 340 }}>
           {/* Capa de imagen (Thumbnail) */}
-          {msg.posterUrl ? (
-            <img
-              src={msg.posterUrl}
+          {cachedPosterUrl ? (
+            <CachedImage
+              src={cachedPosterUrl}
               alt="Video thumbnail"
               className="w-full h-full object-cover absolute inset-0 bg-black"
             />
@@ -1038,11 +1103,11 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
             {msg.isEphemeral && <EphemeralBadge isMe={isMe} />}
             <span>{msg.timestamp}</span>
             {isMe && (
-              <span className={`leading-none ${msg.status === "read" ? "text-teal-400" : "text-slate-400"}`}>
+              <span className={`leading-none ${msg.status === "read" ? "text-cyan-500" : "text-slate-400"}`}>
                 {msg.status === "sending" && <Loader2 className="w-3 h-3 animate-spin inline" />}
-                {msg.status === "sent" && <span className="text-[13px] leading-none">✓</span>}
-                {msg.status === "delivered" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
-                {msg.status === "read" && <span className="text-[13px] leading-none tracking-[-2px]">✓✓</span>}
+                {msg.status === "sent" && <MsgTicks status="sent" />}
+                {msg.status === "delivered" && <MsgTicks status="delivered" />}
+                {msg.status === "read" && <MsgTicks status="read" />}
               </span>
             )}
           </div>
@@ -1089,7 +1154,9 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction, onVide
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const capturedRef = useRef(false);
   const isSending = msg.status === "sending";
-  const poster = msg.posterUrl || posterOverride;
+  const cachedVideoUrl = useCachedMediaUrl(msg.localVideoUrl || msg.mediaUrl);
+  const cachedPosterUrl = useCachedMediaUrl(msg.posterUrl);
+  const poster = cachedPosterUrl || posterOverride;
 
   // Primer frame disponible: sin poster, captura del <video> YA cargado (sin
   // descarga extra) y lo persiste vía ChatRoom (upsertMessage → poster_url).
@@ -1117,7 +1184,7 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction, onVide
     <>
       {showViewer && (
         <VideoViewer
-          src={msg.localVideoUrl || msg.mediaUrl!}
+          src={cachedVideoUrl || msg.localVideoUrl || msg.mediaUrl!}
           msg={msg}
           onClose={() => setShowViewer(false)}
           handleForwardMessage={handleForwardMessage}
@@ -1130,7 +1197,7 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction, onVide
       >
         <div className="w-24 h-24 rounded-full border-4 border-teal-400 overflow-hidden bg-black flex items-center justify-center relative shadow-inner">
           {poster && (
-            <img
+            <CachedImage
               src={poster}
               alt=""
               className="absolute inset-0 w-full h-full object-cover"
@@ -1139,7 +1206,7 @@ function VideoNoteContent({ msg, handleForwardMessage, handleAddReaction, onVide
 
           <video
             ref={videoRef}
-            src={msg.localVideoUrl || msg.mediaUrl}
+            src={cachedVideoUrl || msg.localVideoUrl || msg.mediaUrl}
             className={`w-full h-full object-cover absolute inset-0 transition-opacity duration-150 ${
               videoReady ? "opacity-100" : "opacity-0"
             }`}

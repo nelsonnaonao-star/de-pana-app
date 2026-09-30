@@ -143,7 +143,7 @@ export default function GroupInfoPanel({
               </button>
             </div>
           )}
-          <p className="text-[10px] text-slate-400 mt-0.5">{groupMembers.length} miembros</p>
+          <p className="text-xs text-slate-400 mt-0.5">{groupMembers.length} miembros</p>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           <div className="mb-3 border rounded-xl divide-y divide-slate-100">
@@ -195,10 +195,10 @@ export default function GroupInfoPanel({
           </div>
 
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[10px] font-bold text-slate-400 uppercase">{groupMembers.length} miembros</p>
+            <p className="text-xs font-bold text-slate-400 uppercase">{groupMembers.length} miembros</p>
             <button
               onClick={onToggleAddMember}
-              className="flex items-center gap-1 text-[10px] font-bold text-teal-600 hover:text-teal-700 cursor-pointer"
+              className="flex items-center gap-1 text-xs font-bold text-teal-600 hover:text-teal-700 cursor-pointer"
             >
               <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -217,7 +217,7 @@ export default function GroupInfoPanel({
                 placeholder="Buscar por nombre o teléfono..."
                 value={addMemberQuery}
                 onChange={e => onAddMemberQueryChange(e.target.value)}
-                className="w-full text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 outline-none focus:border-teal-400 bg-white"
+                className="w-full text-sm px-2 py-1.5 rounded-lg border border-slate-200 outline-none focus:border-teal-400 bg-white"
                 autoFocus
               />
               {addMemberResults.length > 0 && (

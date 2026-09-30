@@ -41,8 +41,18 @@ function MessageBubbleWithCache(props: MessageBubbleWithCacheProps) {
   if (isLocalMedia) blobMediaRef.current = msg.mediaUrl!;
   if (isLocalPoster) blobPosterRef.current = msg.posterUrl!;
 
-  const syncMediaUrl = !isLocalMedia ? (getCachedMediaSync(msg.mediaUrl!) ?? msg.mediaUrl) : undefined;
-  const syncPosterUrl = !isLocalPoster ? (getCachedMediaSync(msg.posterUrl!) ?? msg.posterUrl) : undefined;
+  const isMediaCacheable =
+    msg.type === "audio" ||
+    msg.type === "voice_note" ||
+    msg.type === "video" ||
+    msg.type === "video_note";
+
+  const syncMediaUrl = !isLocalMedia && isMediaCacheable
+    ? (getCachedMediaSync(msg.mediaUrl!) ?? msg.mediaUrl)
+    : msg.mediaUrl;
+  const syncPosterUrl = !isLocalPoster && isMediaCacheable
+    ? (getCachedMediaSync(msg.posterUrl!) ?? msg.posterUrl)
+    : msg.posterUrl;
 
   const mediaUrl = isLocalMedia ? msg.mediaUrl : blobMediaRef.current || syncMediaUrl || msg.mediaUrl;
   const posterUrl = isLocalPoster ? msg.posterUrl : blobPosterRef.current || syncPosterUrl || msg.posterUrl;

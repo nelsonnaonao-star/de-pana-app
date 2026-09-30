@@ -49,7 +49,7 @@ export default function SimulatorForwardModal({
             placeholder="Buscar chat..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full pl-8 pr-3 py-2 text-[11px] rounded-lg border border-slate-200 bg-slate-50 outline-none focus:border-tele-400 transition-colors"
+            className="w-full pl-8 pr-3 py-2 text-[11px] rounded-lg border border-slate-200 bg-slate-50 outline-none focus:border-teal-400 transition-colors"
             autoFocus
           />
         </div>
