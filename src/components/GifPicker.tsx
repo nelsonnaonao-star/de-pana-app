@@ -35,6 +35,38 @@ const GIPHY_CACHE = new Map<string, GiphyResult[]>();
 // Peticiones en vuelo, para no duplicar la misma consulta simultánea.
 const GIPHY_INFLIGHT = new Map<string, Promise<GiphyResult[]>>();
 
+// ─── Variante de media enviada al chat (Fase 3A) ──────────────────────
+// El proxy `/api/giphy` reenvía el `data` crudo de Giphy sin filtrar, así que
+// en runtime `images` trae todos los renditions. `GiphyResult` solo declara
+// cuatro, por eso aquí se amplía el tipo de forma local (sin tocar
+// stickerService.ts) para poder leer `downsized`.
+//
+// Antes se elegía `fixed_height_small` (≈100 px) como variante primaria: el
+// asset llegaba al chat con resolución insuficiente y `ImageMessage` lo
+// dibujaba a su tamaño intrínseco (~100 px) en lugar de hasta los 210 px del
+// sticker. `downsized` (máx. 600×600) da resolución de sobra para esa
+// presentación sin caer en `original`, que puede pesar varios MB.
+type GiphyRendition = { url?: string; width?: string; height?: string };
+
+type GiphyImageSet = GiphyResult["images"] & {
+  downsized?: GiphyRendition;
+};
+
+// Orden de preferencia. `original` va último a propósito: es el único que
+// puede ser desproporcionadamente grande. Las variantes intermedias son GIF,
+// así que conservan la animación y, en stickers, el canal alfa.
+const GIPHY_SEND_RENDITIONS = ["downsized", "fixed_height", "preview_gif", "original"] as const;
+
+function pickGiphySendUrl(item: GiphyResult): string | undefined {
+  const images = item.images as GiphyImageSet | undefined;
+  if (!images) return undefined;
+  for (const rendition of GIPHY_SEND_RENDITIONS) {
+    const url = images[rendition]?.url;
+    if (url) return url;
+  }
+  return undefined;
+}
+
 function fetchGiphyCached(kind: GiphyKind, query: string): Promise<GiphyResult[]> {
   const key = `${kind}:${query.trim()}`;
   const cached = GIPHY_CACHE.get(key);
@@ -518,10 +550,10 @@ export default function GifPicker({ onSelect, onClose }: GifPickerProps) {
             {items.map((item) => (
               <button
                 key={item.id}
-                onClick={() => onSelect(
-                  item.images?.fixed_height_small?.url || item.images?.preview_gif?.url || item.images?.original?.url,
-                  tab === "gif" ? "gif" : "sticker"
-                )}
+                onClick={() => {
+                  const url = pickGiphySendUrl(item);
+                  if (url) onSelect(url, tab === "gif" ? "gif" : "sticker");
+                }}
 className="relative rounded-xl overflow-hidden bg-white/70 hover:bg-white/90 hover:ring-2 ring-teal-500/60 hover:shadow-lg transition-all cursor-pointer group active:scale-95 min-w-0"
                 style={{ aspectRatio: tab === "gif" ? "16/9" : "1" }}
               >
