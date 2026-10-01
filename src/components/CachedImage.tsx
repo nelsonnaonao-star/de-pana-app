@@ -10,7 +10,10 @@ interface CachedImageProps {
   className?: string;
   style?: React.CSSProperties;
   loading?: "lazy" | "eager";
-  onLoad?: () => void;
+  // El evento se expone para poder leer `naturalWidth`/`naturalHeight` (p. ej.
+  // el aspect ratio de un póster de video). Los handlers de cero argumentos
+  // existentes siguen siendo válidos.
+  onLoad?: (event: React.SyntheticEvent<HTMLImageElement>) => void;
   onError?: () => void;
   onClick?: () => void;
 }

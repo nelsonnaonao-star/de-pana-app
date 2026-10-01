@@ -15,6 +15,12 @@ import MsgTicks from "./MsgTicks";
 
 const URL_PATTERN = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
 
+// Límites visuales del preview de video (Fase 3B). No son una forma fija: el
+// ancho se calcula a partir del aspect ratio real del video, y estos valores
+// solo acotan ese cálculo.
+const VIDEO_MAX_W = 260;
+const VIDEO_MAX_H = 420;
+
 // Detecta si replyToText de una respuesta a estado es media (imagen/video) o texto.
 function getStoryReplyMediaKind(replyToText?: string): "image" | "video" | "text" | null {
   if (!replyToText) return null;
@@ -1037,7 +1043,24 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
   const isSending = msg.status === "sending";
   const cachedVideoUrl = useCachedMediaUrl(msg.localVideoUrl || msg.mediaUrl);
   const cachedPosterUrl = useCachedMediaUrl(msg.posterUrl);
+  // Fase 3B: el póster de un video lo genera `generateVideoThumbnail`
+  // (utils/videoThumbnail.ts) a partir de `videoWidth`/`videoHeight` reales y con
+  // `drawImage` sin recorte, así que su PROPORCIÓN es exactamente la del video,
+  // pero su TAMAÑO ABSOLUTO es el del video (solo se reduce si supera 600 px de
+  // ancho). Por eso el ancho no puede tomarse del poster: un video de 240 px
+  // llegaba con un poster de 240 px y la caja se estrechaba con él. Se usa
+  // entonces el poster únicamente como fuente de RATIO y el ancho se deriva de
+  // la proporción real, dentro de los límites visuales del bubble.
+  const [posterRatio, setPosterRatio] = useState<number | null>(null);
 
+  // 16:9 provisional mientras no se conoce el ratio real: se muestra la
+  // proporción más común y nunca una miniatura vertical estrecha.
+  const ratio = posterRatio || 16 / 9;
+  // El ancho sale de la proporción: hasta 260 px, o menos si con esa altura
+  // superaría el tope de 420 px (videos verticales). 260 px conserva la
+  // densidad que ya tenían las burbujas; 420 px evita que un video vertical
+  // se coma la pantalla.
+  const boxWidth = Math.min(VIDEO_MAX_W, VIDEO_MAX_H * ratio);
   return (
     <>
       {showViewer && (
@@ -1073,15 +1096,40 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
           }
         }}
       >
-        <div className="relative bg-black overflow-hidden rounded-xl shadow-md border border-white/10" style={{ width: 260, height: 340 }}>
+        {/* Fase 3B: la caja la define la PROPORCIÓN real del video, no el tamaño
+            del poster. Hay dos estados para que el preview NUNCA sea una franja
+            angosta con barras:
+            - ratio conocido: `width` + `aspect-ratio` fijan la caja exacta y
+              el poster llena sin recortes ni letterbox.
+            - ratio aún desconocido: NO se impone una proporción inventada; el
+              propio poster (`w-full h-auto`) dimensiona la caja, de modo que
+              mientras se lee `naturalWidth` la forma ya es la real. */}
+        <div
+          className="relative bg-black overflow-hidden rounded-xl shadow-md border border-white/10 max-w-full min-h-[140px]"
+          style={posterRatio ? { width: boxWidth, aspectRatio: ratio } : { width: boxWidth }}
+        >
           {/* Capa de imagen (Thumbnail) */}
-          {cachedPosterUrl ? (
+          {cachedPosterUrl && (
             <CachedImage
               src={cachedPosterUrl}
               alt="Video thumbnail"
-              className="w-full h-full object-cover absolute inset-0 bg-black"
+              className={
+                posterRatio
+                  ? "w-full h-full object-contain"
+                  : "block w-full h-auto max-h-[420px] object-contain"
+              }
+              onLoad={(e) => {
+                const { naturalWidth, naturalHeight } = e.currentTarget;
+                if (naturalWidth > 0 && naturalHeight > 0) {
+                  const next = naturalWidth / naturalHeight;
+                  setPosterRatio((prev) => (prev === next ? prev : next));
+                }
+              }}
             />
-          ) : (
+          )}
+          {/* Sin póster no hay nada que mostrar: se avisa con el spinner. Con
+              póster no se superpone nada, para no taparlo si `onLoad` no llega. */}
+          {!cachedPosterUrl && (
             <div className="w-full h-full bg-black flex items-center justify-center absolute inset-0">
               <Loader2 className="w-6 h-6 text-white/20 animate-spin" />
             </div>
