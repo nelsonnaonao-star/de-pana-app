@@ -23,7 +23,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
       </button>
 
       <button
-        onClick={() => onPickFile("video/*,video/mp4,video/x-m4v,video/quicktime", "video")}
+        onClick={() => onPickFile("video/*", "video")}
         className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center text-rose-600 group-hover:scale-110 transition-transform shadow-sm">

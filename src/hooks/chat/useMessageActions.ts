@@ -469,10 +469,29 @@ pendingSendIdsRef.current.add(tempId);
     const input = document.createElement("input");
     input.type = "file";
     input.accept = accept;
+    // Android/WebView: el `File` del picker es un stream `content://` de UN SOLO
+    // USO propiedad de este input. Con el input fuera del documento nada lo
+    // mantiene vivo: el GC puede recuperarlo mientras el handler asíncrono
+    // sigue leyendo y la lectura revienta con `NotReadableError`. Se ancla al
+    // DOM (invisible) durante toda la vida del handler y se retira al terminar.
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    input.style.top = "0";
+    input.style.width = "1px";
+    input.style.height = "1px";
+    input.style.opacity = "0";
+    input.style.pointerEvents = "none";
+    document.body.appendChild(input);
+    const disposeInput = () => {
+      try {
+        if (input.parentNode) input.parentNode.removeChild(input);
+      } catch { /* el input ya se detached */ }
+    };
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) {
         // Usuario canceló el picker: liberar el candado o quedaría bloqueado.
+        disposeInput();
         isSendingRef.current = false;
         return;
       }
@@ -487,16 +506,115 @@ pendingSendIdsRef.current.add(tempId);
         // content:// que se consume): cualquier segunda lectura lanza
         // NotReadableError. Se leen los bytes UNA vez aquí y TODO lo demás
         // (preview, miniatura, compresión, subida) se construye desde memoria.
-        let localBlob: Blob;
-        try {
-          console.log(`[VIDSEND] step=read-start name=${file.name} size=${(file.size / 1048576).toFixed(2)}MB type=${file.type || "?"}`);
-          localBlob = new Blob([await file.arrayBuffer()], { type: file.type || "video/mp4" });
-          console.log(`[VIDSEND] step=read-ok ${(localBlob.size / 1048576).toFixed(2)}MB`);
-        } catch (e: any) {
-          console.log(`[VIDSEND] step=read FAIL ${e?.message}`);
-          throw new Error("No se pudo leer el video desde la galería. Inténtalo de nuevo.");
+        //
+        // Android/WebView frequently entrega el `File` con `type` vacío o con un
+        // MIME genérico, y `arrayBuffer()` sobre el stream `content://` falla con
+        // NotReadableError. Por eso el tipo se resuelve también por extensión y
+        // la lectura tiene un lector alterno: no se rechaza un video válido solo
+        // porque Android no declaró bien su MIME.
+        const extName = (file.name || "").split(".").pop()?.toLowerCase() || "";
+        const videoMimeByExt: Record<string, string> = {
+          mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime",
+          qt: "video/quicktime", webm: "video/webm", mkv: "video/x-matroska",
+          "3gp": "video/3gpp", avi: "video/x-msvideo", ts: "video/mp2t",
+        };
+        const declaredType = (file.type || "").trim();
+        const resolvedType =
+          declaredType && declaredType !== "application/octet-stream"
+            ? declaredType
+            : videoMimeByExt[extName] || (type === "video" ? "video/mp4" : declaredType || "application/octet-stream");
+        console.log(
+          `[VIDSEND] step=read-start name=${file.name || "(sin nombre)"} size=${((file.size || 0) / 1048576).toFixed(2)}MB declaredType=${declaredType || "(vacio)"} ext=${extName || "(sin ext)"} resolvedType=${resolvedType}` +
+          ` | lastModified=${file.lastModified || 0} isFile=${file instanceof File} hasArrayBuffer=${typeof (file as any).arrayBuffer === "function"} hasSlice=${typeof (file as any).slice === "function"} hasStream=${typeof (file as any).stream === "function"}`
+        );
+
+        const readViaFileReader = (f: Blob): Promise<ArrayBuffer> =>
+          new Promise((resolve, reject) => {
+            try {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const result = reader.result;
+                if (result instanceof ArrayBuffer) resolve(result);
+                else reject(new Error(`FileReader devolvio ${typeof result}, no ArrayBuffer`));
+              };
+              reader.onerror = () => reject(reader.error || new Error("FileReader fallo"));
+              reader.onabort = () => reject(new Error("FileReader abortado"));
+              reader.readAsArrayBuffer(f);
+            } catch (e: any) {
+              reject(e);
+            }
+          });
+
+        // Vía alternativa: pasar el blob por el almacén de blob-URLs de Chromium
+        // (`fetch`) reabre el handleunderlying del archivo. Es el único camino
+        // que sobrevive a un `NotReadableError` cuando el `File` llegó de un
+        // `content://` de otra app (galería) y su pipe ya se cerró.
+        const readViaBlobUrl = async (f: Blob): Promise<ArrayBuffer> => {
+          const url = URL.createObjectURL(f);
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`fetch blob-url status ${res.status}`);
+            return await res.arrayBuffer();
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        };
+
+        const readers: { name: string; run: () => Promise<ArrayBuffer> }[] = [
+          ...(typeof (file as any).arrayBuffer === "function"
+            ? [{ name: "arrayBuffer", run: () => file.arrayBuffer() }]
+            : []),
+          { name: "blobUrl-fetch", run: () => readViaBlobUrl(file) },
+          { name: "FileReader", run: () => readViaFileReader(file) },
+        ];
+
+        // Logcat real (Android): `arrayBuffer()` y `FileReader` fallan ambos con
+        // NotReadableError en el PRIMER intento tras abrir la galería, y el mismo
+        // archivo entra perfecto en el segundo. Se prueban TODAS las vías y, si
+        // ninguna revive el blob, se espera a que el permiso `content://` se
+        // recupere y se reintenta una vez.
+        const readerErrors: string[] = [];
+        let bytes: ArrayBuffer | undefined;
+        for (let pass = 0; pass < 2 && !bytes; pass++) {
+          if (pass > 0) {
+            console.log(`[VIDSEND] step=read retry-pasada-2 tras 400ms`);
+            await new Promise((r) => setTimeout(r, 400));
+          }
+          for (const reader of readers) {
+            try {
+              const out = await reader.run();
+              if (out && out.byteLength > 0) {
+                bytes = out;
+                console.log(
+                  `[VIDSEND] step=read-ok-via=${reader.name} pass=${pass + 1} ${(out.byteLength / 1048576).toFixed(2)}MB`
+                );
+                break;
+              }
+              readerErrors.push(`${reader.name}: 0 bytes`);
+            } catch (e: any) {
+              const detail = `${reader.name}: ${e?.name || "Error"} ${e?.message || ""}`.trim();
+              readerErrors.push(detail);
+              console.log(`[VIDSEND] step=read ${detail}`);
+            }
+          }
         }
-        const localFile = new File([localBlob], file.name || "video.mp4", { type: localBlob.type });
+
+        // Un 0 bytes real (no un fallo de lectura) es el único caso que se rechaza.
+        if (!bytes || bytes.byteLength === 0) {
+          console.log(`[VIDSEND] step=read FAIL todos-lectores-murieron`);
+          throw new Error(
+            `No se pudo leer el video de la galería. Intentos: ${readerErrors.join(" | ") || "sin detalle"}.`
+          );
+        }
+
+        // Una sola materialización en memoria: el `File` ES un `Blob`, así que se
+        // construye una vez desde los bytes (con nombre + MIME resueltos) y se usa
+        // el mismo objeto para preview, miniatura, compresión y subida. Antes
+        // había `Blob` -> `File`, dos copias completas del video en el heap.
+        const safeName = file.name || `video.${extName || "mp4"}`;
+        const localFile = new File([bytes], safeName, { type: resolvedType, lastModified: file.lastModified || Date.now() });
+        const localBlob: Blob = localFile;
+        console.log(`[VIDSEND] step=read-ok ${(localBlob.size / 1048576).toFixed(2)}MB type=${localBlob.type}`);
 
         const shouldCompress = type === "video" && localBlob.size > 5 * 1024 * 1024;
         // Tope duro para videos: el WebView no puede recomprimirlos si falla la
@@ -507,10 +625,21 @@ pendingSendIdsRef.current.add(tempId);
           throw new Error(`El video pesa ${(localBlob.size / 1048576).toFixed(0)}MB y el máximo para enviar es 500MB`);
         }
 
-        let posterUrl: string | undefined;
-        if (type === "video") {
-          try { posterUrl = await generateVideoThumbnail(localFile); console.log(`[VIDSEND] step=poster ok=${!!posterUrl}`); } catch (e: any) { console.log(`[VIDSEND] step=poster FAIL ${e?.message}`); }
-        }
+        // La miniatura NO bloquea: se lanza en paralelo con la compresión y la
+        // subida, y se recoge DESPUÉS de `uploadChatMedia`. Antes se esperaba
+        // aquí (`onloadeddata` + `seeked`) antes de siquiera pintar la burbuja.
+        const posterPromise: Promise<string | undefined> =
+          type === "video"
+            ? generateVideoThumbnail(localFile)
+                .then((p) => {
+                  console.log(`[VIDSEND] step=poster ok=${!!p}`);
+                  return p || undefined;
+                })
+                .catch((e: any) => {
+                  console.log(`[VIDSEND] step=poster FAIL ${e?.message}`);
+                  return undefined;
+                })
+            : Promise.resolve(undefined);
 
         const blobUrl = URL.createObjectURL(localBlob);
         const sendingMsg: Message = {
@@ -520,7 +649,6 @@ pendingSendIdsRef.current.add(tempId);
           fileSize: shouldCompress ? "Comprimiendo…" : formatFileSize(localBlob.size),
           status: "sending",
           synced: false,
-          posterUrl,
           clientId: clientIdFile,
           sender_id: uid,
         };
@@ -536,7 +664,9 @@ pendingSendIdsRef.current.add(tempId);
           if (shouldCompress) {
             console.log(`[VIDSEND] step=compress start (${(localBlob.size / 1048576).toFixed(2)}MB > 5MB)`);
             const compressed = await compressVideo(localFile);
-            fileToUpload = compressed instanceof Blob ? new File([compressed], localFile.name, { type: compressed.type }) : localFile;
+            // `compressVideo` devuelve un `Blob` y `uploadChatMedia` acepta
+            // `Blob`: no hace falta reenvolverlo en un `File`.
+            fileToUpload = compressed instanceof Blob ? compressed : localFile;
             console.log(`[VIDSEND] step=compress done -> ${(fileToUpload.size / 1048576).toFixed(2)}MB type=${fileToUpload.type}`);
             const newSize = formatFileSize(fileToUpload.size);
             setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: newSize } : m));
@@ -555,13 +685,19 @@ pendingSendIdsRef.current.add(tempId);
         }
 
         try {
-          const blob = new Blob([fileToUpload], { type: fileToUpload.type });
+          // `uploadChatMedia` ya recibe un `Blob`: envolverlo otra vez en un
+          // `Blob`/`File` sólo costaba una copia extra en memoria.
+          const blob = fileToUpload;
           console.log(`[VIDSEND] step=upload-start ${(blob.size / 1048576).toFixed(2)}MB contentType=${blob.type} folder=${type === "video" ? "video" : "files"}`);
           const url = await uploadChatMedia(blob, type === "video" ? "video" : "files");
           console.log(`[VIDSEND] step=upload-ok url=${url.slice(0, 90)}`);
           if (type === "video") {
             cacheVideoBlob(url, localBlob).catch(() => {});
           }
+          // La miniatura venía corriendo en paralelo desde antes de la
+          // compresión; a estas alturas ya está resuelta o se resuelve al
+          // instante. Se guarda en la misma fila que la URL final.
+          const posterUrl = await posterPromise;
           const mediaUpdated = { ...sendingMsg, mediaUrl: url, posterUrl };
           await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdFile, sender_id: uid }, uid);
           setMessages(prev => {
@@ -611,6 +747,8 @@ pendingSendIdsRef.current.add(tempId);
         pendingSendIdsRef.current.delete(tempId);
         inFlightMessageIds.delete(tempId);
         isSendingRef.current = false;
+        // Ya no queda nada pendiente de leer: el input puede salir del DOM.
+        disposeInput();
       }
     };
     input.click();
