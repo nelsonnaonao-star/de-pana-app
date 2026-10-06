@@ -79,7 +79,7 @@ export default function ChatInputBar({
             <div className="flex-1 bg-teal-900/95 backdrop-blur-md rounded-2xl border border-teal-800/80 shadow-[0_8px_30px_rgba(0,0,0,0.25)] text-white animate-fade-in overflow-hidden">
               <div className="w-[200px] h-[200px] mx-auto my-3 bg-black rounded-full flex items-center justify-center relative overflow-hidden">
                 {!isCameraReady && (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/80 rounded-full">
+                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-black rounded-full">
                     <Loader2 className="w-8 h-8 text-white/40 animate-spin" />
                   </div>
                 )}
