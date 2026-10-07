@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ArrowLeft, Phone, Video, Search, MoreVertical, Palette, Clock } from "lucide-react";
+import { ArrowLeft, Phone, Video, Search, MoreVertical, Palette, Clock, Users, Ban, Trash2 } from "lucide-react";
 import CachedImage from "../CachedImage";
 import { Chat } from "../../types";
 
@@ -197,7 +197,7 @@ export default function ChatHeader({
                       <div className="mx-2 mb-1">
                         <button
                           onClick={() => setShowEphemeral(v => !v)}
-                          className="w-full flex items-center gap-3 px-2 py-2 rounded-xl text-[13px] font-semibold text-teal-700 hover:bg-teal-50/70 transition-colors cursor-pointer"
+                          className="w-full flex items-center gap-3 px-2 py-2 rounded-xl text-[13px] font-semibold text-teal-700 hover:bg-teal-50/70 transition-colors active:scale-95 transition-all duration-150 cursor-pointer"
                         >
                           <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
                             <Clock className="w-[18px] h-[18px]" />
@@ -210,7 +210,7 @@ export default function ChatHeader({
                               <button
                                 key={opt.value}
                                 onClick={() => { onSetEphemeralTimer(opt.value); setShowEphemeral(false); }}
-                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[12px] font-medium transition-colors cursor-pointer ${
+                                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[12px] font-medium transition-colors active:scale-95 transition-all duration-150 cursor-pointer ${
                                   activeTimer === opt.value
                                     ? "bg-white text-teal-700 font-bold shadow-sm"
                                     : "text-slate-600 hover:bg-white/70"
@@ -228,19 +228,16 @@ export default function ChatHeader({
                     )}
                     <button
                       onClick={onClearChat}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-amber-600 hover:bg-amber-50/70 transition-colors cursor-pointer"
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-amber-600 hover:bg-amber-50/70 transition-colors active:scale-95 transition-all duration-150 cursor-pointer"
                     >
                       <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                          <rect x="4" y="6" width="16" height="14" rx="1" />
-                        </svg>
+                        <Trash2 className="w-[18px] h-[18px]" strokeWidth="2" />
                       </div>
                       Borrar mensajes
                     </button>
                     <button
                       onClick={onOpenCustomizer}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors active:scale-95 transition-all duration-150 cursor-pointer"
                     >
                       <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
                         <Palette className="w-[18px] h-[18px]" />
@@ -250,15 +247,10 @@ export default function ChatHeader({
                     {isGroup && (
                       <button
                         onClick={onOpenGroupInfo}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-purple-600 hover:bg-purple-50/70 transition-colors cursor-pointer"
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-purple-600 hover:bg-purple-50/70 transition-colors active:scale-95 transition-all duration-150 cursor-pointer"
                       >
                         <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                            <circle cx="9" cy="7" r="4" />
-                            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                          </svg>
+                          <Users className="w-[18px] h-[18px]" strokeWidth="2" />
                         </div>
                         Info del grupo
                       </button>
@@ -270,26 +262,20 @@ export default function ChatHeader({
                     {!isGroup && onBlockUser && (
                       <button
                         onClick={onBlockUser}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-rose-600 hover:bg-rose-50/70 transition-colors cursor-pointer"
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-rose-600 hover:bg-rose-50/70 transition-colors active:scale-95 transition-all duration-150 cursor-pointer"
                       >
                         <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="12" cy="12" r="10" />
-                            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-                          </svg>
+                          <Ban className="w-[18px] h-[18px]" strokeWidth="2" />
                         </div>
                         Bloquear usuario
                       </button>
                     )}
                     <button
                       onClick={onOpenDeleteConfirm}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-rose-600 hover:bg-rose-50/70 transition-colors cursor-pointer"
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-semibold text-rose-600 hover:bg-rose-50/70 transition-colors active:scale-95 transition-all duration-150 cursor-pointer"
                     >
                       <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="3 6 5 6 21 6" />
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
+                        <Trash2 className="w-[18px] h-[18px]" strokeWidth="2" />
                       </div>
                       Eliminar chat
                     </button>

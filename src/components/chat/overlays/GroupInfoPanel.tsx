@@ -150,7 +150,7 @@ export default function GroupInfoPanel({
             {!isMuted ? (
               <button
                 onClick={() => setShowMuteOptions(v => !v)}
-                className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-slate-50 rounded-xl active:scale-95 transition-all cursor-pointer"
               >
                 <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-500">
                   <Bell className="w-4 h-4" />
@@ -185,7 +185,7 @@ export default function GroupInfoPanel({
                     key={opt.value}
                     onClick={() => { onMute(opt.value); setShowMuteOptions(false); }}
                     disabled={muting}
-                    className="py-2 text-[11px] font-bold text-slate-700 bg-slate-50 hover:bg-teal-50 hover:text-teal-700 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                    className="py-2 text-[11px] font-bold text-slate-700 bg-slate-50 hover:bg-teal-50 hover:text-teal-700 rounded-lg active:scale-95 transition-all cursor-pointer disabled:opacity-50"
                   >
                     {opt.label}
                   </button>
@@ -289,13 +289,13 @@ export default function GroupInfoPanel({
         <div className="p-4 border-t border-slate-100 shrink-0 space-y-2">
           <button
             onClick={() => setConfirmLeave(true)}
-            className="w-full py-2.5 text-[11px] font-bold text-amber-600 bg-amber-50 rounded-xl hover:bg-amber-100 transition-colors cursor-pointer"
+            className="w-full py-2.5 text-[11px] font-bold text-amber-600 bg-amber-50 rounded-xl hover:bg-amber-100 active:scale-95 transition-all cursor-pointer"
           >
             Salir del grupo
           </button>
           <button
             onClick={onOpenDeleteConfirm}
-            className="w-full py-2.5 text-[11px] font-bold text-rose-500 bg-rose-50 rounded-xl hover:bg-rose-100 transition-colors cursor-pointer"
+            className="w-full py-2.5 text-[11px] font-bold text-rose-500 bg-rose-50 rounded-xl hover:bg-rose-100 active:scale-95 transition-all cursor-pointer"
           >
             Eliminar grupo
           </button>
@@ -316,7 +316,7 @@ export default function GroupInfoPanel({
             <div className="flex gap-2">
               <button
                 onClick={() => setMemberToRemove(null)}
-                className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors cursor-pointer"
+                className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 active:scale-95 transition-all cursor-pointer"
               >
                 Cancelar
               </button>
@@ -325,7 +325,7 @@ export default function GroupInfoPanel({
                   onRemoveMember(memberToRemove.profile_id);
                   setMemberToRemove(null);
                 }}
-                className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 transition-colors cursor-pointer"
+                className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 active:scale-95 transition-all cursor-pointer"
               >
                 Eliminar
               </button>
@@ -348,7 +348,7 @@ export default function GroupInfoPanel({
             <div className="flex gap-2">
               <button
                 onClick={() => setConfirmLeave(false)}
-                className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors cursor-pointer"
+                className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 active:scale-95 transition-all cursor-pointer"
               >
                 Cancelar
               </button>
@@ -357,7 +357,7 @@ export default function GroupInfoPanel({
                   onLeaveGroup();
                   setConfirmLeave(false);
                 }}
-                className="flex-1 py-2 text-[11px] font-semibold text-white bg-amber-500 rounded-xl hover:bg-amber-600 transition-colors cursor-pointer"
+                className="flex-1 py-2 text-[11px] font-semibold text-white bg-amber-500 rounded-xl hover:bg-amber-600 active:scale-95 transition-all cursor-pointer"
               >
                 Salir
               </button>

@@ -14,7 +14,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
     <div className="absolute bottom-20 left-4 right-4 bg-white/95 backdrop-blur-md rounded-2xl shadow-[0_15px_40px_rgba(0,0,0,0.18)] border border-slate-100 p-4 grid grid-cols-4 gap-3 z-30 animate-fade-in">
       <button
         onClick={() => onPickFile("image/*", "image")}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform shadow-sm">
           <Image className="w-5 h-5" />
@@ -24,7 +24,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
 
       <button
         onClick={() => onPickFile("video/*", "video")}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center text-rose-600 group-hover:scale-110 transition-transform shadow-sm">
           <VideoIcon className="w-5 h-5" />
@@ -34,7 +34,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
 
       <button
         onClick={() => onPickFile("*/*", "file")}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center text-amber-600 group-hover:scale-110 transition-transform shadow-sm">
           <File className="w-5 h-5" />
@@ -44,7 +44,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
 
       <button
         onClick={onOpenGifPicker}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform shadow-sm">
           <Film className="w-5 h-5" />
@@ -54,7 +54,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
 
       <button
         onClick={() => onPickFile("audio/*", "audio")}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-cyan-50 flex items-center justify-center text-cyan-600 group-hover:scale-110 transition-transform shadow-sm">
           <Music className="w-5 h-5" />
@@ -64,7 +64,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
 
       <button
         onClick={onOpenPollForm}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center text-emerald-600 group-hover:scale-110 transition-transform shadow-sm">
           <BarChart2 className="w-5 h-5" />
@@ -74,7 +74,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
 
       <button
         onClick={() => onPickFile("image/*", "image")}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-purple-50 flex items-center justify-center text-purple-600 group-hover:scale-110 transition-transform shadow-sm">
           <CameraIcon className="w-5 h-5" />
@@ -84,7 +84,7 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
 
       <button
         onClick={onSendLocation}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
+        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
       >
         <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center text-orange-600 group-hover:scale-110 transition-transform shadow-sm">
           <MapPin className="w-5 h-5" />

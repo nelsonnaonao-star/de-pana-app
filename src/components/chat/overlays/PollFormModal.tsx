@@ -21,7 +21,7 @@ export default function PollFormModal({
   if (!isOpen) return null;
   return (
     <div className="absolute inset-0 bg-black/60 z-40 flex items-center justify-center p-4">
-      <form onSubmit={onSubmit} className="bg-white rounded-2xl p-4 w-full max-w-xs space-y-3 shadow-lg">
+      <form onSubmit={onSubmit} className="bg-[#f8fafc] rounded-2xl p-4 w-full max-w-xs space-y-3 shadow-lg anim-dropdown">
         <div className="flex justify-between items-center border-b border-slate-100 pb-2">
           <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1">
             <BarChart2 className="w-4 h-4 text-emerald-600" /> Nueva Encuesta
@@ -37,7 +37,7 @@ export default function PollFormModal({
             value={question}
             onChange={(e) => onQuestionChange(e.target.value)}
             required
-            className="w-full bg-slate-50 p-2 text-[11px] rounded-lg border outline-none focus:border-emerald-500"
+            className="w-full bg-white p-2 text-[11px] rounded-lg border outline-none focus:border-emerald-500"
           />
           <input
             type="text"
@@ -45,7 +45,7 @@ export default function PollFormModal({
             value={option1}
             onChange={(e) => onOption1Change(e.target.value)}
             required
-            className="w-full bg-slate-50 p-2 text-[10px] rounded-lg border outline-none focus:border-emerald-500"
+            className="w-full bg-white p-2 text-[10px] rounded-lg border outline-none focus:border-emerald-500"
           />
           <input
             type="text"
@@ -53,7 +53,7 @@ export default function PollFormModal({
             value={option2}
             onChange={(e) => onOption2Change(e.target.value)}
             required
-            className="w-full bg-slate-50 p-2 text-[10px] rounded-lg border outline-none focus:border-emerald-500"
+            className="w-full bg-white p-2 text-[10px] rounded-lg border outline-none focus:border-emerald-500"
           />
         </div>
         <button

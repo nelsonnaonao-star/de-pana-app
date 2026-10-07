@@ -36,8 +36,8 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
             <button
               key={tab.id}
               onClick={() => setCurrentScreen(tab.id)}
-              className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer ${
-                isActive ? "text-[#10646a]" : "text-slate-700 hover:text-slate-900"
+              className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer active:opacity-70 transition-opacity duration-100 ${
+                isActive ? "text-[#10606a]" : "text-slate-700 hover:text-slate-900"
               }`}
             >
               <div className={`p-1.5 rounded-xl transition-all relative ${

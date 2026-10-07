@@ -31,13 +31,13 @@ export default function DeleteConfirmModal({ isOpen, isGroup, onClose, onConfirm
         <div className="flex gap-2">
           <button
             onClick={onClose}
-            className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors cursor-pointer"
+            className="flex-1 py-2 text-[11px] font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 active:scale-95 transition-all cursor-pointer"
           >
             Cancelar
           </button>
           <button
             onClick={onConfirm}
-            className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 transition-colors cursor-pointer"
+            className="flex-1 py-2 text-[11px] font-semibold text-white bg-rose-500 rounded-xl hover:bg-rose-600 active:scale-95 transition-all cursor-pointer"
           >
             Eliminar
           </button>

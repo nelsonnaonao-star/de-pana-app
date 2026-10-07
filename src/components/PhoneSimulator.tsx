@@ -4469,10 +4469,10 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                         <div className="pb-3.5">
                         <div className="relative overflow-hidden rounded-2xl">
                           {/* Delete button behind */}
-                          <div className="absolute inset-0 flex items-center justify-end bg-rose-500 rounded-2xl pr-4">
+                          <div className="absolute inset-0 flex items-stretch justify-start bg-rose-500 rounded-2xl">
                             <button
-                              onClick={() => handleDeleteChat(chat.id)}
-                              className="text-white font-black text-xs flex items-center gap-1.5 cursor-pointer"
+                              onClick={() => handleLongPress(chat, 0, 0)}
+                              className="w-[88px] shrink-0 px-3 flex items-center gap-1.5 text-white font-black text-[11px] cursor-pointer select-none whitespace-nowrap"
                             >
                               <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                 <polyline points="3 6 5 6 21 6" />
@@ -4486,10 +4486,11 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                           <div
                             onClick={() => {
                               if (contextMenuChat) { closeContextMenu(); return; }
-                              if (swipedChatId) {
+                              if (isSwiped) {
                                 setSwipedChatId(null);
                                 return;
                               }
+                              if (swipedChatId) setSwipedChatId(null);
                               setSelectedChatId(chat.id);
                               setCurrentScreen("chat_room");
                               // Abrir el chat marca el leído de forma persistente.
@@ -4520,7 +4521,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                                 document.addEventListener('mouseup', onMouseUp);
                               }
                             }}
-                            className={`relative flex items-start gap-4 px-2.5 py-2 border border-transparent hover:border-slate-100 hover:bg-slate-50 rounded-2xl transition-all cursor-pointer bg-white z-10 ${
+                            className={`relative flex items-start gap-4 px-2.5 py-2 border border-transparent hover:border-slate-100 hover:bg-slate-50 active:bg-slate-100 rounded-2xl transition-all cursor-pointer bg-white z-10 ${
                               isSwiped ? 'shadow-lg' : ''
                             }`}
                             style={isSwiped ? { transform: 'translateX(80px)' } : undefined}
