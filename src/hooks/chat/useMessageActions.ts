@@ -400,7 +400,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
         try {
           const photo = await CapacitorCamera.getPhoto({
             quality: 30,
-            source: CameraSource.Photos,
+            source: CameraSource.Camera,
             resultType: CameraResultType.DataUrl,
           });
           if (!photo.dataUrl) { isSendingRef.current = false; return; }
@@ -828,19 +828,19 @@ pendingSendIdsRef.current.add(tempId);
         if (m.id === messageId && m.pollOptions) {
           const options = m.pollOptions.map((o) => {
             const votedUsers = Array.isArray(o.votedUsers) ? o.votedUsers : [];
-            const alreadyVoted = votedUsers.includes("me");
+            const alreadyVoted = votedUsers.includes(uid);
             const currentVotes = Number(o.votes) || 0;
             if (o.id === optionId) {
               return {
                 ...o,
                 votes: alreadyVoted ? Math.max(0, currentVotes - 1) : currentVotes + 1,
-                votedUsers: alreadyVoted ? votedUsers.filter((u) => u !== "me") : [...votedUsers, "me"]
+                votedUsers: alreadyVoted ? votedUsers.filter((u) => u !== uid) : [...votedUsers, uid]
               };
             } else {
               return {
                 ...o,
                 votes: alreadyVoted ? Math.max(0, currentVotes - 1) : currentVotes,
-                votedUsers: votedUsers.filter((u) => u !== "me")
+                votedUsers: votedUsers.filter((u) => u !== uid)
               };
             }
           });

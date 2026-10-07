@@ -92,6 +92,7 @@ interface MessageBubbleProps {
   activeReactionMenu: string | null;
   setActiveReactionMenu: (id: string | null) => void;
   handleVote: (messageId: string, optionId: string) => void;
+  currentUserId: string;
   handleAddReaction: (messageId: string, emoji: string) => void;
   handleDeleteMessage: (messageId: string) => void;
   handleDeleteForMe: (messageId: string) => void;
@@ -509,7 +510,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
 
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
-  handleVote, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice, onVideoPosterReady,
+  handleVote, currentUserId, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice, onVideoPosterReady,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
   const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
@@ -573,7 +574,7 @@ export default React.memo(function MessageBubble({
           </div>
         )}
         {activeReactionMenu === msg.id && (
-          <div ref={menuRef} className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden ${dropDown ? "top-full mt-1" : "-top-8"} ${isMe ? "right-2" : "left-2"}`}>
+          <div ref={menuRef} className={`absolute z-30 bg-white rounded-2xl border border-slate-200/80 shadow-[0_24px_60px_-12px_rgba(5,41,44,0.45),0_6px_16px_rgba(0,0,0,0.15)] overflow-hidden anim-dropdown ${dropDown ? "top-full mt-1" : "-top-8"} ${isMe ? "right-2" : "left-2"}`}>
             {showPriceInput ? (
               <div className="py-2.5 px-3 min-w-[200px]">
                 <p className="text-[11px] font-bold text-slate-700 mb-1.5">Precio del producto</p>
@@ -624,17 +625,17 @@ export default React.memo(function MessageBubble({
               <>
                 <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
                   {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
-                    <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 transition-transform p-1">{emo}</button>
+                    <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 active:scale-125 transition-transform p-1">{emo}</button>
                   ))}
                 </div>
-                <div className="py-1">
-                  <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                <div className="px-2 py-1.5">
+                  <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                     ↩️ Responder
                   </button>
-                  <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                  <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                     ↪️ Reenviar
                   </button>
-                  <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                  <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                     📋 Copiar
                   </button>
                   {msg.mediaUrl && (
@@ -647,7 +648,7 @@ export default React.memo(function MessageBubble({
                         if (ok) toast.success("Guardado en galería");
                       }}
                       disabled={saving}
-                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2 disabled:opacity-50"
+                      className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2 disabled:opacity-50"
                     >
                       {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "⬇️"} Guardar
                     </button>
@@ -658,17 +659,17 @@ export default React.memo(function MessageBubble({
                         setPriceValue(msg.price || "");
                         setShowPriceInput(true);
                       }}
-                      className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+                      className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2"
                     >
                       🏷️ Precio {msg.price && <span className="text-emerald-600 font-bold ml-auto">${msg.price}</span>}
                     </button>
                   )}
                   <div className="border-t border-slate-100 my-1"></div>
-                  <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+                  <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-red-500 hover:bg-red-50 active:bg-red-50 transition-colors duration-150 flex items-center gap-2">
                     🗑️ Eliminar para mí
                   </button>
                   {isMe && (
-                    <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+                    <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-red-500 hover:bg-red-50 active:bg-red-50 transition-colors duration-150 flex items-center gap-2">
                       🗑️ Eliminar para todos
                     </button>
                   )}
@@ -712,33 +713,33 @@ export default React.memo(function MessageBubble({
           </div>
         )}
         {activeReactionMenu === msg.id && (
-          <div ref={menuRef} className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden ${dropDown ? "top-full mt-1" : "-top-8"} ${isMe ? "right-2" : "left-2"}`}>
+          <div ref={menuRef} className={`absolute z-30 bg-white rounded-2xl border border-slate-200/80 shadow-[0_24px_60px_-12px_rgba(5,41,44,0.45),0_6px_16px_rgba(0,0,0,0.15)] overflow-hidden anim-dropdown ${dropDown ? "top-full mt-1" : "-top-8"} ${isMe ? "right-2" : "left-2"}`}>
             <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
               {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
-                <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 transition-transform p-1">{emo}</button>
+                <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 active:scale-125 transition-transform p-1">{emo}</button>
               ))}
             </div>
-            <div className="py-1">
-              <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+            <div className="px-2 py-1.5">
+              <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                 ↩️ Responder
               </button>
-              <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+              <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                 ↪️ Reenviar
               </button>
-              <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+              <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                 📋 Copiar
               </button>
               {msg.sender === "me" && msg.type === "text" && (
-                <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+                <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                   ✏️ Editar
                 </button>
               )}
               <div className="border-t border-slate-100 my-1"></div>
-              <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+              <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-red-500 hover:bg-red-50 active:bg-red-50 transition-colors duration-150 flex items-center gap-2">
                 🗑️ Eliminar para mí
               </button>
               {isMe && (
-                <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+                <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-red-500 hover:bg-red-50 active:bg-red-50 transition-colors duration-150 flex items-center gap-2">
                   🗑️ Eliminar para todos
                 </button>
               )}
@@ -752,8 +753,8 @@ export default React.memo(function MessageBubble({
   return (
     <div ref={bubbleRef} key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"} relative group`}>
       <div
-        className={`max-w-[85%] rounded-2xl px-4 ${msg.type === "audio" || msg.type === "voice_note" ? "py-0.5" : "py-2.5"} ${msg.type === "voice_note" ? "pb-2" : ""} min-w-[76px] shadow-sm text-sm relative cursor-pointer select-none transition-all duration-200 ${
-          isMe ? activeMeBubble.css : activeThemBubble.css
+        className={`max-w-[85%] rounded-2xl px-4 ${msg.type === "audio" || msg.type === "voice_note" ? "py-0.5" : "py-2.5"} ${msg.type === "voice_note" ? "pb-2" : ""} min-w-[76px] text-sm relative cursor-pointer select-none transition-all duration-200 ${
+          msg.type === "poll" ? "" : `shadow-sm ${isMe ? activeMeBubble.css : activeThemBubble.css}`
         }`}
         onClick={() => {
           if (isFile) {
@@ -921,7 +922,7 @@ export default React.memo(function MessageBubble({
         {msg.type === "poll" && (() => {
           const { question: pollQuestion, options: pollOptions } = extractPollData(msg);
           return (
-            <div className="space-y-3 min-w-[200px] text-slate-800 p-1 bg-white rounded-xl">
+            <div className="space-y-3 min-w-[260px] text-slate-800 p-3 bg-white rounded-xl">
               <div className="flex items-start gap-1.5 border-b border-slate-100 pb-1.5">
                 <BarChart2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
                 <h4 className="text-[11px] font-bold text-slate-900 leading-snug">
@@ -931,7 +932,7 @@ export default React.memo(function MessageBubble({
               <div className="space-y-1.5">
                 {pollOptions.map((opt) => {
                   const votedUsers = Array.isArray(opt.votedUsers) ? opt.votedUsers : [];
-                  const hasVoted = votedUsers.includes("me");
+                  const hasVoted = votedUsers.includes(currentUserId);
                   const voteCount = Number(opt.votes) || 0;
                   return (
                     <button
@@ -940,9 +941,9 @@ export default React.memo(function MessageBubble({
                         e.stopPropagation();
                         handleVote(msg.id, opt.id);
                       }}
-                      className={`w-full text-left p-2 rounded-lg border text-[10px] transition-all relative overflow-hidden flex items-center justify-between ${
+                      className={`w-full text-left p-2 rounded-lg border text-[10px] transition-all active:scale-[0.98] relative overflow-hidden flex items-center justify-between ${
                         hasVoted
-                          ? "border-teal-400 bg-teal-50/50"
+                          ? "border-teal-400 bg-teal-50/50 anim-vote-pop"
                           : "border-slate-100 bg-slate-50/50 hover:bg-slate-50"
                       }`}
                     >
@@ -992,35 +993,35 @@ export default React.memo(function MessageBubble({
       )}
 
       {activeReactionMenu === msg.id && (
-        <div ref={menuRef} className={`absolute z-30 bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100/80 shadow-lg overflow-hidden ${dropDown ? "top-full mt-1" : "-top-8"} ${
+        <div ref={menuRef} className={`absolute z-30 bg-white rounded-2xl border border-slate-200/80 shadow-[0_24px_60px_-12px_rgba(5,41,44,0.45),0_6px_16px_rgba(0,0,0,0.15)] overflow-hidden anim-dropdown ${dropDown ? "top-full mt-1" : "-top-8"} ${
           isMe ? "right-2" : "left-2"
         }`}>
           <div className="flex gap-1 px-3 py-2 border-b border-slate-100">
             {["👍", "❤️", "🔥", "😆", "😮", "😢"].map((emo) => (
-              <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 transition-transform p-1">{emo}</button>
+              <button key={emo} onClick={() => handleAddReaction(msg.id, emo)} className="text-lg hover:scale-125 active:scale-125 transition-transform p-1">{emo}</button>
             ))}
           </div>
-          <div className="py-1">
-            <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+          <div className="px-2 py-1.5">
+            <button onClick={() => { setActiveReactionMenu(null); handleReplyMessage(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
               ↩️ Responder
             </button>
-            <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+            <button onClick={() => { setActiveReactionMenu(null); handleForwardMessage(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
               ↪️ Reenviar
             </button>
-            <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+            <button onClick={() => { setActiveReactionMenu(null); navigator.clipboard.writeText(msg.text || ""); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
               📋 Copiar
             </button>
             {msg.sender === "me" && msg.type === "text" && (
-              <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2">
+              <button onClick={() => { setActiveReactionMenu(null); onEdit?.(msg); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-slate-700 hover:bg-slate-100 active:bg-slate-100 transition-colors duration-150 flex items-center gap-2">
                 ✏️ Editar
               </button>
             )}
             <div className="border-t border-slate-100 my-1"></div>
-            <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+            <button onClick={() => { setActiveReactionMenu(null); handleDeleteForMe(msg.id); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-red-500 hover:bg-red-50 active:bg-red-50 transition-colors duration-150 flex items-center gap-2">
               🗑️ Eliminar para mí
             </button>
             {isMe && (
-              <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-4 py-2 text-[13px] font-medium text-red-500 hover:bg-red-50 flex items-center gap-2">
+              <button onClick={() => { setActiveReactionMenu(null); handleDeleteMessage(msg.id); }} className="w-full text-left px-2 py-2 rounded-xl text-[13px] font-medium text-red-500 hover:bg-red-50 active:bg-red-50 transition-colors duration-150 flex items-center gap-2">
                 🗑️ Eliminar para todos
               </button>
             )}

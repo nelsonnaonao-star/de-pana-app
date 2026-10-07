@@ -137,6 +137,16 @@ body {
   to { transform: translateY(0); }
 }
 
+@keyframes votePop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+
+.anim-vote-pop {
+  animation: votePop 0.22s ease-out;
+}
+
 .animate-scan-line {
   animation: scanLine 1.5s ease-in-out infinite;
 }

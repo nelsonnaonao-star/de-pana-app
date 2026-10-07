@@ -1483,6 +1483,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                   activeReactionMenu={activeReactionMenu}
                   setActiveReactionMenu={setActiveReactionMenu}
                   handleVote={actions.handleVote}
+                  currentUserId={uid}
                   handleAddReaction={actions.handleAddReaction}
                   handleDeleteMessage={actions.handleDeleteMessage}
                   handleDeleteForMe={actions.handleDeleteForMe}
@@ -1508,7 +1509,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         <AttachmentTray
           onPickFile={(accept, type) => { setShowAttachments(false); actions.triggerFilePick(accept, type); }}
           onOpenGifPicker={() => { setShowGifPicker(true); setShowAttachments(false); }}
-          onOpenPollForm={() => { setShowPollForm(true); }}
+          onOpenPollForm={() => { setShowAttachments(false); setShowPollForm(true); }}
           onSendLocation={() => { setShowAttachments(false); actions.handleSendLocation(); }}
         />
       )}

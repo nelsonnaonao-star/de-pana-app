@@ -9,6 +9,7 @@ interface MessageBubbleWithCacheProps {
   activeReactionMenu: string | null;
   setActiveReactionMenu: (id: string | null) => void;
   handleVote: (msgId: string, optionId: string) => void;
+  currentUserId: string;
   handleAddReaction: (msgId: string, emoji: string) => void;
   handleDeleteMessage: (msgId: string) => void;
   handleDeleteForMe: (msgId: string) => void;
@@ -100,6 +101,7 @@ function arePropsEqual(prev: MessageBubbleWithCacheProps, next: MessageBubbleWit
     JSON.stringify(p.reactions) === JSON.stringify(n.reactions) &&
     JSON.stringify(p.pollOptions) === JSON.stringify(n.pollOptions) &&
     prev.isMe === next.isMe &&
+    prev.currentUserId === next.currentUserId &&
     prev.activeReactionMenu === next.activeReactionMenu &&
     prev.bubbleColorMeId === next.bubbleColorMeId &&
     prev.bubbleColorThemId === next.bubbleColorThemId
