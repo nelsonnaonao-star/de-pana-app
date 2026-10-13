@@ -2,6 +2,9 @@ import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://akgsylutbpgolurkcavh.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY || '';
+if (!supabaseKey) {
+  throw new Error('Configuración inválida: SUPABASE_SERVICE_KEY no está definida');
+}
 
 export const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
 

@@ -3,7 +3,8 @@ import rateLimit from 'express-rate-limit';
 import { supabaseAdmin } from '../db.js';
 import { getMessaging } from 'firebase-admin/messaging';
 import { isGroupMuted } from './groups.js';
-import { extractPath } from './media.js';
+import { isAllowedMediaRef } from './media.js';
+import { mediaRefAllowedForChat } from '../lib/storageRefs.js';
 
 const router = Router();
 
@@ -187,8 +188,16 @@ router.post('/send', sendLimiter, async (req, res) => {
 
     const mediaFields = ['image_url', 'audio_url', 'video_url', 'file_url'];
     for (const field of mediaFields) {
-      if (msg[field] && !extractPath(msg[field])) {
+      const raw = msg[field];
+      if (!raw) continue;
+      if (!isAllowedMediaRef(raw)) {
         return res.status(400).json({ error: `URL de ${field} inválida` });
+      }
+      // Las referencias privadas (chat-media) sólo se aceptan si el objeto
+      // pertenece exactamente a este chat (`<chat_id>/...`). Los buckets
+      // públicos (chat-images) no se restringen.
+      if (!mediaRefAllowedForChat(raw, msg.chat_id)) {
+        return res.status(400).json({ error: `URL de ${field} no pertenece a este chat` });
       }
     }
 
