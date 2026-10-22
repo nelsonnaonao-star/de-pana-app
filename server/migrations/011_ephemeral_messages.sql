@@ -29,3 +29,10 @@ BEGIN
   RETURN deleted_count;
 END;
 $$;
+
+-- ─── Hardening de permisos (T-5) ─────────────────────────────
+-- Función de mantenimiento: solo la invoca el backend (service_role)
+-- vía supabaseAdmin.rpc y/o el scheduler. No debe ser ejecutable por
+-- anon ni por PUBLIC (EXECUTE heredado por defecto).
+REVOKE EXECUTE ON FUNCTION public.purge_expired_ephemeral_messages() FROM anon, public;
+GRANT  EXECUTE ON FUNCTION public.purge_expired_ephemeral_messages() TO service_role;

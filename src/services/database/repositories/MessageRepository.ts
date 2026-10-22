@@ -4,6 +4,7 @@ import type { Message } from "../../../types";
 import { logger } from "../../../lib/logger";
 import { getReconciledSavedId } from "../../../lib/reconciledIds";
 import { editMessage as apiEditMessage } from "../../messages";
+import { isEphemeralMessageExpired } from "../../messageExpiry";
 
 const CACHE_PREFIX = "redon_cache_msgs_";
 const MAX_CACHED = 200;
@@ -167,6 +168,7 @@ export class MessageRepository {
   }
 
   async getMessages(chatId: string): Promise<Message[]> {
+    const now = Date.now();
     let sqliteRows: Message[] | null = null;
     if (db.ready) {
       try {
@@ -174,7 +176,9 @@ export class MessageRepository {
           "SELECT * FROM messages WHERE chat_id = ? ORDER BY raw_created_at ASC",
           [chatId]
         );
-        sqliteRows = rows.map(fromRow).filter((m): m is Message => m !== null);
+        sqliteRows = rows
+          .map(fromRow)
+          .filter((m): m is Message => m !== null && !isEphemeralMessageExpired(m, now));
       } catch (e) {
         logger.warn("[MessageRepo] SQLite error, fallback", { error: e });
       }
@@ -186,7 +190,9 @@ export class MessageRepository {
     let cache: Message[] = [];
     try {
       const raw = await getItem<Message[]>(`${CACHE_PREFIX}${chatId}`);
-      cache = Array.isArray(raw) ? raw : [];
+      cache = Array.isArray(raw)
+        ? raw.filter((m) => !isEphemeralMessageExpired(m, now))
+        : [];
     } catch (e) {
       logger.warn("[MessageRepo] getMessages cache read error", { error: e });
     }
@@ -218,7 +224,10 @@ export class MessageRepository {
   async saveMessages(chatId: string, messages: Message[]): Promise<void> {
     // Persistir también mensajes pendientes/optimistas (temp/msg) para que un
     // mensaje no confirmado siga visible al salir y volver a entrar al chat.
-    const batch = messages.slice(-MAX_CACHED);
+    const now = Date.now();
+    const batch = messages
+      .filter((message) => !isEphemeralMessageExpired(message, now))
+      .slice(-MAX_CACHED);
     if (batch.length === 0) return;
 
     if (db.ready) {
@@ -262,6 +271,8 @@ export class MessageRepository {
   }
 
   async upsertMessage(chatId: string, message: Message, ownerUserId?: string): Promise<void> {
+    if (isEphemeralMessageExpired(message)) return;
+
     if (db.ready) {
       try {
         const msgWithOwner = ownerUserId ? { ...message, owner_user_id: ownerUserId } : message;

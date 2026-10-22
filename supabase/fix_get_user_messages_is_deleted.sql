@@ -18,6 +18,11 @@ AS $$
     SELECT m.* FROM public.messages m
     WHERE m.chat_id = chat_uuid
     AND (m.is_deleted IS NULL OR m.is_deleted = false)
+    AND (
+      m.is_ephemeral IS NOT TRUE
+      OR m.ephemeral_expires_at IS NULL
+      OR m.ephemeral_expires_at > now()
+    )
     AND EXISTS (
       SELECT 1 FROM public.chats c
       WHERE c.id = chat_uuid

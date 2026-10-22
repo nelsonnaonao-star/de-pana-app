@@ -6,7 +6,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { initDb } from './db.js';
+import { initDb, supabaseAdmin } from './db.js';
 import { authMiddleware } from './middleware/auth.js';
 import { tripwire } from './middleware/tripwire.js';
 import authRoutes from './routes/auth.js';
@@ -20,6 +20,7 @@ import messagesRoutes from './routes/messages.js';
 import contentRoutes from './routes/content.js';
 import groupsRoutes from './routes/groups.js';
 import adminRoutes from './routes/admin.js';
+import { startEphemeralPurgeJob, stopEphemeralPurgeJob } from './jobs/ephemeralPurge.js';
 
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
@@ -257,9 +258,15 @@ async function main() {
   });
 
   const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     const url = process.env.APP_URL || `http://localhost:${PORT}`;
     console.log(`RED ON corriendo en ${url}`);
+
+    if (isProduction) {
+      startEphemeralPurgeJob(supabaseAdmin);
+    } else {
+      console.log('[EPHEMERAL-PURGE] Deshabilitado (no es producción)');
+    }
 
     // Self-ping keep-alive (anti-sleep para Render free tier)
     const SERVER_URL = process.env.SERVER_URL;
@@ -280,6 +287,14 @@ async function main() {
       console.warn('[KEEP-ALIVE] SERVER_URL no configurado, keep-alive deshabilitado');
     }
   });
+
+  const shutdown = () => {
+    stopEphemeralPurgeJob();
+    server.close(() => process.exit(0));
+  };
+
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 }
 
 main().catch(err => {

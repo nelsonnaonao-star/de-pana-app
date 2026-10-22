@@ -734,31 +734,6 @@ router.post('/ephemeral-setting', async (req, res) => {
   }
 });
 
-// ─── Purge expired ephemeral messages (callable by server/cron) ──
-router.post('/purge-ephemeral', async (req, res) => {
-  try {
-    const { data, error } = await supabaseAdmin.rpc('purge_expired_ephemeral_messages');
-    if (error) {
-      // Fallback: inline delete if the DB function isn't installed yet.
-      const { data: expired } = await supabaseAdmin
-        .from('messages')
-        .select('id')
-        .eq('is_ephemeral', true)
-        .not('ephemeral_expires_at', 'is', null)
-        .lt('ephemeral_expires_at', new Date().toISOString());
-      const ids = (expired || []).map(m => m.id);
-      if (ids.length > 0) {
-        await supabaseAdmin.from('messages').delete().in('id', ids);
-      }
-      return res.json({ purged: ids.length, fallback: true });
-    }
-    res.json({ purged: data || 0, fallback: false });
-  } catch (err) {
-    console.error('[MESSAGES] purge-ephemeral error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ─── Poll vote (via server to enforce chat membership) ────────
 router.post('/vote-poll', async (req, res) => {
   try {

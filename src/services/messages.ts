@@ -1,5 +1,6 @@
 import { apiUrl, authFetch } from "../lib/api";
 import { supabase } from "../lib/supabase";
+import { isEphemeralMessageExpired } from "./messageExpiry";
 
 export type Message = {
   id: string;
@@ -139,7 +140,18 @@ export async function getMessages(chatId: string, options?: { limit?: number; be
     p_after: options?.after || null,
   });
   if (error) throw error;
-  return (data || []).map(toMessage);
+  const now = Date.now();
+  return (data || [])
+    .map(toMessage)
+    .filter((message) =>
+      !isEphemeralMessageExpired(
+        {
+          isEphemeral: message.is_ephemeral,
+          ephemeralExpiresAt: message.ephemeral_expires_at,
+        },
+        now
+      )
+    );
 }
 
 export async function sendMessage(message: Partial<Message> & { client_id?: string; temp_id?: string }, signal?: AbortSignal): Promise<Message> {

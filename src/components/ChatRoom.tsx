@@ -17,6 +17,7 @@ import PollFormModal from "./chat/overlays/PollFormModal";
 import { useSupabase } from "../contexts/SupabaseContext";
 import CachedImage from "./CachedImage";
 import { getMessages, clearForMe, setEphemeralTimer } from "../services/messages";
+import { isEphemeralMessageExpired } from "../services/messageExpiry";
 import { enqueueReadReceipt } from "../services/readReceiptQueue";
 import { deleteChat as apiDeleteChat } from "../services/chats";
 import { addContact } from "../services/contacts";
@@ -1134,13 +1135,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     if (!messages.some(m => m.isEphemeral && m.ephemeralExpiresAt)) return;
     const sweep = () => {
       setMessages(prev => {
-        const now = new Date().toISOString();
-        const next = prev.filter(m => {
-          if (m.isEphemeral && m.ephemeralExpiresAt) {
-            return m.ephemeralExpiresAt > now;
-          }
-          return true;
-        });
+        const now = Date.now();
+        const next = prev.filter(m => !isEphemeralMessageExpired(m, now));
         return next.length === prev.length ? prev : next;
       });
     };
