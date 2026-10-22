@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { randomInt } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 import { supabaseAdmin } from '../db.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { sendResetEmail } from '../emailService.js';
@@ -7,6 +7,18 @@ import { sendResetEmail } from '../emailService.js';
 const router = Router();
 
 // ─── Rate limiters ────────────────────────────────────────────────
+// Defensa en capas (se suman, nunca se debilitan):
+//  - Global: todas las rutas de este router están montadas en /api/auth tras
+//    `strictLimiter` (index.js): 5 req/min por IP COMPARTIDO por todos los
+//    endpoints de auth.
+//  - Específicos (aquí), adicionales al global:
+//      * send-reset-code:            5  / 15 min
+//      * send-reset-email:           3  / 15 min
+//      * verify-reset-code + update-password: COMPARTEN `verifyLimiter`
+//        (10 / 15 min) para que no se pueda eludir alternando de endpoint.
+//  Cada ventana se evalúa por separado, de modo que manda el límite más
+//  restrictivo de cada una. Estos limitadores NO sustituyen al bloqueo por
+//  intentos del propio código (`MAX_RESET_ATTEMPTS`, atómico en PostgreSQL).
 import rateLimit from 'express-rate-limit';
 
 const resetCodeLimiter = rateLimit({
@@ -37,6 +49,75 @@ const MAX_RESET_ATTEMPTS = 5;
 
 function generateCode() {
   return String(randomInt(100000, 1000000));
+}
+
+const RESET_CODE_TTL_MS = 15 * 60 * 1000;
+
+// Enmascara el correo para las respuestas (p. ej. vi******@example.com).
+function maskEmail(email) {
+  const [local, domain] = String(email).split('@');
+  if (!local || !domain) return String(email);
+  const hidden = local.length > 2 ? '*'.repeat(Math.max(2, local.length - 2)) : '**';
+  return `${local.slice(0, 2)}${hidden}@${domain}`;
+}
+
+// Carga el único registro activo (sin usar y vigente) del perfil.
+// Devuelve { record } o { error }. `record` es undefined si no hay ninguno.
+// Nota: supabase-js resuelve `.select().limit(1)` con un ARRAY, por lo que se
+// normaliza aquí (el código previo lo trataba como objeto → siempre fallaba).
+async function loadActiveResetRecord(profileId) {
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from('password_reset_codes')
+    .select('id, profile_id, code, phone, expires_at, attempts, used')
+    .eq('profile_id', profileId)
+    .eq('used', false)
+    .gt('expires_at', now)
+    .order('id', { ascending: false })
+    .limit(1);
+
+  if (error) return { error };
+  const record = Array.isArray(data) ? data[0] : data;
+  return { record: record || undefined };
+}
+
+// Registra un intento fallido sobre el registro activo mediante una operación
+// ATÓMICA en PostgreSQL. NO se usa `.update()` de supabase-js: PostgREST no
+// admite `attempts = attempts + 1`, y un read-modify-write pierde incrementos
+// concurrentes. La función `increment_password_reset_attempt` (ver migración
+// 019, pendiente de revisión) incrementa y bloquea el código al alcanzar el
+// máximo en una única sentencia.
+// Compartido por verify y update para que los intentos NO puedan eludirse
+// cambiando de endpoint. Devuelve { attempts, locked } o { error }.
+async function registerFailedResetAttempt(record) {
+  const { data, error } = await supabaseAdmin.rpc('increment_password_reset_attempt', {
+    p_id: record.id,
+    p_max_attempts: MAX_RESET_ATTEMPTS,
+  });
+
+  if (error) return { error };
+
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) {
+    // 0 filas: el código ya estaba usado/bloqueado por una petición concurrente.
+    return { attempts: null, locked: true, alreadyLocked: true };
+  }
+  return { attempts: row.attempts, locked: !!row.used };
+}
+
+// Consumo atómico y de un solo uso: solo actualiza si el código sigue sin usar.
+// El UPDATE condicional garantiza que, ante solicitudes concurrentes, una sola
+// obtenga `consumed = true`.
+async function consumeResetCode(recordId) {
+  const { data, error } = await supabaseAdmin
+    .from('password_reset_codes')
+    .update({ used: true })
+    .eq('id', recordId)
+    .eq('used', false)
+    .select('id');
+
+  if (error) return { error };
+  return { consumed: Array.isArray(data) && data.length > 0 };
 }
 
 function sanitizeInput(str) {
@@ -73,11 +154,18 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
       return res.status(500).json({ error: 'Error al buscar el usuario' });
     }
 
-    // Uniform response regardless of whether profile exists (no enumeration)
+    // Respuesta uniforme: misma forma exista o no la cuenta (anti-enumeración).
+    // Para un correo inexistente se devuelve un profileId aleatorio que,
+    // simplemente, no tendrá código asociado y fallará de forma genérica.
     if (!profile?.real_email) {
       const elapsed = Date.now() - startedAt;
       if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
-      return res.json({ message: genericMessage });
+      return res.json({
+        message: genericMessage,
+        maskedEmail: maskEmail(cleanEmail),
+        profileId: randomUUID(),
+        expiresIn: RESET_CODE_TTL_MS / 1000,
+      });
     }
 
     // Invalidate any previous unused codes for this profile
@@ -87,9 +175,9 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
       .eq('profile_id', profile.id)
       .eq('used', false);
 
-    // Generate new 4-digit code (15 min expiry)
+    // Generate new 6-digit code (15 min expiry)
     const code = generateCode();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MS).toISOString();
 
     await supabaseAdmin
       .from('password_reset_codes')
@@ -101,11 +189,7 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
         attempts: 0,
       });
 
-    // Mask email for response (e.g. j***@gmail.com)
-    const [local, domain] = profile.real_email.split('@');
-    const maskedEmail = local
-      ? `${local.slice(0, 2)}${local.length > 2 ? '*'.repeat(Math.max(2, local.length - 2)) : '**'}@${domain}`
-      : profile.real_email;
+    const maskedEmail = maskEmail(profile.real_email);
 
     try {
       await sendResetEmail(profile.real_email, code);
@@ -120,7 +204,7 @@ router.post('/send-reset-code', resetCodeLimiter, async (req, res) => {
       message: genericMessage,
       maskedEmail,
       profileId: profile.id,
-      expiresIn: 900,
+      expiresIn: RESET_CODE_TTL_MS / 1000,
     });
   } catch (err) {
     console.error('[EMAIL-RECOVERY] Error:', err);
@@ -237,18 +321,9 @@ router.post('/verify-reset-code', verifyLimiter, async (req, res) => {
     const cleanCode = sanitizeInput(code).replace(/\D/g, '').slice(0, 6);
     if (cleanCode.length !== 6) return res.status(400).json({ error: 'Código inválido' });
 
-    const now = new Date().toISOString();
-
-    // Registro activo del perfil = último código sin usar y vigente.
-    // (send-reset-code invalida los anteriores, así que hay a lo sumo uno.)
-    const { data: record, error } = await supabaseAdmin
-      .from('password_reset_codes')
-      .select('id, profile_id, code, phone, expires_at, attempts, used')
-      .eq('profile_id', cleanProfileId)
-      .eq('used', false)
-      .gt('expires_at', now)
-      .order('id', { ascending: false })
-      .limit(1);
+    // Registro activo del perfil (send-reset-code invalida los anteriores,
+    // así que a lo sumo hay uno).
+    const { record, error } = await loadActiveResetRecord(cleanProfileId);
 
     const elapsed = Date.now() - startedAt;
     if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
@@ -259,27 +334,26 @@ router.post('/verify-reset-code', verifyLimiter, async (req, res) => {
     }
 
     // Sin registro activo: no existe, expirado, ya usado o bloqueado por intentos.
-    if (!record) {
+    if (!record || (record.attempts || 0) >= MAX_RESET_ATTEMPTS) {
       return res.status(400).json({ error: 'Código inválido o expirado' });
     }
 
-    // Código correcto: NO consume intento, continúa el flujo normal.
+    // Código correcto: NO consume intento. El consumo es atómico y de un solo
+    // uso en /update-password. No se devuelve el correo completo: la UI no lo
+    // necesita (update-password localiza el registro por profile_id).
     if (record.code === cleanCode) {
-      return res.json({ message: 'Código verificado', email: record.phone });
+      return res.json({ message: 'Código verificado' });
     }
 
-    // Código incorrecto: incrementa intentos; al llegar a 5 el código se bloquea.
-    const nextAttempts = (record.attempts || 0) + 1;
-    if (nextAttempts >= MAX_RESET_ATTEMPTS) {
-      await supabaseAdmin
-        .from('password_reset_codes')
-        .update({ attempts: nextAttempts, used: true })
-        .eq('id', record.id);
-    } else {
-      await supabaseAdmin
-        .from('password_reset_codes')
-        .update({ attempts: nextAttempts })
-        .eq('id', record.id);
+    // Código incorrecto: incrementa intentos de forma atómica; al llegar a 5 el
+    // código se bloquea. Si la persistencia falla NO se puede continuar como si
+    // el intento se hubiera registrado (permitiría eludir el límite).
+    const { error: attemptError } = await registerFailedResetAttempt(record);
+    if (attemptError) {
+      console.error('[EMAIL-RECOVERY] Attempt persist error (verify):', attemptError);
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs < 300) await new Promise(r => setTimeout(r, 300 - elapsedMs));
+      return res.status(500).json({ error: 'Error al verificar el código' });
     }
 
     return res.status(400).json({ error: 'Código inválido o expirado' });
@@ -293,8 +367,10 @@ router.post('/verify-reset-code', verifyLimiter, async (req, res) => {
 router.post('/update-password', verifyLimiter, async (req, res) => {
   const startedAt = Date.now();
   try {
-    const { profileId, email, code, newPassword } = req.body;
-    if (!profileId || !email || !code || !newPassword) {
+    // `email` ya no se exige: el registro se localiza por profile_id y el correo
+    // dejó de devolverse en /verify-reset-code (no es necesario para el flujo).
+    const { profileId, code, newPassword } = req.body;
+    if (!profileId || !code || !newPassword) {
       return res.status(400).json({ error: 'Todos los campos son requeridos' });
     }
     if (newPassword.length < 6) {
@@ -302,29 +378,58 @@ router.post('/update-password', verifyLimiter, async (req, res) => {
     }
 
     const cleanProfileId = sanitizeInput(profileId);
-    const cleanEmail = sanitizeInput(email).toLowerCase().trim();
     const cleanCode = sanitizeInput(code).replace(/\D/g, '').slice(0, 6);
-    const now = new Date().toISOString();
 
-    const { data: records, error: fetchError } = await supabaseAdmin
-      .from('password_reset_codes')
-      .select('id, profile_id')
-      .eq('profile_id', cleanProfileId)
-      .eq('phone', cleanEmail)
-      .eq('code', cleanCode)
-      .eq('used', false)
-      .gt('expires_at', now)
-      .lt('attempts', MAX_RESET_ATTEMPTS)
-      .order('id', { ascending: false })
-      .limit(1);
+    // Registro activo del perfil. Se localiza por profile_id (no por el código)
+    // para que un código incorrecto cuente como intento fallido exactamente
+    // igual que en /verify-reset-code y no pueda eludir el límite.
+    const { record, error: fetchError } = await loadActiveResetRecord(cleanProfileId);
 
-    if (fetchError || !records || records.length === 0) {
-      const elapsed = Date.now() - startedAt;
-      if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
-      return res.status(400).json({ error: 'Código inválido o expirado. Solicita uno nuevo.' });
+    if (fetchError) {
+      console.error('[EMAIL-RECOVERY] Update lookup error:', fetchError);
+      return res.status(500).json({ error: 'Error al actualizar la contraseña' });
     }
 
-    const record = records[0];
+    const genericInvalid = () => {
+      return res.status(400).json({ error: 'Código inválido o expirado. Solicita uno nuevo.' });
+    };
+
+    // Sin registro activo, expirado, ya usado o bloqueado por intentos.
+    if (!record || (record.attempts || 0) >= MAX_RESET_ATTEMPTS) {
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
+      return genericInvalid();
+    }
+
+    // Código incorrecto: cuenta como intento fallido (mismo contador compartido,
+    // incremento atómico). Si la persistencia falla, NO se puede continuar como
+    // si el intento se hubiera registrado.
+    if (record.code !== cleanCode) {
+      const { error: attemptError } = await registerFailedResetAttempt(record);
+      if (attemptError) {
+        console.error('[EMAIL-RECOVERY] Attempt persist error (update):', attemptError);
+        const elapsedMs = Date.now() - startedAt;
+        if (elapsedMs < 300) await new Promise(r => setTimeout(r, 300 - elapsedMs));
+        return res.status(500).json({ error: 'Error al actualizar la contraseña' });
+      }
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
+      return genericInvalid();
+    }
+
+    // Código correcto: se consume de forma atómica ANTES de cambiar la
+    // contraseña. El UPDATE condicional (used=false) garantiza un único uso
+    // incluso con solicitudes concurrentes.
+    const { consumed, error: claimError } = await consumeResetCode(record.id);
+    if (claimError) {
+      console.error('[EMAIL-RECOVERY] Consume error:', claimError);
+      return res.status(500).json({ error: 'Error al actualizar la contraseña' });
+    }
+    if (!consumed) {
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
+      return genericInvalid();
+    }
 
     // Update password via Supabase Admin API
     const { error } = await supabaseAdmin.auth.admin.updateUserById(
@@ -336,12 +441,6 @@ router.post('/update-password', verifyLimiter, async (req, res) => {
       console.error('[EMAIL-RECOVERY] Supabase update error:', error);
       return res.status(500).json({ error: 'Error al actualizar la contraseña' });
     }
-
-    // Mark code as used
-    await supabaseAdmin
-      .from('password_reset_codes')
-      .update({ used: true })
-      .eq('id', record.id);
 
     console.log(`[EMAIL-RECOVERY] Password updated for profile ${record.profile_id}`);
     res.json({ message: 'Contraseña actualizada correctamente' });
