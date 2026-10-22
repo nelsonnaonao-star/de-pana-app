@@ -3,7 +3,7 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Chat, Message } from "../../types";
 import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction, votePoll } from "../../services/messages";
-import { uploadChatMedia } from "../../services/storage";
+import { uploadChatMedia, uploadPrivateChatMedia, isValidChatId, planConversationUpload } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
 import { cacheVideoBlob } from "../../services/videoCache";
 import { revokeCachedMedia } from "../../services/mediaCache";
@@ -425,7 +425,9 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
 pendingSendIdsRef.current.add(tempId);
     inFlightMessageIds.add(tempId);
 
-          const url = await uploadChatMedia(fileBlob, "image");
+          const url = isValidChatId(chatId)
+            ? await uploadPrivateChatMedia(fileBlob, chatId, "image")
+            : await uploadChatMedia(fileBlob, "image");
           const mediaUpdated = { ...sendingMsg, mediaUrl: url };
           await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId: clientIdCamera, sender_id: uid }, uid);
           setMessages(prev => {
@@ -688,9 +690,22 @@ pendingSendIdsRef.current.add(tempId);
           // `uploadChatMedia` ya recibe un `Blob`: envolverlo otra vez en un
           // `Blob`/`File` sólo costaba una copia extra en memoria.
           const blob = fileToUpload;
-          console.log(`[VIDSEND] step=upload-start ${(blob.size / 1048576).toFixed(2)}MB contentType=${blob.type} folder=${type === "video" ? "video" : "files"}`);
-          const url = await uploadChatMedia(blob, type === "video" ? "video" : "files");
-          console.log(`[VIDSEND] step=upload-ok url=${url.slice(0, 90)}`);
+          const mediaKind = type === "video" ? "video" : type === "image" ? "image" : type === "audio" ? "audio" : "file";
+          const folder = type === "video" ? "video" : "files";
+          // Enrutado de adjuntos de conversación: un chat remoto (UUID) NUNCA
+          // cae al bucket público `chat-images`; si el MIME no está admitido por
+          // la subida privada, se RECHAZA con un mensaje claro y visible.
+          const plan = planConversationUpload(blob, chatId, mediaKind, { publicFolder: folder });
+          if (plan.action === "reject") {
+            console.warn(`[VIDSEND] step=upload-reject ${plan.reason}`);
+            throw new Error(plan.reason);
+          }
+          const dest = plan.action === "private" ? `chat-media` : `chat-images/${plan.folder}`;
+          console.log(`[VIDSEND] step=upload-start ${(blob.size / 1048576).toFixed(2)}MB contentType=${blob.type} dest=${dest}`);
+          const url = plan.action === "private"
+            ? await uploadPrivateChatMedia(blob, chatId, plan.kind)
+            : await uploadChatMedia(blob, plan.folder);
+          console.log(`[VIDSEND] step=upload-ok ok=${!!url}`);
           if (type === "video") {
             cacheVideoBlob(url, localBlob).catch(() => {});
           }
@@ -1048,8 +1063,12 @@ pendingSendIdsRef.current.add(tempId);
       const uploadTimeout = new Promise<string>((_, reject) =>
         setTimeout(() => reject(new Error("upload voz/video timeout (25s)")), 25000)
       );
-      const url = await Promise.race([uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video"), uploadTimeout]);
-      console.log("[VOICE] upload OK", { url });
+      const noteKind = currentRecordingType === "voice" ? "audio" : "video";
+      const uploadPromise = isValidChatId(chatId)
+        ? uploadPrivateChatMedia(blob, chatId, noteKind)
+        : uploadChatMedia(blob, currentRecordingType === "voice" ? "voice" : "video");
+      const url = await Promise.race([uploadPromise, uploadTimeout]);
+      console.log("[VOICE] upload OK", { private: isValidChatId(chatId) });
       uploadedUrl = url;
       const mediaUpdated = { ...newMsg, mediaUrl: url };
       await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId, sender_id: uid }, uid).catch(() => {});

@@ -5,10 +5,20 @@ import { Capacitor } from "@capacitor/core";
 import { supabase } from "../lib/supabase";
 import { FileOpener } from "@capawesome-team/capacitor-file-opener";
 import { mimeTypeFor } from "./mime";
+import { isSignableStorageUrl, isStorageSignedUrl, resolveMediaUrl } from "./mediaResolution";
 
 const ALBUM_NAME = "RED ON";
 
 let cachedAlbumId: string | null = null;
+
+// Antes de una operación real (guardar/abrir/compartir/descargar) sobre un
+// objeto propio (chat-images o chat-media), se asegura una signed URL. No-op si
+// ya es signed o si no pertenece a un bucket propio (blob/data/stickers/música/
+// externos). Un fallo de firma se propaga: nunca se degrada silenciosamente.
+async function ensureSignedUrl(url: string): Promise<string> {
+  if (!url || isStorageSignedUrl(url) || !isSignableStorageUrl(url)) return url;
+  return resolveMediaUrl(url);
+}
 
 async function getAlbumId(): Promise<string> {
   if (cachedAlbumId) return cachedAlbumId;
@@ -67,6 +77,7 @@ function blobToDataUri(blob: Blob): Promise<string> {
 }
 
 export async function saveMediaToGallery(url: string, fileName: string): Promise<void> {
+  url = await ensureSignedUrl(url);
   if (!Capacitor.isNativePlatform()) {
     const link = document.createElement("a");
     link.href = url;
@@ -78,6 +89,7 @@ export async function saveMediaToGallery(url: string, fileName: string): Promise
 }
 
 export async function saveMediaToGalleryDirect(url: string, fileName: string): Promise<void> {
+  url = await ensureSignedUrl(url);
   if (!Capacitor.isNativePlatform()) {
     const link = document.createElement("a");
     link.href = url;
@@ -102,6 +114,7 @@ export async function saveMediaToGalleryDirect(url: string, fileName: string): P
 }
 
 export async function shareMedia(url: string, title: string): Promise<void> {
+  url = await ensureSignedUrl(url);
   if (!Capacitor.isNativePlatform()) {
     try {
       await navigator.share({ title, url });
@@ -114,6 +127,7 @@ export async function shareMedia(url: string, title: string): Promise<void> {
 }
 
 export async function openDocument(url: string, fileName: string, mimeType?: string): Promise<void> {
+  url = await ensureSignedUrl(url);
   const inferred = mimeTypeFor(fileName, mimeType);
 
   if (!Capacitor.isNativePlatform()) {

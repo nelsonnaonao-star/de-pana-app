@@ -431,13 +431,13 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
           </div>
         ) : (
           <>
-        {!imgLoaded && !imgError && msg.mediaUrl && (
+        {!imgLoaded && !imgError && (msg.mediaUrl || msg.mediaResolved === "pending") && (
           <div className={`${isSticker ? "w-[190px] h-[190px]" : "w-[220px] h-[200px]"} bg-slate-200 rounded-xl animate-pulse flex items-center justify-center`}>
             <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
           </div>
         )}
 
-        {(imgError || !msg.mediaUrl) && (
+        {(imgError || (!msg.mediaUrl && msg.mediaResolved !== "pending")) && (
           <div className={`${isSticker ? "w-[190px] h-[190px]" : "w-[220px] h-[200px]"} bg-slate-100 rounded-xl flex flex-col items-center justify-center gap-2`}>
             <span className="text-slate-400 text-xs">No se pudo cargar</span>
             {imgError && msg.mediaUrl && (
@@ -837,7 +837,13 @@ export default React.memo(function MessageBubble({
           </div>
         )}
 
-        {msg.type === "audio" && !msg.mediaUrl && (
+        {msg.type === "audio" && !msg.mediaUrl && msg.mediaResolved === "pending" && (
+          <div className="flex items-center gap-2.5 p-1.5 rounded-xl min-w-[180px] bg-black/5 dark:bg-white/5">
+            <Loader2 className="w-5 h-5 text-slate-400 animate-spin" />
+          </div>
+        )}
+
+        {msg.type === "audio" && !msg.mediaUrl && msg.mediaResolved !== "pending" && (
           <div className={`flex items-center gap-2.5 p-1 rounded-xl min-w-[180px] ${isGlass ? 'bg-black/5' : 'bg-black/5 dark:bg-white/5'}`}>
             <div className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 bg-white/20">
               <Play className="w-4 h-4 ml-0.5" />
@@ -883,7 +889,13 @@ export default React.memo(function MessageBubble({
           />
         )}
 
-        {msg.type === "voice_note" && !msg.mediaUrl && (
+        {msg.type === "voice_note" && !msg.mediaUrl && msg.mediaResolved === "pending" && (
+          <div className="flex items-center gap-2 w-44">
+            <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+          </div>
+        )}
+
+        {msg.type === "voice_note" && !msg.mediaUrl && msg.mediaResolved !== "pending" && (
           <div className="flex items-center gap-2 w-44">
             <Mic className={`w-4 h-4 shrink-0 ${isGlass ? "text-gray-500 opacity-60" : "opacity-50"}`} />
             <span className={`text-[10px] ${isGlass ? "text-gray-500" : "opacity-50"}`}>Audio no disponible</span>

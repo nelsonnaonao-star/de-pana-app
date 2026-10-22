@@ -31,24 +31,15 @@ function withSessionTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Pr
 
 const NO_SESSION_RESULT = { data: { session: null } } as const;
 
-export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> || {}),
-  };
-
-  // getSession() nunca debe colgar el flujo: si expira el timeout se trata
-  // como "sin sesión" (válido para usuario no autenticado en recuperación).
+// Resolución de sesión compartida: getSession() primero y, si no hay token
+// (Capacitor/Android tarda en cargar Preferences), refreshSession() forzado.
+// Ambos pasos con timeout para no colgar el flujo. Devuelve el access_token o null.
+async function resolveAccessToken(): Promise<string | null> {
   let { data: { session } } = await withSessionTimeout(
     supabase.auth.getSession(),
     SESSION_TIMEOUT_MS,
     NO_SESSION_RESULT,
   );
-
-  // Capacitor/Android: getSession() a veces retorna null aunque la sesión
-  // exista en Preferences (la carga es async y puede no haber completado).
-  // En ese caso, refreshSession() fuerza la re-lectura de storage + refresh.
-  // También este paso está sujeto a timeout para no bloquear el flujo.
   if (!session?.access_token) {
     const refreshedResult = await withSessionTimeout(
       supabase.auth.refreshSession(),
@@ -59,9 +50,18 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
       session = refreshedResult.data.session;
     }
   }
+  return session?.access_token ?? null;
+}
 
-  if (session?.access_token) {
-    headers['Authorization'] = `Bearer ${session.access_token}`;
+export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> || {}),
+  };
+
+  const token = await resolveAccessToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
 
   // Timeout por defecto: con red móvil inestable un POST puede quedar "pendiendo"
@@ -101,6 +101,43 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
         lastRefreshFailureAt = now;
         window.dispatchEvent(new CustomEvent("session-unrecoverable"));
       }
+    }
+  }
+
+  return response;
+}
+
+// Subida multipart autenticada (FormData). Reutiliza la MISMA resolución de
+// sesión que authFetch, pero NO fija `Content-Type`: el cliente HTTP debe
+// generar el boundary de multipart. No registra tokens ni URLs en logs.
+export async function authUpload(url: string, formData: FormData): Promise<Response> {
+  const send = async (token: string | null): Promise<Response> => {
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+    try {
+      return await fetch(url, {
+        method: 'POST',
+        body: formData,
+        headers,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let response = await send(await resolveAccessToken());
+
+  if (response.status === 401) {
+    try {
+      const { data: { session: refreshed } } = await supabase.auth.refreshSession();
+      if (refreshed?.access_token) {
+        response = await send(refreshed.access_token);
+      }
+    } catch {
+      // Token/refresh irrecuperable: se devuelve la respuesta 401 original.
     }
   }
 

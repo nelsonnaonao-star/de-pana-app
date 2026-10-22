@@ -6,6 +6,7 @@ export interface Message {
   rawCreatedAt?: string;
   type: "text" | "system" | "image" | "sticker" | "video" | "audio" | "file" | "voice_note" | "video_note" | "poll" | "location";
   mediaUrl?: string;
+  mediaResolved?: "pending" | "failed" | "ready";
   fileName?: string;
   fileSize?: string;
   mimeType?: string;

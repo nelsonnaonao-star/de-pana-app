@@ -1,5 +1,7 @@
 import { supabase } from "../lib/supabase";
 import { logger } from "../lib/logger";
+import { apiUrl, authUpload } from "../lib/api";
+import { performPrivateUpload, type PrivateMediaKind } from "./privateUploadClient";
 
 const BUCKET = "chat-images";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
@@ -135,4 +137,28 @@ export async function uploadChatMedia(
 
 export async function uploadAvatar(blob: Blob, _userId: string): Promise<string> {
   return uploadChatMedia(blob, "uploads/avatars");
+}
+
+// ─── Subida privada de media de conversaciones (chat-media) ────────────────
+// La lógica pura (allowlist, validación de chat_id, enrutado de endpoint) vive
+// en `privateUploadClient`; aquí se inyectan la compresión y el POST multipart
+// autenticado real (authUpload, que NO fija Content-Type: boundary automático).
+export {
+  PRIVATE_MIME_EXT,
+  isPrivateUploadAllowedMime,
+  isValidChatId,
+  isPrivateUploadSupported,
+  planConversationUpload,
+} from "./privateUploadClient";
+export type { PrivateMediaKind, ConversationUploadPlan } from "./privateUploadClient";
+
+export async function uploadPrivateChatMedia(
+  blob: Blob,
+  chatId: string,
+  kind: PrivateMediaKind = "file",
+): Promise<string> {
+  return performPrivateUpload(blob, chatId, kind, {
+    postMultipart: (url, form) => authUpload(apiUrl(url), form),
+    compressImage,
+  });
 }

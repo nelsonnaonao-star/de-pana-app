@@ -1,15 +1,21 @@
 import { Filesystem, Directory } from "@capacitor/filesystem";
 import { Capacitor } from "@capacitor/core";
 import { logger } from "../lib/logger";
+import { storageBaseUrl } from "./mediaResolution";
 
 const CACHE_DIR = "video_cache";
 const MAX_VIDEO_SIZE = 150 * 1024 * 1024; // 150MB
 const MAX_CACHE_SIZE = 500 * 1024 * 1024; // 500MB total
 
+// Identidad estable del objeto de chat-images: la URL base (pública) y su
+// signed URL (que expira cada 3600s) generan el MISMO hash, así el archivo
+// cacheado tras el envío (clave = URL pública) sigue acertando cuando el
+// render usa la signed URL y no se re-descarga la misma vídeo.
 function hashUrl(url: string): string {
+  const base = storageBaseUrl(url) ?? url;
   let hash = 0;
-  for (let i = 0; i < url.length; i++) {
-    const char = url.charCodeAt(i);
+  for (let i = 0; i < base.length; i++) {
+    const char = base.charCodeAt(i);
     hash = ((hash << 5) - hash + char) | 0;
   }
   return Math.abs(hash).toString(36);

@@ -1,6 +1,14 @@
 const CACHE_NAME = "chat-media-cache";
 const blobUrlMap = new Map<string, string>();
 
+import { storageBaseUrl } from "./mediaResolution";
+
+// Identidad ESTABLE del objeto (public base y signed URL normalizan igual),
+// para que una signed URL que expira cada 3600s no inutilice la cache.
+function cacheKey(url: string): string {
+  return storageBaseUrl(url) ?? url;
+}
+
 // Dedupe de descargas EN VUELO: si dos mensajes con la misma URL se resuelven a
 // la vez (p.ej. GIF/sticker recién enviado en un chat con muchos mensajes), solo
 // un fetch/cache.put ocurre; el resto espera la misma promesa y comparte el blob.
@@ -31,23 +39,24 @@ async function ensureCacheSize(maxEntries = 100): Promise<void> {
 }
 
 export async function getCachedMedia(url: string): Promise<string> {
-  if (!url || url.startsWith("blob:")) return url;
+  if (!url || url.startsWith("blob:") || url.startsWith("data:")) return url;
 
-  const existing = blobUrlMap.get(url);
+  const key = cacheKey(url);
+  const existing = blobUrlMap.get(key);
   if (existing) return existing;
 
-  const inflight = inflightMap.get(url);
+  const inflight = inflightMap.get(key);
   if (inflight) return inflight;
 
   const promise = (async (): Promise<string> => {
     try {
       const cache = await caches.open(CACHE_NAME);
-      const cachedResponse = await cache.match(url);
+      const cachedResponse = await cache.match(key);
 
       if (cachedResponse) {
         const blob = await cachedResponse.blob();
         const blobUrl = URL.createObjectURL(blob);
-        blobUrlMap.set(url, blobUrl);
+        blobUrlMap.set(key, blobUrl);
         ensureCacheSize();
         return blobUrl;
       }
@@ -56,33 +65,34 @@ export async function getCachedMedia(url: string): Promise<string> {
       if (!fetchResponse.ok) return url;
 
       const cacheClone = fetchResponse.clone();
-      cache.put(url, cacheClone);
+      cache.put(key, cacheClone);
 
       const blob = await fetchResponse.blob();
       const blobUrl = URL.createObjectURL(blob);
-      blobUrlMap.set(url, blobUrl);
+      blobUrlMap.set(key, blobUrl);
       ensureCacheSize();
       return blobUrl;
     } catch {
       return url;
     } finally {
-      inflightMap.delete(url);
+      inflightMap.delete(key);
     }
   })();
 
-  inflightMap.set(url, promise);
+  inflightMap.set(key, promise);
   return promise;
 }
 
 export function getCachedMediaSync(url: string): string | null {
-  if (!url || url.startsWith("blob:")) return url;
-  return blobUrlMap.get(url) ?? null;
+  if (!url || url.startsWith("blob:") || url.startsWith("data:")) return url;
+  return blobUrlMap.get(cacheKey(url)) ?? null;
 }
 
 export function revokeCachedMedia(url: string): void {
-  const blobUrl = blobUrlMap.get(url);
+  const key = cacheKey(url);
+  const blobUrl = blobUrlMap.get(key);
   if (blobUrl) {
     URL.revokeObjectURL(blobUrl);
-    blobUrlMap.delete(url);
+    blobUrlMap.delete(key);
   }
 }

@@ -56,7 +56,8 @@ import { Virtuoso } from "react-virtuoso";
 
 import { playSound, playSoundOption, getSoundId, setSoundId, stopSound } from "../services/soundService";
 import { SOUND_LIBRARY } from "../data/sounds";
-import { uploadAvatar, uploadChatMedia } from "../services/storage";
+import { uploadAvatar, uploadChatMedia, uploadPrivateChatMedia, planConversationUpload, type PrivateMediaKind } from "../services/storage";
+import { isStorageSignedUrl, parseStorageRef, PRIVATE_BUCKET, resolveMediaUrl as resolveSignedMediaUrl } from "../services/mediaResolution";
 import { updateProfile } from "../services/auth";
 import { db } from "../services/database/DatabaseService";
 import CallRatingModal from "./CallRatingModal";
@@ -851,7 +852,7 @@ export default function PhoneSimulator({
     let resolvedUrl: string | undefined;
     if (needsMedia) {
       try {
-        resolvedUrl = await resolveMediaUrl(msg);
+        resolvedUrl = await resolveMediaUrl(msg, chatId);
       } catch {
         toast.error("No se pudo obtener la URL pública del archivo. Verificá tu conexión.");
         return;
@@ -5977,23 +5978,55 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
   );
 }
 
-async function resolveMediaUrl(msg: Message): Promise<string | undefined> {
+async function resolveMediaUrl(msg: Message, destChatId: string): Promise<string | undefined> {
   const url = msg.mediaUrl;
   if (!url) return undefined;
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+
+  // Una signed URL (de cualquier bucket propio) NO es persistible (expira): se
+  // re-descarga y se re-sube. Una referencia privada (chat-media) TAMPOCO se
+  // reutiliza entre chats: se crea una nueva en el chat de destino.
+  const signed = isStorageSignedUrl(url);
+  const ref = parseStorageRef(url);
+  const isPrivateCanonical = ref?.bucket === PRIVATE_BUCKET;
+  const reusablePublic = !signed && !isPrivateCanonical && (url.startsWith("http://") || url.startsWith("https://"));
+  if (reusablePublic) return url;
 
   try {
-    const resp = await fetch(url);
+    // La referencia guardada (canónica privada o firmada) puede no ser accesible
+    // directamente: se firma primero (no-op para blob/data/externos). Así el
+    // reenvío de un objeto privado descarga con token y crea una copia NUEVA en
+    // el chat destino (nunca reutiliza la referencia de otro chat).
+    const fetchUrl = await resolveSignedMediaUrl(url);
+    const resp = await fetch(fetchUrl);
     if (!resp.ok) throw new Error("fetch failed");
     const blob = await resp.blob();
-    const folder =
-      msg.type === "video" || msg.type === "video_note" ? "video"
-      : msg.type === "audio" || msg.type === "voice_note" ? "voice"
-      : msg.type === "sticker" ? "stickers"
-      : "uploads";
-    return await uploadChatMedia(blob, folder);
+
+    // Los stickers permanecen públicos (chat-images): no se migran.
+    if (msg.type === "sticker") {
+      return await uploadChatMedia(blob, "stickers");
+    }
+
+    const kind: PrivateMediaKind = msg.type === "video" || msg.type === "video_note"
+      ? "video"
+      : msg.type === "audio" || msg.type === "voice_note"
+        ? "audio"
+        : msg.type === "image"
+          ? "image"
+          : "file";
+
+    const folder = kind === "video" ? "video" : kind === "audio" ? "voice" : "uploads";
+    // Reenvío de media de conversación: al chat DESTINO remoto (UUID) → privado;
+    // si el MIME no está admitido se RECHAZA (nunca caer a chat-images de forma
+    // silenciosa). El llamador muestra el error y aborta el reenvío.
+    const plan = planConversationUpload(blob, destChatId, kind, { publicFolder: folder });
+    if (plan.action === "reject") {
+      throw new Error(plan.reason);
+    }
+    return plan.action === "private"
+      ? await uploadPrivateChatMedia(blob, destChatId, plan.kind)
+      : await uploadChatMedia(blob, plan.folder);
   } catch (e) {
-    logger.warn("[FORWARD] resolveMediaUrl failed", { error: e, url });
+    logger.warn("[FORWARD] resolveMediaUrl failed", { error: e });
     throw e;
   }
 }

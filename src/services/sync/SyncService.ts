@@ -6,9 +6,19 @@ import { messageRepo } from "../database/repositories/MessageRepository";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
 import { sendMessage as apiSendMessage } from "../messages";
 import { flushPendingReadReceipts } from "../readReceiptQueue";
-import { uploadChatMedia } from "../storage";
+import { uploadChatMedia, uploadPrivateChatMedia, isValidChatId, planConversationUpload, type PrivateMediaKind } from "../storage";
 import { Capacitor } from "@capacitor/core";
 import { logger } from "../../lib/logger";
+
+// Error de política: adjunto de un chat remoto con un MIME no admitido por la
+// subida privada. NO debe caer nunca al bucket público `chat-images`; el mensaje
+// queda visible en estado error y no se reintenta en bucle.
+export class UnsupportedRemoteMediaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnsupportedRemoteMediaError";
+  }
+}
 
 // Instrumentación de diagnóstico SIEMPRE visible en logcat (producción).
 // console.log directo: el logger no escribe en producción.
@@ -468,8 +478,10 @@ class SyncService {
                 const blob = await messageRepo.getAudioBlob(item.message.id);
                 if (blob) {
                   try {
-                    const folder = isVoice ? "voice" : "video";
-                    const httpsUrl = await uploadChatMedia(blob, folder);
+                    const noteKind: PrivateMediaKind = isVoice ? "audio" : "video";
+                    const httpsUrl = isValidChatId(item.chatId)
+                      ? await uploadPrivateChatMedia(blob, item.chatId, noteKind)
+                      : await uploadChatMedia(blob, isVoice ? "voice" : "video");
                     const updatedMsg = { ...item.message, mediaUrl: httpsUrl };
                     if (isVideoNote) updatedMsg.localVideoUrl = httpsUrl;
                     await messageRepo.upsertMessage(item.chatId, updatedMsg);
@@ -613,7 +625,9 @@ class SyncService {
       try {
         const blob = await messageRepo.getAudioBlob(msg.id as string);
         if (blob) {
-          const reuploaded = await uploadChatMedia(blob, "voice");
+          const reuploaded = isValidChatId(chatId)
+            ? await uploadPrivateChatMedia(blob, chatId, "audio")
+            : await uploadChatMedia(blob, "voice");
           if (reuploaded && reuploaded.startsWith("http")) {
             audioUrl = reuploaded;
             mediaUrl = reuploaded;
@@ -634,7 +648,16 @@ class SyncService {
     }
 
     if (mediaUrl && !mediaUrl.startsWith("blob:")) {
-      const uploaded = await this.uploadIfNeeded(mediaUrl, type);
+      let uploaded: string | null;
+      try {
+        uploaded = await this.uploadIfNeeded(mediaUrl, type, chatId);
+      } catch (e) {
+        if (e instanceof UnsupportedRemoteMediaError) {
+          await this.markMediaRejected(chatId, msg, e.message);
+          return null;
+        }
+        throw e;
+      }
       if (uploaded) {
         if (type === "image") imageUrl = uploaded;
         else if (type === "video" || type === "video_note") videoUrl = uploaded;
@@ -651,7 +674,16 @@ class SyncService {
     }
 
     if (localVideoUrl && !localVideoUrl.startsWith("blob:")) {
-      const uploaded = await this.uploadIfNeeded(localVideoUrl, "video");
+      let uploaded: string | null;
+      try {
+        uploaded = await this.uploadIfNeeded(localVideoUrl, "video", chatId);
+      } catch (e) {
+        if (e instanceof UnsupportedRemoteMediaError) {
+          await this.markMediaRejected(chatId, msg, e.message);
+          return null;
+        }
+        throw e;
+      }
       if (uploaded) videoUrl = uploaded;
     }
 
@@ -803,7 +835,8 @@ class SyncService {
 
   private async uploadIfNeeded(
     url: string,
-    type: string
+    type: string,
+    chatId?: string,
   ): Promise<string | null> {
     if (url.startsWith("blob:")) return null;
     if (url.startsWith("http://") || url.startsWith("https://")) return url;
@@ -811,17 +844,44 @@ class SyncService {
     try {
       const resp = await fetch(url);
       const blob = await resp.blob();
-      const folder =
-        type === "video" || type === "video_note"
-          ? "video"
-          : type === "audio" || type === "voice_note"
-            ? "voice"
-            : type === "sticker"
-              ? "stickers"
-              : "uploads";
-      return await uploadChatMedia(blob, folder);
-    } catch {
+      const isVideo = type === "video" || type === "video_note";
+      const isAudioType = type === "audio" || type === "voice_note";
+      const isSticker = type === "sticker";
+      const kind: PrivateMediaKind = isVideo ? "video" : isAudioType ? "audio" : type === "image" ? "image" : "file";
+      const folder = isVideo ? "video" : isAudioType ? "voice" : isSticker ? "stickers" : "uploads";
+      // Enrutado de adjuntos de conversación: chat remoto (UUID) → privado; si el
+      // MIME no está admitido se RECHAZA (nunca público silencioso a chat-images).
+      // Chat local (sin UUID) y stickers conservan el flujo público existente.
+      const plan = planConversationUpload(blob, chatId, kind, {
+        isSticker,
+        publicFolder: folder,
+      });
+      if (plan.action === "reject") {
+        throw new UnsupportedRemoteMediaError(plan.reason);
+      }
+      return plan.action === "private"
+        ? await uploadPrivateChatMedia(blob, chatId as string, plan.kind)
+        : await uploadChatMedia(blob, plan.folder);
+    } catch (e) {
+      if (e instanceof UnsupportedRemoteMediaError) throw e;
       return null;
+    }
+  }
+
+  // Marca un adjunto no admitido (chat remoto) como error visible y detiene el
+  // reintento en bucle. La fila NO se borra: el usuario la ve con ícono de error.
+  private async markMediaRejected(chatId: string, msg: any, reason: string): Promise<void> {
+    logger.warn("[SyncService] adjunto no admitido para chat-media; NO se sube a chat-images", {
+      messageId: msg?.id,
+      reason,
+    });
+    try {
+      await messageRepo.upsertMessage(chatId, { ...(msg as any), status: "error", synced: true });
+    } catch (persistErr) {
+      logger.warn("[SyncService] no se pudo persistir status=error (media no admitida)", {
+        messageId: msg?.id,
+        error: persistErr,
+      });
     }
   }
 
