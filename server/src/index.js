@@ -123,7 +123,7 @@ async function main() {
   });
   app.use('/api/auth', strictLimiter, authRoutes);
   app.use('/api/rates', globalLimiter, ratesRoutes);
-  app.use('/api/turn', globalLimiter, turnRoutes);
+  app.use('/api/turn', globalLimiter, authMiddleware, turnRoutes);
   app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);
 
   // FCM: webhook uses webhookLimiter (no JWT auth — Supabase server-to-server)
@@ -147,7 +147,7 @@ async function main() {
   // GIPHY proxy (hides API key from client)
   const GIPHY_API_KEY = process.env.GIPHY_API_KEY;
   if (!GIPHY_API_KEY) console.warn('[GIPHY] GIPHY_API_KEY no está configurada en variables de entorno');
-  app.get('/api/giphy/:action', async (req, res) => {
+  app.get('/api/giphy/:action', authMiddleware, async (req, res) => {
     if (!GIPHY_API_KEY) return res.status(503).json({ error: 'GIPHY no configurado' });
     try {
       const { action } = req.params;
