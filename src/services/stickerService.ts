@@ -1,4 +1,4 @@
-import { apiUrl } from "../lib/api";
+import { apiUrl, authFetch } from "../lib/api";
 import { supabase } from "../lib/supabase";
 
 export interface MusicTrack {
@@ -32,7 +32,7 @@ async function giphyFetch(endpoint: Endpoint, action: string, query: string, lim
   if (query) params.set("q", query);
   const url = apiUrl(`/api/giphy/${action}?${params.toString()}`);
 
-  const res = await fetch(url);
+  const res = await authFetch(url);
   if (!res.ok) throw new Error(`GIPHY error ${res.status}`);
   const data = await res.json();
   return Array.isArray(data) ? data : (data.data || []);

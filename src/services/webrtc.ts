@@ -1,4 +1,5 @@
 import { supabase } from "../lib/supabase";
+import { authFetch, apiUrl } from "../lib/api";
 
 type SignalPayload = {
   type: "offer" | "answer" | "ice-candidate" | "call-ended" | "callee-ready" | "reaction";
@@ -28,7 +29,7 @@ async function fetchTurnCredentials(): Promise<RTCConfiguration["iceServers"]> {
     const serverUrl = import.meta.env.VITE_SERVER_URL;
     if (!serverUrl) throw new Error("VITE_SERVER_URL not set");
 
-    const response = await fetch(`${serverUrl}/api/turn/credentials`, {
+    const response = await authFetch(`${serverUrl}/api/turn/credentials`, {
       method: "POST",
     });
 

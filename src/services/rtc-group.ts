@@ -1,5 +1,6 @@
 import { supabase } from "../lib/supabase";
 import { VIDEO_FILTERS } from "./webrtc";
+import { authFetch } from "../lib/api";
 
 type GroupSignal = {
   type: "join" | "leave" | "offer" | "answer" | "ice-candidate" | "call-ended" | "mute" | "video" | "reaction";
@@ -163,7 +164,7 @@ export class WebRTCGroupService {
     try {
       const serverUrl = import.meta.env.VITE_SERVER_URL;
       if (!serverUrl) throw new Error("VITE_SERVER_URL not set");
-      const response = await fetch(`${serverUrl}/api/turn/credentials`, { method: "POST" });
+      const response = await authFetch(`${serverUrl}/api/turn/credentials`, { method: "POST" });
       if (!response.ok) throw new Error(`TURN fetch failed: ${response.status}`);
       const data = await response.json();
       if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
