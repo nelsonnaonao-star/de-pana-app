@@ -70,13 +70,13 @@ router.post('/mute', async (req, res) => {
 
     if (error) {
       console.error('[GROUPS] mute upsert error:', error);
-      return res.status(500).json({ ok: false, error: error.message });
+      return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
     }
 
     res.json({ ok: true, muted_until });
   } catch (err) {
     console.error('[GROUPS] mute error:', err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: 'Error interno del servidor' });
   }
 });
 
@@ -99,13 +99,13 @@ router.post('/unmute', async (req, res) => {
 
     if (error) {
       console.error('[GROUPS] unmute upsert error:', error);
-      return res.status(500).json({ ok: false, error: error.message });
+      return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
     }
 
     res.json({ ok: true });
   } catch (err) {
     console.error('[GROUPS] unmute error:', err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: 'Error interno del servidor' });
   }
 });
 
@@ -120,14 +120,14 @@ router.get('/mute/:chat_id', async (req, res) => {
       .eq('chat_id', chat_id)
       .maybeSingle();
     if (error) {
-      return res.status(500).json({ ok: false, error: error.message });
+      return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
     }
     const isMuted = !!data && data.active
       && (!data.muted_until || new Date(data.muted_until).getTime() > Date.now());
     res.json({ ok: true, isMuted, muted_until: data?.muted_until || null });
   } catch (err) {
     console.error('[GROUPS] get mute error:', err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: 'Error interno del servidor' });
   }
 });
 
@@ -169,13 +169,13 @@ router.post('/sound', async (req, res) => {
 
     if (error) {
       console.error('[GROUPS] sound update error:', error);
-      return res.status(500).json({ ok: false, error: error.message });
+      return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
     }
 
     res.json({ ok: true, notification_sound: sound_id || null });
   } catch (err) {
     console.error('[GROUPS] sound error:', err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: 'Error interno del servidor' });
   }
 });
 
@@ -215,7 +215,7 @@ router.post('/remove-participant', async (req, res) => {
       .eq('profile_id', profile_id);
     if (delErr) {
       console.error('[GROUPS] remove-participant delete error:', delErr);
-      return res.status(500).json({ ok: false, error: delErr.message });
+      return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
     }
 
     // 2) Evento de Realtime dirigido al expulsado (crítica)
@@ -224,7 +224,7 @@ router.post('/remove-participant', async (req, res) => {
       .insert({ user_id: profile_id, chat_id, type: 'removed' });
     if (evErr) {
       console.error('[GROUPS] remove-participant event insert error:', evErr);
-      return res.status(500).json({ ok: false, error: evErr.message });
+      return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
     }
 
     // 3) Mensaje de sistema para el resto del grupo
@@ -270,7 +270,7 @@ router.post('/remove-participant', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[GROUPS] remove-participant error:', err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: 'Error interno del servidor' });
   }
 });
 
@@ -315,7 +315,7 @@ router.post('/add-participants', async (req, res) => {
 
     if (error) {
       console.error('[GROUPS] add-participants upsert error:', error);
-      return res.status(500).json({ ok: false, error: error.message });
+      return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
     }
 
     // Emitir evento 'added' SOLO a los miembros realmente nuevos.
@@ -333,7 +333,7 @@ router.post('/add-participants', async (req, res) => {
     res.json({ ok: true, inserted: member_ids.length });
   } catch (err) {
     console.error('[GROUPS] add-participants error:', err);
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: 'Error interno del servidor' });
   }
 });
 
