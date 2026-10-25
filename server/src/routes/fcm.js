@@ -1,5 +1,6 @@
 import express from 'express';
 import webpush from 'web-push';
+import crypto from 'crypto';
 import { supabaseAdmin } from '../db.js';
 import { initializeApp, getApps, cert } from 'firebase-admin';
 import { isGroupMuted } from './groups.js';
@@ -203,9 +204,22 @@ router.post('/webhook', async (req, res) => {
     return res.status(503).json({ error: 'Webhook not configured' });
   }
   const receivedSecret = req.headers['x-fcm-secret'] || req.headers['authorization'] || '';
-  const match = receivedSecret === expectedSecret
-    || receivedSecret === `Bearer ${expectedSecret}`
-    || receivedSecret === `fcm-secret ${expectedSecret}`;
+
+  // Timing-safe comparison to prevent timing attacks on the webhook secret.
+  // We hash both secrets (SHA-256 hex) so buffer lengths always match.
+  function safeSecretCompare(received, expected) {
+    if (typeof received !== 'string' || typeof expected !== 'string') return false;
+    const receivedHash = crypto.createHash('sha256').update(received).digest('hex');
+    const expectedHash = crypto.createHash('sha256').update(expected).digest('hex');
+    return crypto.timingSafeEqual(
+      Buffer.from(receivedHash, 'hex'),
+      Buffer.from(expectedHash, 'hex')
+    );
+  }
+
+  const match = safeSecretCompare(receivedSecret, expectedSecret)
+    || safeSecretCompare(receivedSecret, `Bearer ${expectedSecret}`)
+    || safeSecretCompare(receivedSecret, `fcm-secret ${expectedSecret}`);
   if (!match) {
     return res.status(401).json({ error: 'invalid webhook secret' });
   }
