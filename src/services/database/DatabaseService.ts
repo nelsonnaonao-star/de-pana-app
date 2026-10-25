@@ -57,7 +57,7 @@ class DatabaseService {
       await CapacitorSQLite.createConnection({
         database: DB_NAME,
         version: DB_VERSION,
-        encrypted: false,
+        encrypted: true,
       });
 
       await CapacitorSQLite.open({ database: DB_NAME });
