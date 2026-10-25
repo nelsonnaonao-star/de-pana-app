@@ -90,7 +90,7 @@ router.post('/register', async (req, res) => {
       { onConflict: 'profile_id,token' }
     );
   if (error) {
-    return res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: 'Error interno del servidor' });
   }
 
   res.json({ ok: true });

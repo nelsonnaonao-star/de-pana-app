@@ -198,7 +198,7 @@ router.post('/stories', async (req, res) => {
     res.json(mapStoryFromDb(data));
   } catch (err) {
     console.error('[CONTENT] story create error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -220,7 +220,7 @@ router.delete('/stories/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[CONTENT] story delete error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -246,7 +246,7 @@ router.post('/stories/:storyId/view', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[CONTENT] story view error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -291,7 +291,7 @@ router.get('/stories/:storyId/viewers', async (req, res) => {
     res.json({ viewers: result, total: result.length });
   } catch (err) {
     console.error('[CONTENT] story viewers error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -369,7 +369,7 @@ router.post('/stories/:storyId/react', async (req, res) => {
     }
   } catch (err) {
     console.error('[CONTENT] story react error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -465,7 +465,7 @@ router.get('/channels/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('[CONTENT] channel get error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -500,7 +500,7 @@ router.post('/channels', async (req, res) => {
     });
   } catch (err) {
     console.error('[CONTENT] channel create error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -522,7 +522,7 @@ router.post('/channels/subscribe', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('[CONTENT] subscribe error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -541,7 +541,7 @@ router.post('/channels/unsubscribe', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[CONTENT] unsubscribe error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -582,7 +582,7 @@ router.post('/channels/updates', async (req, res) => {
     });
   } catch (err) {
     console.error('[CONTENT] update create error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -625,7 +625,7 @@ router.post('/channels/react', async (req, res) => {
     }
   } catch (err) {
     console.error('[CONTENT] react error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -699,7 +699,7 @@ router.post('/flyers', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('[CONTENT] flyer create error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -798,7 +798,7 @@ router.delete('/flyers/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('[CONTENT] flyer delete error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 

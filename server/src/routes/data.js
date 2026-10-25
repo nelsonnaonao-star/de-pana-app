@@ -8,9 +8,16 @@ function sanitizeInput(str) {
   return str.replace(/[<>]/g, '').trim().slice(0, 500);
 }
 
+function isValidUUID(str) {
+  return typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+}
+
 router.get('/profile/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!isValidUUID(userId)) {
+      return res.status(400).json({ error: 'userId inválido' });
+    }
     if (req.userId !== userId && req.userRole !== 'service_role') {
       return res.status(403).json({ error: 'No autorizado' });
     }
@@ -30,6 +37,9 @@ router.get('/profile/:userId', async (req, res) => {
 router.get('/chats/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!isValidUUID(userId)) {
+      return res.status(400).json({ error: 'userId inválido' });
+    }
     if (req.userId !== userId && req.userRole !== 'service_role') {
       return res.status(403).json({ error: 'No autorizado' });
     }
@@ -50,6 +60,9 @@ router.get('/chats/:userId', async (req, res) => {
 router.get('/contacts/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!isValidUUID(userId)) {
+      return res.status(400).json({ error: 'userId inválido' });
+    }
     if (req.userId !== userId && req.userRole !== 'service_role') {
       return res.status(403).json({ error: 'No autorizado' });
     }
@@ -68,6 +81,9 @@ router.get('/contacts/:userId', async (req, res) => {
 router.get('/calls/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!isValidUUID(userId)) {
+      return res.status(400).json({ error: 'userId inválido' });
+    }
     if (req.userId !== userId && req.userRole !== 'service_role') {
       return res.status(403).json({ error: 'No autorizado' });
     }
@@ -87,6 +103,9 @@ router.get('/calls/:userId', async (req, res) => {
 router.get('/all/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!isValidUUID(userId)) {
+      return res.status(400).json({ error: 'userId inválido' });
+    }
     if (req.userId !== userId && req.userRole !== 'service_role') {
       return res.status(403).json({ error: 'No autorizado' });
     }
@@ -104,7 +123,7 @@ router.get('/all/:userId', async (req, res) => {
     });
   } catch (err) {
     console.error('[DATA] all error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 

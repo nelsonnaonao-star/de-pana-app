@@ -839,15 +839,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
                 return prev;
               }
               logger.info("[SUPABASE] Prepending chat to list", { chatId });
-              // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
-              console.log("[NAME RESOLUTION - PARTICIPANT INSERT]", JSON.stringify({
-                chatId: (chatData as any).id,
-                rawChatName: (chatData as any).name,
-                profileId: (chatData as any).profile_id,
-                adminId: (chatData as any).admin_id,
-              }));
-              // ═══════════════ FIN TEMPORAL LOG ═══════════════
-              return [chatData as Chat, ...prev];
+            return [chatData as Chat, ...prev];
             });
 
             // Persist to SQLite so the chat survives app restarts
@@ -918,21 +910,6 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         // Refresh chats when user returns to the tab
         getChats(userId).then(fresh => {
           if (!fresh) return;
-          // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
-          for (const fc of fresh) {
-            if (!fc.is_group) {
-              const prevChat = chatsRef.current.find(c => c.id === fc.id);
-              console.log("[NAME RESOLUTION - VISIBILITY CHANGE]", JSON.stringify({
-                chatId: fc.id,
-                freshName: fc.name,
-                previousName: prevChat?.name || null,
-                profileId: fc.profile_id,
-                adminId: fc.admin_id,
-                nameChanged: prevChat && prevChat.name !== fc.name,
-              }));
-            }
-          }
-          // ═══════════════ FIN TEMPORAL LOG ═══════════════
           setChats(prev => {
             const merged = new Map<string, Chat>();
             const prevById = new Map<string, Chat>();
@@ -1121,13 +1098,6 @@ const refreshChats = async () => {
     console.log(`[RACE-T3] refreshChats STARTED — fetching getChats for user ${user.id.slice(0,8)}`);
     const ch = await getChats(user.id);
     console.log(`[RACE-T4] refreshChats RETURNED — ${ch.length} chats: [${ch.map(c=>c.id).join(',')}]`);
-    // ═══════════════ TEMPORAL LOG — ELIMINAR DESPUÉS ═══════════════
-    console.log("[NAME RESOLUTION - REFRESHCHATS]", JSON.stringify({
-      trigger: new Error().stack?.split("\n")[2]?.trim()?.slice(0, 80) || "unknown",
-      chatsReturned: ch.length,
-      chatNames: ch.filter(c => !c.is_group).map(c => ({ id: c.id, name: c.name, profile_id: c.profile_id, admin_id: c.admin_id })),
-    }));
-    // ═══════════════ FIN TEMPORAL LOG ═══════════════
     const withMessages = ch.map((fresh) => {
       const prev = chatsRef.current.find((p) => p.id === fresh.id) as (Chat & { messages?: unknown[] }) | undefined;
       let merged = fresh;

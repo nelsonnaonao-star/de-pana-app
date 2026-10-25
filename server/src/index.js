@@ -233,7 +233,7 @@ async function main() {
       res.json({ response: response.text });
     } catch (error) {
       console.error('Error in /api/chat:', error);
-      res.status(500).json({ error: error.message || 'Error al procesar la solicitud.' });
+      res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
 

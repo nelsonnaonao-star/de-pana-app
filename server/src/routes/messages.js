@@ -360,7 +360,7 @@ router.post('/send', sendLimiter, async (req, res) => {
     res.json(message);
   } catch (err) {
     console.error('[MESSAGES] send error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -419,7 +419,7 @@ router.get('/:chatId', async (req, res) => {
     res.json(data || []);
   } catch (err) {
     console.error('[MESSAGES] get error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -496,7 +496,7 @@ router.post('/mark-read', async (req, res) => {
     res.json({ updated });
   } catch (err) {
     console.error('[MESSAGES] mark-read error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -523,7 +523,7 @@ router.post('/clear-for-me', async (req, res) => {
     res.json({ ok: true, cleared_at: now });
   } catch (err) {
     console.error('[MESSAGES] clear-for-me error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -587,7 +587,7 @@ router.post('/delete', async (req, res) => {
     res.json({ ok: true, message: updatedMsg });
   } catch (err) {
     console.error('[MESSAGES] delete error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -648,7 +648,7 @@ router.post('/edit', async (req, res) => {  try {
     res.json({ ok: true, message: updatedMsg });
   } catch (err) {
     console.error('[MESSAGES] edit error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -688,7 +688,7 @@ router.post('/react', reactLimiter, async (req, res) => {
     res.json({ reactions });
   } catch (err) {
     console.error('[MESSAGES] react error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -730,7 +730,7 @@ router.post('/ephemeral-setting', async (req, res) => {
     res.json({ ok: true, timer: parsed === 0 ? null : parsed });
   } catch (err) {
     console.error('[MESSAGES] ephemeral-setting error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -788,7 +788,7 @@ router.post('/vote-poll', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('[MESSAGES] vote-poll error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
