@@ -67,6 +67,16 @@ async function isChatMember(chatId, userId) {
   return !!participant;
 }
 
+const ALLOWED_VIDEO_MIMES = [
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+];
+
+const VIDEO_MIME_ALIASES = {
+  'video/x-m4v': 'video/mp4',
+};
+
 const uploadVideo = multer({
   storage: multer.diskStorage({
     destination: path.join(__dirname, '..', '..', 'uploads'),
@@ -76,10 +86,11 @@ const uploadVideo = multer({
   }),
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('video/')) {
+    const mime = VIDEO_MIME_ALIASES[file.mimetype] || file.mimetype;
+    if (ALLOWED_VIDEO_MIMES.includes(mime)) {
       cb(null, true);
     } else {
-      cb(new Error('Solo se permiten videos'));
+      cb(new Error('Solo videos MP4, MOV o WebM'));
     }
   },
 });
