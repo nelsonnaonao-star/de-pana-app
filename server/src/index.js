@@ -174,7 +174,11 @@ async function main() {
   });
 
   // Static files
-  app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+  app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
+    setHeaders: (res, filePath) => {
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
+    },
+  }));
 
   // Gemini AI Chat endpoint
   const chatLimiter = rateLimit({
