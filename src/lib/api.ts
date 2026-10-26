@@ -1,6 +1,6 @@
 import { supabase } from "./supabase";
 
-const FALLBACK_URL = "https://de-pana-app-kucq.onrender.com";
+const FALLBACK_URL = import.meta.env.VITE_API_FALLBACK_URL || "https://de-pana-app-kucq.onrender.com";
 
 const base = import.meta.env.VITE_SERVER_URL || FALLBACK_URL;
 
