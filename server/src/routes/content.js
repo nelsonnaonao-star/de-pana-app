@@ -4,8 +4,8 @@ import { getMessaging } from 'firebase-admin/messaging';
 
 const router = Router();
 
-const SUPABASE_HOST = process.env.VITE_SUPABASE_URL
-  ? new URL(process.env.VITE_SUPABASE_URL).hostname
+const SUPABASE_HOST = process.env.SUPABASE_URL
+  ? new URL(process.env.SUPABASE_URL).hostname
   : 'akgsylutbpgolurkcavh.supabase.co';
 const BUCKET = 'chat-images';
 
