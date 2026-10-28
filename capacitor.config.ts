@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     androidScheme: 'https',
-    allowNavigation: ['*'],
+    allowNavigation: ['de-pana-app-kucq.onrender.com', '*.supabase.co'],
   },
   loggingBehavior: 'production',
   plugins: {
