@@ -216,7 +216,7 @@ async function main() {
           totalChars += text.length;
           if (totalChars > MAX_HISTORY_CHARS) break;
           formattedContents.push({
-            role: msg.role === 'user' ? 'user' : 'model',
+            role: msg.role === 'model' ? 'model' : 'user',
             parts: [{ text }]
           });
         }
