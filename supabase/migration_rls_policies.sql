@@ -1,12 +1,23 @@
 -- ============================================================
--- RLS Policies for RED ON (DE PANA) — v2 (idempotente)
+-- ⚠️ HISTÓRICO / NO EJECUTAR ⚠️
+-- RLS Policies for RED ON (DE PANA) — v2
 -- Run in: Supabase Dashboard → SQL Editor → New Query → Run
 -- ============================================================
--- Enables Row Level Security + policies so each user only
--- sees/edits THEIR OWN data. Server keeps using supabaseAdmin
--- (service_role) which bypasses RLS entirely.
--- Safe to run multiple times.
+-- Sustituido por supabase/phase1_security.sql y
+-- supabase/fix_participants_insert_self_v1.sql.
+-- NO es seguro re-ejecutarlo después de la migración de Fase 2:
+--   * Recrea chat_participants_insert_own_chat (un miembro puede añadir a otros).
+--   * Recrea chat_participants_delete_own_or_self (un miembro puede expulsar a otros).
+--   * Recrea chats_update_participant sin limitar los campos sensibles.
+-- Se conserva solo como referencia. El GUARD de abajo aborta su ejecución.
 -- ============================================================
+
+-- GUARD TÉCNICO: abortar si alguien ejecuta este archivo por error.
+DO $$
+BEGIN
+  RAISE EXCEPTION 'Script histórico: no ejecutar migration_rls_policies.sql. Usar phase1_security.sql y fix_participants_insert_self_v1.sql.';
+END;
+$$;
 
 -- ─── PROFILES ────────────────────────────────────────────────────
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;

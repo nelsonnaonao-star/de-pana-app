@@ -81,6 +81,28 @@ WHERE routine_name IN ('user_in_chat', 'is_chat_member')
 ORDER BY routine_name, grantee;
 
 
+-- ─── 3b. GRANTS: funciones de mantenimiento RPC (T-5) ──────
+-- Refleja la ACL EFECTIVA en la BD (has_function_privilege), no las
+-- declaraciones presentes en los archivos .sql.
+SELECT
+  p.proname AS funcion,
+  r.rolname AS rol,
+  has_function_privilege(r.oid, p.oid, 'EXECUTE') AS puede_ejecutar,
+  CASE
+    WHEN r.rolname = 'anon'          AND has_function_privilege(r.oid, p.oid, 'EXECUTE') THEN '❌ anon NO debe poder ejecutar'
+    WHEN r.rolname = 'authenticated' AND has_function_privilege(r.oid, p.oid, 'EXECUTE') THEN '❌ authenticated NO debe poder ejecutar'
+    WHEN r.rolname = 'service_role'  AND NOT has_function_privilege(r.oid, p.oid, 'EXECUTE') THEN '❌ service_role debe poder ejecutar (backend)'
+    WHEN r.rolname = 'service_role'  THEN '✅ service_role puede ejecutar'
+    ELSE '✅ sin acceso'
+  END AS status
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+JOIN pg_roles r ON r.rolname IN ('anon', 'authenticated', 'service_role')
+WHERE n.nspname = 'public'
+  AND p.proname IN ('cleanup_old_chat_unread_pings', 'purge_expired_ephemeral_messages')
+ORDER BY p.proname, r.rolname;
+
+
 -- ─── 4. RLS POLICIES EN messages ───────────────────────────
 SELECT '=== POLICIES messages ===' as section;
 
@@ -140,4 +162,29 @@ SELECT 'Anon grants',
   (SELECT COUNT(*) FROM information_schema.role_routines WHERE routine_name IN ('user_in_chat', 'is_chat_member') AND grantee = 'anon'),
   0,
   CASE WHEN (SELECT COUNT(*) FROM information_schema.role_routines WHERE routine_name IN ('user_in_chat', 'is_chat_member') AND grantee = 'anon') = 0
+    THEN '✅' ELSE '❌' END
+UNION ALL
+SELECT 'Anon grants (mantenimiento)',
+  (SELECT COUNT(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname IN ('cleanup_old_chat_unread_pings', 'purge_expired_ephemeral_messages')
+       AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('public', p.oid, 'EXECUTE'))),
+  0,
+  CASE WHEN (SELECT COUNT(*) FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'public'
+               AND p.proname IN ('cleanup_old_chat_unread_pings', 'purge_expired_ephemeral_messages')
+               AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('public', p.oid, 'EXECUTE'))) = 0
+    THEN '✅' ELSE '❌' END
+UNION ALL
+SELECT 'service_role grants (mantenimiento)',
+  (SELECT COUNT(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname IN ('cleanup_old_chat_unread_pings', 'purge_expired_ephemeral_messages')
+       AND has_function_privilege('service_role', p.oid, 'EXECUTE')),
+  2,
+  CASE WHEN (SELECT COUNT(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname IN ('cleanup_old_chat_unread_pings', 'purge_expired_ephemeral_messages')
+       AND has_function_privilege('service_role', p.oid, 'EXECUTE')) = 2
     THEN '✅' ELSE '❌' END;

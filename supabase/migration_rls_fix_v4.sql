@@ -1,13 +1,29 @@
 -- ============================================================
+-- ⚠️ HISTÓRICO / NO EJECUTAR ⚠️
 -- RLS FIX — v4 (recursión infinita en políticas)
 -- Run in: Supabase Dashboard → SQL Editor → New Query → Run
 -- ============================================================
+-- Sustituido por supabase/phase1_security.sql y
+-- supabase/fix_participants_insert_self_v1.sql.
+-- Reintroduce políticas inseguras:
+--   * profiles_select_anon_auth permite SELECT a anon.
+--   * chat_participants_insert_own_chat permite a un miembro añadir a otros.
+--   * chat_participants_delete_own_or_self permite a un miembro expulsar a otros.
+-- Se conserva solo como referencia. El GUARD de abajo aborta su ejecución.
+--
 -- Problema: las políticas de chats, chat_participants y messages
 -- se referencian entre sí en ciclo (chats->chat_participants->chats),
 -- causando "infinite recursion detected in policy".
 -- Solución: función SECURITY DEFINER (corre como dueño, ignora RLS)
--- que comprueba la pertenencia a un chat. Idempotente.
+-- que comprueba la pertenencia a un chat. Se conserva como referencia histórica.
 -- ============================================================
+
+-- GUARD TÉCNICO: abortar si alguien ejecuta este archivo por error.
+DO $$
+BEGIN
+  RAISE EXCEPTION 'Script histórico: no ejecutar migration_rls_fix_v4.sql. Usar phase1_security.sql y fix_participants_insert_self_v1.sql.';
+END;
+$$;
 
 -- ─── FUNCIÓN AYUDA (rompe el ciclo) ──────────────────────────────
 CREATE OR REPLACE FUNCTION public.is_chat_member(chat_id uuid, user_id uuid)

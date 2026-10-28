@@ -1,5 +1,25 @@
+-- ⚠️⚠️ OBSOLETO / NO EJECUTAR ⚠️⚠️
 -- ============================================================
--- FIX RLS FINAL: elimina recursión infinita y políticas rotas
+-- Este script REINTRODUCE regresiones de seguridad ya corregidas:
+--   * Redefine public.user_in_chat confiando en el parámetro `user_uuid`
+--     del cliente (en lugar de auth.uid()).
+--   * Concede EXECUTE a `anon` sobre user_in_chat, get_user_chats y
+--     get_user_messages (exponiendo datos a usuarios anónimos).
+--   * Hace DROP de TODAS las políticas RLS endurecidas de
+--     chats, chat_participants, messages, profiles y app_errors.
+-- Se conserva únicamente como referencia histórica.
+-- La definición vigente y endurecida vive en:
+--   supabase/security_hardening_v1.sql  y  supabase/phase1_security.sql
+-- ============================================================
+-- GUARD TÉCNICO: abortar si alguien ejecuta este archivo por error.
+-- Se conserva el contenido histórico debajo solo como referencia.
+DO $$
+BEGIN
+  RAISE EXCEPTION 'Script obsoleto: no ejecutar fix_rls.sql. Usar phase1_security.sql y fix_participants_insert_self_v1.sql.';
+END;
+$$;
+
+-- FIX RLS FINAL (histórico): elimina recursión infinita y políticas rotas
 -- en chats, chat_participants, messages, profiles y app_errors.
 -- (Aplicado también vía Management API; se deja documentado.)
 -- ============================================================

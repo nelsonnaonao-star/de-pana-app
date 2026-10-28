@@ -23,12 +23,13 @@ router.post('/credentials', async (req, res) => {
   const apiKey = process.env.METERED_API_KEY || '';
   
   if (apiKey) {
-    const url = `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${apiKey}`;
-    const obscuredUrl = `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials?apiKey=${obscureApiKey(apiKey)}`;
+    const url = `https://${METERED_SUBDOMAIN}.metered.live/api/v1/turn/credentials`;
     console.log(`[TURN] Requesting credentials from Metered API...`);
     
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      });
       if (response.ok) {
         const iceServers = await response.json();
         if (Array.isArray(iceServers) && iceServers.length > 0) {
@@ -40,14 +41,14 @@ router.post('/credentials', async (req, res) => {
         console.error('[TURN] Metered API HTTP error:', {
           status: response.status,
           statusText: response.statusText,
-          url: obscuredUrl,
+          url,
           responseBody: errorText
         });
       }
     } catch (err) {
       console.error('[TURN] Metered API request error:', {
         message: err.message,
-        url: obscuredUrl
+        url
       });
     }
   } else {

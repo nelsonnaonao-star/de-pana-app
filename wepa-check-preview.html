@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Preview — Avioncito carita WEPA</title>
+<style>
+  body{font-family:'Segoe UI',system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{color:#94a3b8;font-size:13px;margin-bottom:20px}
+  .card{background:#1e293b;border-radius:14px;padding:20px;margin-bottom:20px;display:flex;gap:36px;flex-wrap:wrap}
+  .state{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .state .lbl{font-size:12px;color:#94a3b8;letter-spacing:.06em;text-transform:uppercase}
+  .state .chip{background:#0f172a;border:1px solid #334155;border-radius:12px;padding:18px 22px;display:flex;align-items:center;justify-content:center;min-width:150px;min-height:110px}
+  .card small{display:block;width:100%;color:#64748b;font-size:11px}
+  h2{font-size:14px;color:#cbd5e1;margin:0 0 10px}
+  .bubble{background:#164e63;border-radius:14px;padding:10px 14px;display:inline-flex;align-items:center;gap:6px;font-size:13px;line-height:1}
+  .controls{background:#1e293b;border-radius:14px;padding:20px;margin-bottom:20px;display:flex;flex-direction:column;gap:12px}
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  label{font-size:13px;min-width:220px}
+  input[type=range]{flex:1;max-width:320px}
+  button{background:#06b6d4;border:none;color:#082f3a;font-weight:600;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px}
+  .hint{font-size:12px;color:#64748b;margin-top:16px}
+  @keyframes tickIn{from{opacity:0;transform:scale(.88)} to{opacity:1;transform:scale(1)}}
+  .tick-anim{animation:tickIn .3s ease-out;transform-origin:35% 40%}
+  svg{display:block}
+</style>
+</head>
+<body>
+  <h1>Avioncito con carita — preview (referencia Icons8 "done")</h1>
+  <div class="sub">Adaptación vectorial propia. Enviado = 1 · Entregado = 2 · Visto = 2 cian. El 2º entra con fade+escala sutil. SOLO preview — no modifica la app.</div>
+
+  <div class="card" id="stage">
+    <div class="state">
+      <div class="lbl">Enviado</div>
+      <div class="chip" data-state="sent"></div>
+    </div>
+    <div class="state">
+      <div class="lbl">Entregado</div>
+      <div class="chip" data-state="delivered"></div>
+    </div>
+    <div class="state">
+      <div class="lbl">Visto</div>
+      <div class="chip" data-state="read"></div>
+    </div>
+    <small>gris #94a3b8 · visto cian #06b6d4 (WEPA)</small>
+  </div>
+
+  <div class="card" style="flex-direction:column;gap:12px">
+    <h2 style="margin:0">Tamaño real dentro de la burbuja (visto)</h2>
+    <div class="bubble">Buenas, llego en 5 <span data-size="15"></span></div>
+  </div>
+
+  <div class="controls">
+    <div class="row">
+      <label>Espaciado del avioncito 2º (horiz.) <span id="sepVal">6</span></label>
+      <input type="range" id="sep" min="1" max="14" step="0.5" value="6" />
+    </div>
+    <div class="row">
+      <label>Desplazamiento vertical <span id="sepYVal">3</span></label>
+      <input type="range" id="sepY" min="0" max="10" step="0.5" value="3" />
+    </div>
+    <div class="row">
+      <button id="replay">Reproducir animación del 2º</button>
+    </div>
+  </div>
+
+  <div class="hint">Si te gusta así, lo paso a MsgTicks.tsx con esta geometría (SVG propio, sin dependencias). Dime el espaciado que prefieras (H y V) y si la carita la quieres tal cual o más sutil.</div>
+
+<script>
+  const GRAY = "#94a3b8";
+  const CYAN = "#06b6d4";
+  const HOLE = "#0f172a"; // color de fondo para simular recorte de la carita
+
+  // Silueta adaptada del avioncito (referencia Icons8 "done") — vector propio.
+  const BODY = "M90.37,18.05 C86.63,14.68 80.86,14.89 77.11,18.24 L37.26,54.96 L22.58,45.44 " +
+               "C18.46,42.57 12.77,42.88 9.27,46.48 C5.33,50.53 5.46,56.96 9.48,60.84 " +
+               "L30.97,81.57 C35,85.45 41.42,85.28 45.23,81.19 L91,32 " +
+               "C94.68,28.04 94.49,21.77 90.37,18.05 Z";
+  const EYE = { x1: 29.86, x2: 45.86, y: 65.39, r1: 5, r2: 2 };
+  const SMILE = "M34.41,71.39 C33.7,72.19 34.23,73.7 35.86,74.77 C37.49,75.84 40.23,75.84 41.86,74.77 " +
+                "C43.49,73.7 44.02,72.19 43.31,71.39 Z";
+
+  function planeSvg(color, pxW, pxH, animate) {
+    const eye = '<circle cx="' + EYE.x1 + '" cy="' + EYE.y + '" r="' + EYE.r1 + '" fill="' + HOLE + '"/>' +
+                '<circle cx="' + EYE.x1 + '" cy="' + EYE.y + '" r="' + EYE.r2 + '" fill="' + HOLE + '"/>' +
+                '<circle cx="' + EYE.x2 + '" cy="' + EYE.y + '" r="' + EYE.r1 + '" fill="' + HOLE + '"/>' +
+                '<circle cx="' + EYE.x2 + '" cy="' + EYE.y + '" r="' + EYE.r2 + '" fill="' + HOLE + '"/>' +
+                '<path d="' + SMILE + '" fill="' + HOLE + '"/>';
+    const one = '<path d="' + BODY + '" fill="' + color + '"/>' + eye;
+    return '<svg viewBox="0 0 100 100" width="' + pxW + '" height="' + pxH + '" aria-hidden="true">' +
+           (animate ? '<g class="tick-anim">' : '<g>') + one + '</g></svg>';
+  }
+
+  function makeSvg(state, sepX, sepY, pxH, animate) {
+    const color = state === "read" ? CYAN : GRAY;
+    const double = state !== "sent";
+    if (!double) return planeSvg(color, Math.round(pxH * 1.0), pxH, false);
+    const back = planeSvg(color, (pxH), pxH, false);
+    const front = planeSvg(color, (pxH), pxH, false);
+    const wrappers =
+      '<g transform="translate(-' + sepX + ',' + (-sepY) + ')" opacity="0.85">' + back + '</g>' +
+      (animate ? '<g class="tick-anim">' : '<g>') + front + '</g>';
+    const W = pxH + sepX; // aproximado
+    return '<svg viewBox="' + (-0) + " " + 0 + " " + 100 + " " + 100 + '" style="width:' + (pxH + sepX) +
+           'px;height:' + pxH + 'px" aria-hidden="true">' + wrappers + '</svg>';
+  }
+
+  function render(all) {
+    const sep = parseFloat(document.getElementById("sep").value);
+    const sepY = parseFloat(document.getElementById("sepY").value);
+    document.getElementById("sepVal").textContent = sep;
+    document.getElementById("sepYVal").textContent = sepY;
+    document.querySelectorAll("#stage [data-state]").forEach((chip) => {
+      chip.innerHTML = makeSvg(chip.dataset.state, sep, sepY, 96, all);
+    });
+    document.querySelectorAll("[data-size]").forEach((el) => {
+      el.innerHTML = makeSvg("delivered", sep, sepY, 15, all);
+    });
+  }
+
+  document.getElementById("sep").addEventListener("input", () => render(false));
+  document.getElementById("sepY").addEventListener("input", () => render(false));
+  document.getElementById("replay").addEventListener("click", () => render(true));
+  render(true);
+</script>
+</body>
+</html>

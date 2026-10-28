@@ -6,30 +6,14 @@
 -- Run in: Supabase Dashboard -> SQL Editor -> New Query -> Run
 -- ============================================================
 
--- Función auxiliar por si no existe (las políticas la usan)
-CREATE OR REPLACE FUNCTION public.user_in_chat(chat_uuid uuid, user_uuid uuid)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT EXISTS (
-    SELECT 1 FROM chats c
-    WHERE c.id = chat_uuid
-    AND c.deleted_at IS NULL
-    AND (
-      c.profile_id = user_uuid
-      OR c.admin_id = user_uuid
-      OR EXISTS (
-        SELECT 1 FROM chat_participants cp
-        WHERE cp.chat_id = c.id AND cp.profile_id = user_uuid
-      )
-    )
-  );
-$$;
-
-GRANT EXECUTE ON FUNCTION public.user_in_chat(uuid, uuid) TO authenticated, anon;
+-- NOTA DE SEGURIDAD (hardening):
+--   Este script NO redefine public.user_in_chat. Esa función debe permanecer
+--   SIEMPRE en su versión endurecida (auth.uid(), SECURITY DEFINER,
+--   search_path=public) definida en security_hardening_v1.sql / phase1_security.sql.
+--   Redefinirla aquí con el parámetro user_uuid del cliente y conceder EXECUTE
+--   a anon reintroduciría la regresión de autorización.
+--   Las políticas de INSERT de chats de abajo NO usan user_in_chat; sólo
+--   asumen que la función endurecida ya existe.
 
 -- ── CHATS: políticas de INSERT ─────────────────────────────
 -- Permite el chat 1:1 donde el usuario es uno de los dos extremos

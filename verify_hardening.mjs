@@ -253,29 +253,49 @@ async function run() {
       user_id: '00000000-0000-0000-0000-000000000000'
     });
     
-    if (error && error.message.includes('function')) {
-      result('3.1 is_chat_member existe', false, 'Función no encontrada: ' + error.message.substring(0, 80));
+    if (error) {
+      const denied = /permission denied/i.test(error.message) || error.code === '42501';
+      const notFound = /could not find the function|does not exist|schema cache/i.test(error.message);
+      if (denied) {
+        result('3.1 is_chat_member bloqueado para anon', true, 'anon rechazado (permission denied)');
+      } else if (notFound) {
+        result('3.1 is_chat_member debe existir', false, 'Función no encontrada: ' + error.message.substring(0, 80));
+      } else {
+        result('3.1 is_chat_member bloqueado para anon', false, 'Error inesperado: ' + error.message.substring(0, 80));
+      }
     } else {
-      result('3.1 is_chat_member existe y es callable', true, `Resultado: ${data}`);
+      // Sin error: anon pudo ejecutarla → concesión indebida
+      result('3.1 is_chat_member bloqueado para anon', false, `FALLO: anon ejecutó la función (resultado: ${data})`);
     }
   } catch (e) {
     result('3.1 is_chat_member', false, 'Excepción: ' + e.message);
   }
 
-  // Test 3.2: user_in_chat exists and is callable
+  // Test 3.2: anon NO debe poder ejecutar user_in_chat (debe ser rechazado)
+  // PASS solo si anon recibe "permission denied". Falla si anon la ejecuta,
+  // si la función no existe o si ocurre cualquier error inesperado/conexión.
   try {
     const { data, error } = await anonClient.rpc('user_in_chat', {
       chat_uuid: '00000000-0000-0000-0000-000000000000',
       user_uuid: '00000000-0000-0000-0000-000000000000'
     });
-    
-    if (error && error.message.includes('function')) {
-      result('3.2 user_in_chat existe', false, 'Función no encontrada: ' + error.message.substring(0, 80));
+
+    if (error) {
+      const denied = /permission denied/i.test(error.message) || error.code === '42501';
+      const notFound = /could not find the function|does not exist|schema cache/i.test(error.message);
+      if (denied) {
+        result('3.2 user_in_chat bloqueado para anon', true, 'anon rechazado (permission denied)');
+      } else if (notFound) {
+        result('3.2 user_in_chat debe existir', false, 'Función no encontrada: ' + error.message.substring(0, 80));
+      } else {
+        result('3.2 user_in_chat bloqueado para anon', false, 'Error inesperado: ' + error.message.substring(0, 80));
+      }
     } else {
-      result('3.2 user_in_chat existe y es callable', true, `Resultado: ${data}`);
+      // Sin error: anon pudo ejecutarla → concesión indebida
+      result('3.2 user_in_chat bloqueado para anon', false, `FALLO: anon ejecutó la función (resultado: ${data})`);
     }
   } catch (e) {
-    result('3.2 user_in_chat', false, 'Excepción: ' + e.message);
+    result('3.2 user_in_chat bloqueado para anon', false, 'Excepción (conexión o error inesperado): ' + e.message.substring(0, 80));
   }
 
   // Test 3.3: is_chat_member with fake user_id should return false (auth.uid() used)

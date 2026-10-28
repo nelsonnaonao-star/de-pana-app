@@ -18,6 +18,21 @@ send_test_fcm.mjs
 server/send_test_fcm.mjs
 android/app/release.keystore
 android/key.properties
+*.jks
+*.p12
 *.apk
 
+# Logs/backups locales que no deben versionarse
+android/build_log.txt
+*.patch
+
 supabase/.temp/
+
+# Backups de auditoría de seguridad (no versionar)
+_security_backup/
+
+# Archivos de auditoría/outputs temporales
+server/audit*.json
+*.bak
+*.backup
+*.backup-*

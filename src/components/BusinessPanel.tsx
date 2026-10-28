@@ -404,6 +404,9 @@ export default function BusinessPanel({
     const imgUrl = flyer.flyerUrl || "";
     try {
       if (imgUrl) {
+        if (!imgUrl.startsWith("http://") && !imgUrl.startsWith("https://")) {
+          throw new Error("URL no permitida");
+        }
         const res = await fetch(imgUrl);
         const blob = await res.blob();
         const dataUri: string = await new Promise((resolve, reject) => {

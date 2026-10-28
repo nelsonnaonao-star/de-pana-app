@@ -1,5 +1,12 @@
 apply plugin: 'com.android.application'
 
+// Se marca en el bloque signingConfigs si hay credenciales válidas. Si no las
+// hay, el release falla explícitamente antes de compilar (ver taskGraph).
+// El error se guarda para diferirlo a tareas release: debug debe poder
+// configurarse aunque key.properties esté incompleto.
+def releaseSigningConfigured = false
+def releaseSigningError = null
+
 android {
     namespace = "com.redon.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -24,25 +31,64 @@ android {
     }
     signingConfigs {
         release {
-            if (project.hasProperty('MYAPP_UPLOAD_STORE_FILE')) {
-                storeFile file(MYAPP_UPLOAD_STORE_FILE)
-                storePassword MYAPP_UPLOAD_STORE_PASSWORD
-                keyAlias MYAPP_UPLOAD_KEY_ALIAS
-                keyPassword MYAPP_UPLOAD_KEY_PASSWORD
+            // Credenciales SOLO desde entorno/CI (MYAPP_UPLOAD_*) o desde
+            // android/key.properties (ignorado por Git). Nunca hardcodeadas.
+            // Los errores se guardan y se lanzan únicamente en tareas release.
+            def uploadProps = [
+                'MYAPP_UPLOAD_STORE_FILE',
+                'MYAPP_UPLOAD_STORE_PASSWORD',
+                'MYAPP_UPLOAD_KEY_ALIAS',
+                'MYAPP_UPLOAD_KEY_PASSWORD',
+            ]
+            // Acepta -P / ORG_GRADLE_PROJECT_* y variables de entorno con
+            // el mismo nombre. Nunca valores por defecto hardcodeados.
+            def uploadValues = uploadProps.collectEntries { key ->
+                [(key): (project.findProperty(key) ?: System.getenv(key))]
+            }
+            if (uploadValues.values().any { it }) {
+                def missingProps = uploadProps.findAll { !uploadValues[it] }
+                if (missingProps) {
+                    releaseSigningError =
+                        "Firma de release incompleta: faltan ${missingProps.join(', ')}."
+                } else {
+                    def store = file(uploadValues['MYAPP_UPLOAD_STORE_FILE'])
+                    if (!store.exists()) {
+                        releaseSigningError =
+                            'El keystore indicado por MYAPP_UPLOAD_STORE_FILE no existe.'
+                    } else {
+                        storeFile store
+                        storePassword uploadValues['MYAPP_UPLOAD_STORE_PASSWORD']
+                        keyAlias uploadValues['MYAPP_UPLOAD_KEY_ALIAS']
+                        keyPassword uploadValues['MYAPP_UPLOAD_KEY_PASSWORD']
+                        releaseSigningConfigured = true
+                    }
+                }
             } else {
-                def keyPropertiesFile = rootProject.file('key.properties')
+                // WEPA_KEY_PROPERTIES permite a CI (y a las pruebas) usar otra ruta.
+                def keyPropertiesFile = rootProject.file(
+                    project.findProperty('WEPA_KEY_PROPERTIES') ?: 'key.properties'
+                )
                 if (keyPropertiesFile.exists()) {
                     def keyProperties = new Properties()
-                    keyProperties.load(new FileInputStream(keyPropertiesFile))
-                    storeFile file(keyProperties['storeFile'])
-                    storePassword keyProperties['storePassword']
-                    keyAlias keyProperties['keyAlias']
-                    keyPassword keyProperties['keyPassword']
-                } else {
-                    storeFile file('release.keystore')
-                    storePassword 'redonpass'
-                    keyAlias 'redon-key'
-                    keyPassword 'redonpass'
+                    keyPropertiesFile.withInputStream { keyProperties.load(it) }
+                    def requiredKeys = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+                    def missingKeys = requiredKeys.findAll { !keyProperties[it] }
+                    if (missingKeys) {
+                        releaseSigningError =
+                            "Firma de release incompleta en ${keyPropertiesFile.name}: faltan ${missingKeys.join(', ')}."
+                    } else {
+                        def store = file(keyProperties['storeFile'])
+                        if (!store.exists()) {
+                            releaseSigningError =
+                                "El keystore configurado en ${keyPropertiesFile.name} no existe."
+                        } else {
+                            storeFile store
+                            storePassword keyProperties['storePassword']
+                            keyAlias keyProperties['keyAlias']
+                            keyPassword keyProperties['keyPassword']
+                            releaseSigningConfigured = true
+                        }
+                    }
                 }
             }
         }
@@ -51,13 +97,40 @@ android {
         release {
             minifyEnabled true
             shrinkResources true
-            signingConfig signingConfigs.release
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     lint {
         checkReleaseBuilds false
         abortOnError false
+    }
+}
+
+// Fallo explícito y seguro SOLO cuando se pide un artefacto de release.
+// Así `assembleDebug` sigue funcionando sin credenciales, pero un release sin
+// key.properties/propiedades MYAPP_UPLOAD_* no puede compilarse por accidente.
+gradle.taskGraph.whenReady { graph ->
+    def buildsRelease = graph.allTasks.any { t ->
+        t.project == project && (
+            t.name == 'assembleRelease' ||
+            t.name == 'bundleRelease' ||
+            t.name == 'installRelease' ||
+            t.name.startsWith('packageRelease') ||
+            t.name.startsWith('signRelease') ||
+            t.name == 'validateSigningRelease'
+        )
+    }
+    if (buildsRelease && !releaseSigningConfigured) {
+        throw new GradleException(
+            releaseSigningError ?:
+            'Firma de release no configurada: crea android/key.properties con ' +
+            'storeFile, storePassword, keyAlias y keyPassword, o define las ' +
+            'propiedades MYAPP_UPLOAD_* en el entorno de CI. ' +
+            'No se permiten credenciales hardcodeadas.'
+        )
     }
 }
 

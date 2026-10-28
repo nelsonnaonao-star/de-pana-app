@@ -58,3 +58,10 @@ AS $$
   DELETE FROM public.chat_unread_pings
   WHERE created_at < now() - interval '48 hours';
 $$;
+
+-- ─── Hardening de permisos (T-5) ─────────────────────────────
+-- SECURITY DEFINER: borra pings de TODOS los usuarios. No debe ser
+-- ejecutable por anon ni por PUBLIC (EXECUTE heredado por defecto).
+-- Solo el backend (service_role) o el owner/scheduler legítimo la invocan.
+REVOKE EXECUTE ON FUNCTION public.cleanup_old_chat_unread_pings() FROM anon, public;
+GRANT  EXECUTE ON FUNCTION public.cleanup_old_chat_unread_pings() TO service_role;

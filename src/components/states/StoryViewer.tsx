@@ -1,4 +1,4 @@
-import { X, Send, Eye, ChevronLeft, Download, Trash2 } from "lucide-react";
+import { X, Send, Eye, ChevronLeft, Download, Trash2, Volume2, VolumeX, Play } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import CachedImage from "../CachedImage";
@@ -40,8 +40,20 @@ export default function StoryViewer({
   const longPressReleaseRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoReady, setVideoReady] = useState(false);
-  const [videoMuted, setVideoMuted] = useState(true);
+  const [videoMuted, setVideoMuted] = useState(false);
+  const [videoPlaying, setVideoPlaying] = useState(false);
+  const [videoTime, setVideoTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [controlsVisible, setControlsVisible] = useState(true);
   const [imgLoaded, setImgLoaded] = useState(false);
+  const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearControlsTimer = () => {
+    if (controlsTimerRef.current) {
+      clearTimeout(controlsTimerRef.current);
+      controlsTimerRef.current = null;
+    }
+  };
 
   // Descargar el estado actual (imagen o video) a la galería del dispositivo
   const downloadCurrentStory = async () => {
@@ -62,7 +74,22 @@ export default function StoryViewer({
   useEffect(() => {
     setVideoReady(false);
     setImgLoaded(false);
+    setVideoTime(0);
+    setVideoDuration(0);
+    setVideoPlaying(false);
+    clearControlsTimer();
+    setControlsVisible(true);
+    return clearControlsTimer;
   }, [activeStoryIdx]);
+
+  // Los controles se ocultan solos al reproducir; al pausar permanecen visibles.
+  useEffect(() => {
+    clearControlsTimer();
+    if (controlsVisible && videoPlaying) {
+      controlsTimerRef.current = setTimeout(() => setControlsVisible(false), 2500);
+    }
+    return clearControlsTimer;
+  }, [controlsVisible, videoPlaying]);
 
   const handlePointerDown = () => {
     longPressRef.current = false;
@@ -106,6 +133,26 @@ export default function StoryViewer({
       return;
     }
     onTap(direction);
+  };
+
+  // Tap corto en el video = reproducir/pausar (un tap tras long-press no cuenta).
+  const handleVideoTap = () => {
+    if (longPressReleaseRef.current) {
+      longPressReleaseRef.current = false;
+      return;
+    }
+    if (longPressRef.current) {
+      longPressRef.current = false;
+      return;
+    }
+    setControlsVisible(true);
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
   };
 
   if (!currentStory) {
@@ -204,20 +251,56 @@ export default function StoryViewer({
               ref={videoRef}
               muted={videoMuted}
               autoPlay loop playsInline
-              onLoadedData={() => setVideoReady(true)}
+              onClick={handleVideoTap}
+              onLoadedData={() => { setVideoReady(true); videoRef.current?.play().catch(() => {}); }}
               onCanPlay={() => setVideoReady(true)}
+              onLoadedMetadata={(e) => {
+                const d = e.currentTarget.duration;
+                setVideoDuration(Number.isFinite(d) ? d : 0);
+              }}
+              onTimeUpdate={(e) => setVideoTime(e.currentTarget.currentTime)}
+              onPause={() => { setVideoPlaying(false); onSetPaused(true); }}
+              onPlay={() => { setVideoPlaying(true); onSetPaused(false); }}
               className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-150 ${
                 videoReady ? "opacity-100" : "opacity-0"
               }`}
             />
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setVideoMuted(!videoMuted); }}
-              className="absolute bottom-4 right-4 z-30 w-8 h-8 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white cursor-pointer"
-              title={videoMuted ? "Activar sonido" : "Silenciar"}
+            {videoReady && !videoPlaying && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+                <button
+                  type="button"
+                  onClick={handleVideoTap}
+                  className="pointer-events-auto w-16 h-16 rounded-full bg-black/45 backdrop-blur-md flex items-center justify-center text-white shadow-xl transition-transform duration-150 active:scale-95 border border-white/15"
+                  title="Reproducir"
+                >
+                  <Play className="w-7 h-7 ml-0.5" fill="currentColor" />
+                </button>
+              </div>
+            )}
+            <div
+              className={`absolute bottom-3 right-3 z-30 transition-opacity duration-300 ${
+                controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+              }`}
             >
-              {videoMuted ? "🔇" : "🔊"}
-            </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setVideoMuted(!videoMuted); }}
+                className={`w-9 h-9 rounded-full backdrop-blur-md flex items-center justify-center transition-colors cursor-pointer shadow-lg border border-white/10 ${
+                  videoMuted ? "bg-white/10 text-white/60 hover:bg-white/20" : "bg-teal-400/20 text-teal-200 hover:bg-teal-400/30"
+                }`}
+                title={videoMuted ? "Activar sonido" : "Silenciar"}
+              >
+                {videoMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+              </button>
+            </div>
+            {videoDuration > 0 && (
+              <div className="absolute inset-x-0 bottom-0 h-[3px] bg-white/20 z-30 pointer-events-none">
+                <div
+                  className="h-full bg-teal-400 transition-[width] duration-150 ease-linear"
+                  style={{ width: `${Math.min(100, (videoTime / videoDuration) * 100)}%` }}
+                />
+              </div>
+            )}
             <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/45 pointer-events-none z-10" />
             {currentStory.caption && (
               <div className="absolute bottom-16 inset-x-4 bg-black/50 backdrop-blur-md rounded-2xl p-3 border border-white/10 text-center text-[10px] font-semibold leading-relaxed z-30">

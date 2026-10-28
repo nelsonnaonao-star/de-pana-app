@@ -1,8 +1,20 @@
 -- ============================================================
 -- PHASE 1 — HARDENING DE SEGURIDAD (v1.0)
 -- Aplicar UNA vez en: Supabase Dashboard → SQL Editor → Run.
--- Idempotente (se puede re-ejecutar sin romper nada).
+-- Idempotente solo ANTES de aplicar fix_participants_insert_self_v1.sql.
+-- NO re-ejecutar después de la Fase 2: elimina todas las políticas de
+-- chat_participants y las recrea, pudiendo borrar ajustes posteriores.
+-- El orden correcto es aplicar la Fase 2 una sola vez y no volver atrás.
 -- Alcance: perfiles, chats, chat_participants, messages, app_errors.
+--
+-- ORDEN DE DESPLIEGUE LIMPIO:
+--   1) Este script.
+--   2) supabase/fix_hide_profile_private_columns.sql (protege real_email/pin).
+--   3) supabase/fix_participants_insert_self_v1.sql (SELECT/INSERT/DELETE de
+--      participantes + trigger de campos sensibles de chats).
+-- No ejecutar después: fix_rls.sql, migration_rls_fix_v4.sql ni
+-- migration_rls_policies.sql (históricos; reintroducen políticas inseguras).
+-- Tampoco re-ejecutar este phase1_security.sql después de la Fase 2.
 -- ============================================================
 
 -- ============================================================
@@ -147,6 +159,11 @@ AS $$
     SELECT m.* FROM public.messages m
     WHERE m.chat_id = chat_uuid
     AND (m.is_deleted = false OR m.is_deleted IS NULL)
+    AND (
+      m.is_ephemeral IS NOT TRUE
+      OR m.ephemeral_expires_at IS NULL
+      OR m.ephemeral_expires_at > now()
+    )
     AND EXISTS (
       SELECT 1 FROM public.chats c
       WHERE c.id = chat_uuid
@@ -186,9 +203,13 @@ GRANT EXECUTE ON FUNCTION get_user_messages(uuid, uuid, integer, timestamptz, ti
 -- ============================================================
 
 -- ── PROFILES ─────────────────────────────────────────────
--- SOLO autenticados leen perfiles (anon ya no accede al directorio PII).
--- real_email sigue legible por autenticados: la app lo usa en
--- la recuperación de contraseña (src/services/auth.ts:215-219).
+-- SOLO autenticados leen perfiles por fila (búsqueda/contactos).
+-- IMPORTANTE: RLS filtra filas, no columnas. La protección de real_email y
+-- pin se establece en supabase/fix_hide_profile_private_columns.sql
+-- (REVOKE SELECT de tabla + GRANT de columnas públicas). Este script NO
+-- concede SELECT de tabla sobre profiles; un despliegue limpio debe aplicar
+-- fix_hide después de este archivo. Los grants reales deben verificarse en
+-- el proyecto Supabase (no se asumen activos aquí).
 CREATE POLICY "profiles_select_auth" ON profiles
   FOR SELECT TO authenticated USING (true);
 
@@ -225,9 +246,11 @@ CREATE POLICY "chats_delete_admin" ON chats
 CREATE POLICY "participants_select_member" ON chat_participants
   FOR SELECT TO authenticated USING (user_in_chat(chat_id, auth.uid()));
 
-CREATE POLICY "participants_insert_self" ON chat_participants
-  FOR INSERT TO authenticated WITH CHECK (profile_id = auth.uid());
-
+-- NOTA: se eliminó "participants_insert_self" (profile_id = auth.uid()),
+-- que permitía a cualquier autenticado autoincorporarse a un chat ajeno.
+-- El INSERT directo desde el cliente queda restringido al admin del grupo;
+-- el resto de altas pasan por el servidor (service_role). Ver
+-- supabase/fix_participants_insert_self_v1.sql.
 CREATE POLICY "participants_insert_admin" ON chat_participants
   FOR INSERT TO authenticated WITH CHECK (
     EXISTS (
@@ -247,6 +270,7 @@ CREATE POLICY "participants_delete_admin" ON chat_participants
       SELECT 1 FROM chats
       WHERE chats.id = chat_participants.chat_id
       AND chats.admin_id = auth.uid()
+      AND chats.is_group = true
     )
   );
 

@@ -28,6 +28,7 @@ const VALID_MESSAGE_TYPES = ['text', 'system', 'image', 'sticker', 'video', 'aud
 const MAX_TEXT_LENGTH = 5000;
 const MAX_EMOJI_LENGTH = 10;
 
+// TODO: Migrar a una librería de sanitización robusta (p.ej. sanitize-html)
 function sanitizeText(text) {
   if (!text || typeof text !== 'string') return null;
   return text.replace(/<[^>]*>/g, '').trim().slice(0, MAX_TEXT_LENGTH) || null;

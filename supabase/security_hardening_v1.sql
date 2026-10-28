@@ -213,10 +213,10 @@ $$ LANGUAGE plpgsql SECURITY DEFINER
    SET search_path = public;
 
 -- Asegurar grants correctos (solo authenticated, NO anon)
-REVOKE EXECUTE ON FUNCTION public.user_in_chat(uuid, uuid) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.user_in_chat(uuid, uuid) FROM anon, public;
 GRANT EXECUTE ON FUNCTION public.user_in_chat(uuid, uuid) TO authenticated;
 
-REVOKE EXECUTE ON FUNCTION public.is_chat_member(uuid, uuid) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.is_chat_member(uuid, uuid) FROM anon, public;
 GRANT EXECUTE ON FUNCTION public.is_chat_member(uuid, uuid) TO authenticated;
 
 
