@@ -188,8 +188,9 @@ export function useMessageActions(params: UseMessageActionsParams): UseMessageAc
   };
 
   const handleSendText = async (textOverride?: string) => {
-    const text = typeof textOverride === "string" ? textOverride : (inputText ?? "");
-    if (!text.trim()) return;
+    const rawText = typeof textOverride === "string" ? textOverride : (inputText ?? "");
+    const text = rawText.replace(/<[^>]*>/g, "").trim();
+    if (!text) return;
     if (isSendingRef.current) { console.warn('[CHAT] send blocked — already sending'); return; }
     isSendingRef.current = true;
         const tempId = `temp_${Date.now()}_txt`;
