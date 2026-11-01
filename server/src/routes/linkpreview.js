@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { URL } from 'url';
 import { isIPv4 } from 'net';
+import { lookup } from 'node:dns/promises';
 
 const router = Router();
 
@@ -37,12 +38,28 @@ function isPrivateIP(hostname) {
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(cleaned)) return true;
   if (/^192\.168\./.test(cleaned)) return true;
   if (/^169\.254\./.test(cleaned)) return true;
-  if (/^::ffff:127\.|^::ffff:10\.|^::ffff:172\.(1[6-9]|2\d|3[01])\.|^::ffff:192\.168\./.test(cleaned)) return true;
+  if (/^0\./.test(cleaned)) return true;
+  if (/^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(cleaned)) return true;
+  if (/^198\.(1[89])\./.test(cleaned)) return true;
+  if (/^(22[4-9]|23\d|24\d|25[0-5])\./.test(cleaned)) return true;
+  if (/^::ffff:127\.|^::ffff:10\.|^::ffff:172\.(1[6-9]|2\d|3[01])\.|^::ffff:192\.168\.|^::ffff:169\.254\.|^::ffff:0\./.test(cleaned)) return true;
   if (/^fc00:/i.test(cleaned) || /^fd00:/i.test(cleaned)) return true;
   if (/^fe80:/i.test(cleaned)) return true;
   if (cleaned === '::' || cleaned === '0:0:0:0:0:0:0:0') return true;
 
   return false;
+}
+
+async function assertPublicHost(hostname) {
+  const host = String(hostname || '').replace(/^\[|\]$/g, '');
+  if (!host) throw new Error('SSRF blocked: empty host');
+  if (isPrivateIP(host)) throw new Error('SSRF blocked: private host');
+  if (isIPv4(host) || host.includes(':')) return;
+  const addresses = await lookup(host, { all: true, verbatim: true });
+  if (!addresses.length) throw new Error('SSRF blocked: unresolved host');
+  for (const entry of addresses) {
+    if (isPrivateIP(entry.address)) throw new Error('SSRF blocked: private DNS');
+  }
 }
 
 async function fetchWithTimeout(url, timeoutMs = 5000) {
@@ -87,11 +104,30 @@ async function followRedirects(initialUrl, timeoutMs = 5000) {
     if (isPrivateIP(redirectTarget.hostname)) {
       throw new Error('SSRF blocked: redirect to private/internal host');
     }
+    await assertPublicHost(redirectTarget.hostname);
 
     currentUrl = redirectTarget.href;
   }
 
   return response;
+}
+
+async function readTextLimited(response, maxBytes) {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 router.post('/', async (req, res) => {
@@ -116,6 +152,12 @@ router.post('/', async (req, res) => {
   }
 
   try {
+    await assertPublicHost(parsed.hostname);
+  } catch {
+    return res.status(400).json({ error: 'No se permiten URLs internas/privadas' });
+  }
+
+  try {
     const response = await followRedirects(url);
     if (!response.ok) {
       return res.json({ url, title: '', description: '', image: '' });
@@ -126,8 +168,8 @@ router.post('/', async (req, res) => {
       return res.json({ url, title: '', description: '', image: '' });
     }
 
-    const html = await response.text();
-    const truncated = html.slice(0, 1024 * 1024);
+    const html = await readTextLimited(response, 1024 * 1024);
+    const truncated = html;
 
     const title = extractMeta(truncated, ['og:title', 'twitter:title', 'title']) || '';
     const description = extractMeta(truncated, ['og:description', 'twitter:description', 'description']) || '';

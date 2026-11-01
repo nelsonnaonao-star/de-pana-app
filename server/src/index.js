@@ -124,7 +124,7 @@ async function main() {
   app.use('/api/auth', strictLimiter, authRoutes);
   app.use('/api/rates', globalLimiter, ratesRoutes);
   app.use('/api/turn', globalLimiter, authMiddleware, turnRoutes);
-  app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);
+  app.use('/api/link-preview', globalLimiter, authMiddleware, linkPreviewRoutes);
 
   // FCM: webhook uses webhookLimiter (no JWT auth — Supabase server-to-server)
   // FCM: register/send require JWT auth + globalLimiter
