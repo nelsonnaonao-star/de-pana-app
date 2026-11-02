@@ -345,6 +345,12 @@ export default function PhoneSimulator({
           return true;
         }
       }
+      if (screen === "states" && statesBackHandlerRef.current) {
+        if (statesBackHandlerRef.current()) {
+          logger.info("[BACK] StatesPanel consumed back (story viewer)");
+          return true;
+        }
+      }
       const target = backScreens[screen];
       if (target) {
         logger.info("[BACK] Navigating from", { from: screen, to: target });
@@ -1778,6 +1784,8 @@ const lastSentAtRef = useRef<Record<string, number>>({});
 
   // ChatRoom internal back handler (replyTo, editingMessage, etc.)
   const chatRoomBackHandlerRef = useRef<(() => boolean) | null>(null);
+  // StatesPanel internal back handler (visor de historias abierto).
+  const statesBackHandlerRef = useRef<(() => boolean) | null>(null);
   const onBackPressRef = useRef(onBackPress);
   const onSetShouldExitRef = useRef(onSetShouldExit);
   onBackPressRef.current = onBackPress;
@@ -4470,7 +4478,11 @@ try {
               {/* STATES TAB — outside main content for stable flex layout */}
               <div className={currentScreen === "states" ? "flex flex-1" : "hidden"}>
                 <LazyPanel label="Cargando historias…">
-                  <StatesPanel onStartChat={handleStartChatFromState} onHasUnseen={(v) => setHasUnseenStates(v)} />
+                  <StatesPanel
+                    onStartChat={handleStartChatFromState}
+                    onHasUnseen={(v) => setHasUnseenStates(v)}
+                    onRegisterBackHandler={(handler) => { statesBackHandlerRef.current = handler; }}
+                  />
                 </LazyPanel>
               </div>
 

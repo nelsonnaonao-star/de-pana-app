@@ -18,9 +18,10 @@ import StoryAudiencePicker from "./states/StoryAudiencePicker";
 interface StatesPanelProps {
   onStartChat: (name: string, avatar: string, initialText: string, partnerUserId?: string, storyReply?: StoryReplyPayload) => void;
   onHasUnseen?: (unseen: boolean) => void;
+  onRegisterBackHandler?: (handler: (() => boolean) | null) => void;
 }
 
-export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelProps) {
+export default function StatesPanel({ onStartChat, onHasUnseen, onRegisterBackHandler }: StatesPanelProps) {
   const { user, profile, contacts } = useSupabase();
 
   const {
@@ -50,6 +51,24 @@ export default function StatesPanel({ onStartChat, onHasUnseen }: StatesPanelPro
   });
 
   const [showCreateMenu, setShowCreateMenu] = React.useState(false);
+
+  // El botón atrás del teléfono cierra el visor de historias (y detiene el
+  // video) en lugar de salir de la pestaña. PhoneSimulator consulta este
+  // handler antes de navegar.
+  const activeUserStatesRef = React.useRef(activeUserStates);
+  activeUserStatesRef.current = activeUserStates;
+  const closeStoryViewerRef = React.useRef(handleCloseStoryViewer);
+  closeStoryViewerRef.current = handleCloseStoryViewer;
+
+  React.useEffect(() => {
+    if (!onRegisterBackHandler) return;
+    onRegisterBackHandler(() => {
+      if (!activeUserStatesRef.current) return false;
+      closeStoryViewerRef.current();
+      return true;
+    });
+    return () => onRegisterBackHandler(null);
+  }, [onRegisterBackHandler]);
 
   const openStateMediaUpload = () => {
     const el = document.getElementById("state-media-upload-input");

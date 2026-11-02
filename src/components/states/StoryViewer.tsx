@@ -1,4 +1,4 @@
-import { X, Send, Eye, ChevronLeft, Download, Trash2, Volume2, VolumeX, Play } from "lucide-react";
+import { X, Send, Eye, ChevronLeft, Download, Trash2, Volume2, VolumeX, Play, Loader2 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import CachedImage from "../CachedImage";
@@ -82,6 +82,17 @@ export default function StoryViewer({
     return clearControlsTimer;
   }, [activeStoryIdx]);
 
+  // Detiene el audio del video en cuanto el visor se desmonta (botón atrás incluido).
+  useEffect(() => {
+    return () => {
+      const v = videoRef.current;
+      if (!v) return;
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+    };
+  }, []);
+
   // Los controles se ocultan solos al reproducir; al pausar permanecen visibles.
   useEffect(() => {
     clearControlsTimer();
@@ -133,6 +144,21 @@ export default function StoryViewer({
       return;
     }
     onTap(direction);
+  };
+
+  // Android WebView bloquea el autoplay con audio. Si play() es rechazado por
+  // política, reintentamos silenciado para que el video arranque igual; el
+  // botón de sonido permite activarlo con un gesto del usuario.
+  const startPlayback = () => {
+    const v = videoRef.current;
+    if (!v || !v.paused) return;
+    v.play().catch((err: any) => {
+      if (err?.name === "NotAllowedError") {
+        v.muted = true;
+        setVideoMuted(true);
+        v.play().catch(() => {});
+      }
+    });
   };
 
   // Tap corto en el video = reproducir/pausar (un tap tras long-press no cuenta).
@@ -247,13 +273,16 @@ export default function StoryViewer({
         ) : currentStory.type === "video" ? (
           <>
             <video
+              key={currentStory.id}
               src={currentStory.content}
               ref={videoRef}
               muted={videoMuted}
               autoPlay loop playsInline
+              preload="auto"
               onClick={handleVideoTap}
-              onLoadedData={() => { setVideoReady(true); videoRef.current?.play().catch(() => {}); }}
-              onCanPlay={() => setVideoReady(true)}
+              onLoadedData={() => { setVideoReady(true); startPlayback(); }}
+              onCanPlay={() => { setVideoReady(true); startPlayback(); }}
+              onPlaying={() => setVideoReady(true)}
               onLoadedMetadata={(e) => {
                 const d = e.currentTarget.duration;
                 setVideoDuration(Number.isFinite(d) ? d : 0);
@@ -265,6 +294,11 @@ export default function StoryViewer({
                 videoReady ? "opacity-100" : "opacity-0"
               }`}
             />
+            {!videoReady && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+                <Loader2 className="w-7 h-7 animate-spin text-white/70" />
+              </div>
+            )}
             {videoReady && !videoPlaying && (
               <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
                 <button

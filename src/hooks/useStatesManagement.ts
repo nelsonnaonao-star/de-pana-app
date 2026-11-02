@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, FormEvent, ChangeEvent, MouseEvent } from 
 import { getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
 import { updateProfile } from "../services/auth";
 import { uploadChatMedia } from "../services/storage";
+import { ensureVideoMime, isVideoFileLike } from "../services/mime";
+import { pinStoryVideo, preloadStoryVideos, releaseStoryPreloads } from "../services/storyPreload";
 import { storyRepo } from "../services/database/repositories/StoryRepository";
 
 export type StoryAudience =
@@ -150,6 +152,14 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     setMyStories(myList);
     const groupedList = Object.values(grouped);
     setUserStates(groupedList);
+    // Precarga el primer video de cada usuario mientras se navega la lista:
+    // al tocar un estado el video ya está bufferizado y arranca de inmediato.
+    const firstVideos = (groupedList as any[])
+      .slice()
+      .sort((a, b) => Number(b.hasUnseen) - Number(a.hasUnseen))
+      .map((u) => u.stories.find((s: Story) => s.type === "video")?.content)
+      .filter(Boolean);
+    preloadStoryVideos(firstVideos);
     if (!cached) {
       const hasUnseen = (groupedList as any[]).some((u: any) => u.hasUnseen);
       onHasUnseen?.(hasUnseen);
@@ -242,23 +252,45 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     }
     setMyCurrentReaction(null);
 
+    // El video en pantalla no se descarta; los siguientes se precargan para
+    // que el paso a la próxima historia también sea instantáneo.
+    pinStoryVideo(currentStory.type === "video" ? currentStory.content : null);
+    const upcomingVideos = activeUserStates.stories
+      .slice(activeStoryIdx + 1, activeStoryIdx + 3)
+      .filter((s) => s.type === "video")
+      .map((s) => s.content);
+    preloadStoryVideos(upcomingVideos);
+
     const nextIdx = activeStoryIdx + 1;
     if (nextIdx < activeUserStates.stories.length) {
       const nextStory = activeUserStates.stories[nextIdx];
-      if (nextStory.type === "image" || nextStory.type === "video") {
+      if (nextStory.type === "image") {
         const link = document.createElement("link");
         link.rel = "prefetch";
         link.href = nextStory.content;
-        link.as = nextStory.type === "video" ? "video" : "image";
+        link.as = "image";
         document.head.appendChild(link);
-        setTimeout(() => document.head.removeChild(link), 5000);
+        setTimeout(() => {
+          if (link.parentNode) link.parentNode.removeChild(link);
+        }, 5000);
       }
     }
   }, [activeUserStates?.id, activeStoryIdx]);
 
+  // Libera los elementos de precarga al salir del panel de estados.
+  useEffect(() => () => releaseStoryPreloads(), []);
+
   const handleOpenStoryViewer = (userState: UserState) => {
     if (!userState.stories || userState.stories.length === 0) return;
     setStoryPaused(false);
+    // Prioriza la historia que se va a abrir y las dos siguientes de video.
+    preloadStoryVideos(
+      userState.stories
+        .slice(0, 3)
+        .filter((s) => s.type === "video")
+        .map((s) => s.content),
+    );
+    pinStoryVideo(userState.stories[0]?.type === "video" ? userState.stories[0].content : null);
     setActiveUserStates(userState);
     setActiveStoryIdx(0);
     setStoryProgress(0);
@@ -280,6 +312,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     setStoryPaused(false);
     setActiveUserStates(null);
     setStoryReplyText("");
+    pinStoryVideo(null);
   };
 
   const handleStoryTap = (direction: "prev" | "next") => {
@@ -367,17 +400,21 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     if (!file) return;
     setPublishStatus("idle");
 
-    const fileType = file.type.startsWith("video") ? "video" : "image";
+    const isVideo = isVideoFileLike(file.type, file.name);
+    const fileType = isVideo ? "video" : "image";
 
     if (fileType === "video") {
+      // Android puede entregar el video sin MIME: se corrige antes de crear el
+      // blob URL para que la vista previa y la subida usen un tipo real.
+      const videoFile = ensureVideoMime(file);
       if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-      const objectUrl = URL.createObjectURL(file);
+      const objectUrl = URL.createObjectURL(videoFile);
       objectUrlRef.current = objectUrl;
       setUploadedMedia({
         url: objectUrl,
         type: "video",
-        name: file.name,
-        file
+        name: videoFile.name,
+        file: videoFile
       });
       setShowPublishDecisionModal(true);
       e.target.value = "";
@@ -485,7 +522,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
           id: "my_pro_" + Date.now(),
           type: "video",
           content,
-          caption: caption || "Editado con Red On PRO Editor ✨🎨",
+          caption: caption || undefined,
           time: "Ahora mismo"
         };
         if (!userId) throw new Error("Usuario no disponible");
@@ -521,7 +558,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
       id: "my_pro_" + Date.now(),
       type: mediaType,
       content: editedUrl,
-      caption: caption || "Editado con Red On PRO Editor ✨🎨",
+      caption: caption || undefined,
       time: "Ahora mismo"
     };
 

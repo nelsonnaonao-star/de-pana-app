@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
-  Sparkles, ImageIcon, Video, Music, Volume2, 
-  Check, Play, Pause, X, Award, Zap, ArrowLeft, Loader2, Scissors,
+  Sparkles, ImageIcon, Video, Music, Volume2, VolumeX,
+  Check, Play, Pause, X, Award, ArrowLeft, Loader2, Scissors,
   Compass, Sliders, Type, Upload, Download
 } from "lucide-react";
 import { BusinessFlyer } from "./BusinessPanel";
@@ -60,6 +60,17 @@ function isVideoFile(file: File): boolean {
   return file.type.startsWith("video/") || VIDEO_EXT_RE.test(file.name || "");
 }
 
+const PLAYBACK_MIME_BY_EXT: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/x-m4v",
+  mov: "video/quicktime",
+  qt: "video/quicktime",
+  webm: "video/webm",
+  "3gp": "video/3gpp",
+  mkv: "video/x-matroska",
+  avi: "video/x-msvideo",
+};
+
 // Android a veces entrega el video con MIME vacío o genérico. Para la subida
 // normalizamos el tipo a uno admitido por el servidor (MP4/MOV/WebM); FFmpeg
 // detecta el formato real por el contenido.
@@ -72,6 +83,18 @@ function normalizeVideoForUpload(file: File): File {
     ext === "mov" || ext === "qt" ? "video/quicktime" :
     ext === "webm" ? "video/webm" :
     "video/mp4";
+  return new File([file], file.name || `video.${ext || "mp4"}`, { type: mime });
+}
+
+// El MIME que se usa para REPRODUCIR no debe mentir: si Android entrega
+// `application/octet-stream` o vacío, el <video> se queda en negro. Aquí
+// deducimos el contenedor real por la extensión, conservando el MIME original
+// cuando ya es un `video/*` válido.
+function videoFileForPlayback(file: File): File {
+  const type = (file.type || "").trim().toLowerCase();
+  if (type.startsWith("video/") && type !== "video/unknown") return file;
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  const mime = PLAYBACK_MIME_BY_EXT[ext] || "video/mp4";
   return new File([file], file.name || `video.${ext || "mp4"}`, { type: mime });
 }
 
@@ -227,6 +250,8 @@ export default function MediaEditor({
   const trimThumbsSourceRef = useRef<string | null>(null);
   const [tapFeedback, setTapFeedback] = useState<"play" | "pause" | null>(null);
   const tapFeedbackTimerRef = useRef<number | null>(null);
+  const [videoPreviewError, setVideoPreviewError] = useState<string | null>(null);
+  const [isPreviewMuted, setIsPreviewMuted] = useState(true);
   const [musicLibrary, setMusicLibrary] = useState<MusicTrack[]>([]);
 
   // Ref holders
@@ -303,15 +328,25 @@ export default function MediaEditor({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (isVideoFile(file)) {
-      // Guardamos el archivo original para subirlo/recortarlo al publicar.
-      selectedVideoFileRef.current = file;
+    // Cuando el usuario está en modo Video, cualquier archivo elegido se trata
+    // como video aunque Android no informe el MIME o el nombre no traiga
+    // extensión (caso frecuente en la galería).
+    const treatAsVideo =
+      isVideoFile(file) || (editorMode === "video" && !file.type.startsWith("image/"));
+
+    if (treatAsVideo) {
+      // Guardamos el archivo ya normalizado para subirlo/recortarlo al publicar.
+      selectedVideoFileRef.current = normalizeVideoForUpload(file);
       setEditorMode("video");
-      // URL de objeto para el <video>: evita convertir el video a base64.
+      setVideoPreviewError(null);
+      // Para la vista previa usamos el MIME REAL del contenedor. Reetiquetar
+      // un MOV/3GP/MKV como `video/mp4` deja el <video> en negro en Android.
       if (videoObjectUrlRef.current) URL.revokeObjectURL(videoObjectUrlRef.current);
-      const objectUrl = URL.createObjectURL(file);
+      const objectUrl = URL.createObjectURL(videoFileForPlayback(file));
       videoObjectUrlRef.current = objectUrl;
       setUploadedImage(objectUrl);
+      // Permite volver a elegir el mismo archivo más adelante.
+      e.target.value = "";
       return;
     }
 
@@ -328,10 +363,12 @@ export default function MediaEditor({
       }
     };
     reader.readAsDataURL(file);
+    e.target.value = "";
   };
 
   const handleResetMedia = () => {
     selectedVideoFileRef.current = null;
+    setVideoPreviewError(null);
     if (videoObjectUrlRef.current) {
       URL.revokeObjectURL(videoObjectUrlRef.current);
       videoObjectUrlRef.current = null;
@@ -375,8 +412,29 @@ export default function MediaEditor({
   const handleVideoTap = () => {
     const video = videoRef.current;
     if (!video) return;
+    // El primer toque activa el audio original (WebView exige gesto del
+    // usuario para reproducir con sonido). Después alterna play/pausa.
+    if (video.muted) {
+      video.muted = false;
+      setIsPreviewMuted(false);
+      flashTapFeedback("play");
+      video.play().catch(() => {});
+      return;
+    }
     flashTapFeedback(video.paused ? "play" : "pause");
     handleTogglePlay();
+  };
+
+  const togglePreviewMute = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const nextMuted = !video.muted;
+    video.muted = nextMuted;
+    setIsPreviewMuted(nextMuted);
+    if (!nextMuted) {
+      video.play().catch(() => {});
+      flashTapFeedback("play");
+    }
   };
 
   const handleVideoLoadedMetadata = () => {
@@ -613,7 +671,29 @@ export default function MediaEditor({
   // recorte. En modo video con una imagen cargada NO se considera video.
   const isVideoMedia =
     currentImageSource.startsWith("data:video") ||
-    (editorMode === "video" && !currentImageSource.startsWith("data:image"));
+    currentImageSource.startsWith("blob:") ||
+    (!!uploadedImage &&
+      editorMode === "video" &&
+      !currentImageSource.startsWith("data:image"));
+
+  // Android WebView sólo permite autoplay si el video está silenciado. El audio
+  // del clip se conserva al procesar en el servidor; aquí se silencia para que
+  // la vista previa siempre arranque (y no quede en negro).
+  useEffect(() => {
+    if (!isVideoMedia) return;
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = true;
+    setIsPreviewMuted(true);
+    const tryPlay = () => {
+      video.play().catch(() => {
+        // Autoplay bloqueado: la reproducción arranca al tocar el video.
+      });
+    };
+    if (video.readyState >= 2) tryPlay();
+    else video.addEventListener("loadeddata", tryPlay, { once: true });
+    return () => video.removeEventListener("loadeddata", tryPlay);
+  }, [isVideoMedia, currentImageSource]);
 
   // Si se cambia a una imagen, cerrar la herramienta de recorte.
   useEffect(() => {
@@ -651,7 +731,7 @@ export default function MediaEditor({
   const [publishError, setPublishError] = useState<string | null>(null);
 
   // Handle Export and submit flyer
-  // Rasteriza la imagen final con filtros, textos, stickers y marca de agua.
+  // Rasteriza la imagen final con filtros, textos y stickers. Sin marca de agua.
   // Devuelve null (y se conserva el comportamiento anterior) para video o si falla.
   const bakeEditedImage = async (): Promise<string | null> => {
     if (editorMode === "video" || currentImageSource.startsWith("data:video")) return null;
@@ -661,43 +741,6 @@ export default function MediaEditor({
     if (rect.width < 10 || rect.height < 10) return null;
 
     const badges: EditedMediaBadgeOverlay[] = [];
-
-    if (isPremiumUnlocked) {
-      badges.push({
-        text: "Red On VIP Premium",
-        fontSizePx: 5.5,
-        fontWeight: 900,
-        textColor: "#ffffff",
-        background: "#14b8a6",
-        gradient: ["#14b8a6", "#4f46e5"],
-        borderWidthPx: 1,
-        borderColor: "rgba(255,255,255,0.25)",
-        radiusPx: -1,
-        padXPx: 6,
-        padYPx: 1.5,
-        rotationDeg: 0,
-        anchor: "top-left",
-        offsetXPx: 10,
-        offsetYPx: 10,
-      });
-    } else {
-      badges.push({
-        text: "Creado en Red On",
-        fontSizePx: 5.5,
-        fontWeight: 900,
-        textColor: "#e2e8f0",
-        background: "rgba(0,0,0,0.6)",
-        borderWidthPx: 1,
-        borderColor: "rgba(255,255,255,0.1)",
-        radiusPx: -1,
-        padXPx: 5,
-        padYPx: 1.5,
-        rotationDeg: 0,
-        anchor: "top-left",
-        offsetXPx: 10,
-        offsetYPx: 10,
-      });
-    }
 
     if (selectedStickerIdx >= 0 && STICKER_TEMPLATES_PRO[selectedStickerIdx]) {
       const sticker = STICKER_TEMPLATES_PRO[selectedStickerIdx];
@@ -963,12 +1006,24 @@ export default function MediaEditor({
         >
           {isVideoMedia ? (
             <video
+              key={currentImageSource}
               ref={videoRef}
               src={currentImageSource}
               autoPlay
+              muted={isPreviewMuted}
               playsInline
+              preload="auto"
               onClick={handleVideoTap}
               onLoadedMetadata={handleVideoLoadedMetadata}
+              onLoadedData={() => {
+                setVideoPreviewError(null);
+                videoRef.current?.play().catch(() => {});
+              }}
+              onError={() =>
+                setVideoPreviewError(
+                  "No se pudo reproducir este video. Usa MP4 (H.264) o WebM.",
+                )
+              }
               onTimeUpdate={handleVideoTimeUpdate}
               onPlay={() => setIsVideoPlaying(true)}
               onPause={() => setIsVideoPlaying(false)}
@@ -995,6 +1050,12 @@ export default function MediaEditor({
                 <Pause className="w-8 h-8 fill-white text-white" />
               )}
             </span>
+          </div>
+        )}
+
+        {videoPreviewError && (
+          <div className="absolute inset-x-4 top-1/2 z-20 -translate-y-1/2 rounded-xl bg-red-600/90 px-3 py-2 text-center text-[10px] font-bold text-white shadow-lg">
+            {videoPreviewError}
           </div>
         )}
 
@@ -1098,25 +1159,36 @@ export default function MediaEditor({
           </div>
         )}
 
-        {/* Watermark */}
-        {!isPremiumUnlocked ? (
-          <div className="absolute top-2.5 left-2.5 z-10 bg-black/60 backdrop-blur-sm px-1.5 py-0.5 rounded-full border border-white/10 flex items-center gap-1">
-            <Zap className="w-2 h-2 text-yellow-400 animate-pulse" />
-            <span className="text-[5.5px] font-black text-slate-200 uppercase tracking-widest">Creado en Red On</span>
-          </div>
-        ) : (
-          <div className="absolute top-2.5 left-2.5 z-10 bg-gradient-to-r from-teal-500 to-indigo-600 px-2 py-0.5 rounded-full shadow border border-white/25 flex items-center gap-1 animate-pulse">
-            <Award className="w-2 h-2 text-yellow-300 fill-yellow-300" />
-            <span className="text-[5.5px] font-black text-white uppercase tracking-wider">Red On VIP Premium</span>
-          </div>
-        )}
-
         {/* Music badge */}
         {editorMode === "video" && selectedMusicId !== "none" && (
           <div className="absolute top-2.5 right-2.5 z-10 bg-teal-400 px-2 py-0.5 rounded-full text-[6px] font-bold flex items-center gap-1 text-white shadow animate-pulse">
             <Music className="w-2.5 h-2.5 text-white animate-spin" />
             <span>{activeMusic?.title.split(" ")[0]}...</span>
           </div>
+        )}
+
+        {/* Sonido del video original */}
+        {isVideoMedia && !videoPreviewError && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePreviewMute();
+            }}
+            aria-label={isPreviewMuted ? "Activar sonido" : "Silenciar"}
+            title={isPreviewMuted ? "Activar sonido" : "Silenciar"}
+            className={`absolute bottom-24 right-3 z-20 w-9 h-9 rounded-full backdrop-blur-md flex items-center justify-center shadow-lg transition-colors cursor-pointer border ${
+              isPreviewMuted
+                ? "bg-black/60 border-white/15 text-white/80"
+                : "bg-teal-500/85 border-teal-300/40 text-white"
+            }`}
+          >
+            {isPreviewMuted ? (
+              <VolumeX className="w-4 h-4" />
+            ) : (
+              <Volume2 className="w-4 h-4" />
+            )}
+          </button>
         )}
       </div>
 

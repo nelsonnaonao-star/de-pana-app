@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.WindowManager;
+import android.webkit.WebSettings;
 import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -44,12 +45,30 @@ public class MainActivity extends BridgeActivity {
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);
         }
+        configureWebViewZoom();
         instance = this;
         createNotificationChannels();
         requestNotificationPermission();
         requestFullScreenIntentPermission();
         handleCallIntent(getIntent());
         handleShareIntent(getIntent());
+    }
+
+    // La app es una UI tipo aplicación nativa: el zoom por pellizco o doble toque
+    // rompe el layout y no es el comportamiento esperado. Se desactiva en el
+    // WebView (el viewport por sí solo no basta en Android WebView).
+    private void configureWebViewZoom() {
+        try {
+            WebView webView = bridge.getWebView();
+            if (webView == null) return;
+            WebSettings settings = webView.getSettings();
+            settings.setSupportZoom(false);
+            settings.setBuiltInZoomControls(false);
+            settings.setDisplayZoomControls(false);
+            settings.setTextZoom(100);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to disable WebView zoom", e);
+        }
     }
 
     @Override

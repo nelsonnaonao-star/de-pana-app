@@ -6,12 +6,33 @@ import { performPrivateUpload, type PrivateMediaKind } from "./privateUploadClie
 const BUCKET = "chat-images";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
 
+// Extensión correcta por MIME. `type.split("/")[1]` producía nombres como
+// `.quicktime` o `.x-m4v`, que muchos reproductores no reconocen.
+const EXT_BY_MIME: Record<string, string> = {
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "video/webm": "webm",
+  "video/x-m4v": "m4v",
+  "video/3gpp": "3gp",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "audio/mpeg": "mp3",
+  "audio/ogg": "ogg",
+  "audio/wav": "wav",
+  "audio/x-m4a": "m4a",
+  "audio/mp4": "m4a",
+  "audio/webm": "webm",
+  "application/pdf": "pdf",
+};
+
 async function uploadDirectToSupabase(
   blob: Blob,
   folder: string
 ): Promise<string> {
   const baseType = blob.type.split(";")[0];
-  const ext = baseType.split("/")[1] || "bin";
+  const ext = EXT_BY_MIME[baseType] || baseType.split("/")[1]?.split("+")[0] || "bin";
   const fileName = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
   const { data: uploadData, error } = await supabase.storage
