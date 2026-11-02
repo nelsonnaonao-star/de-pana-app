@@ -88,7 +88,7 @@ export default function EditorTabPanels(props: EditorTabPanelsProps) {
             >
               <Upload className="w-3 h-3" /> Subir de mi Celular
             </button>
-            <input type="file" ref={fileInputRef} accept="image/*" onChange={handleImageFileChange} className="hidden" />
+            <input type="file" ref={fileInputRef} accept={editorMode === "video" ? "video/*" : "image/*"} onChange={handleImageFileChange} className="hidden" />
           </div>
 
           {!uploadedImage && (

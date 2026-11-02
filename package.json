@@ -10,7 +10,8 @@
     "build": "vite build && cd server && npm install --production",
     "start": "cd server && node src/index.js",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "publish:update": "node scripts/publish-update.mjs"
   },
   "dependencies": {
     "@aparajita/capacitor-biometric-auth": "^10.0.0",

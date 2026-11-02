@@ -63,6 +63,9 @@ import { db } from "../services/database/DatabaseService";
 import CallRatingModal from "./CallRatingModal";
 import SimulatorTabHeader from "./simulator/SimulatorTabHeader";
 import SimulatorForwardModal from "./simulator/SimulatorForwardModal";
+import ShareTargetModal from "./ShareTargetModal";
+import { useSharedImages } from "../hooks/useSharedImages";
+import { sendSharedImagesToChat } from "../services/shareSend";
 import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
 import ImageLightbox from "./chat/overlays/ImageLightbox";
 import ChatPatternBackground from "./chat/ChatPatternBackground";
@@ -329,6 +332,12 @@ export default function PhoneSimulator({
         setShowActionMenu(false);
         return true;
       }
+      if (shareTargetOpenRef.current) {
+        logger.info("[BACK] Share target open — closing");
+        setShareTargetOpen(false);
+        clearSharedImages();
+        return true;
+      }
       const screen = currentScreenRef.current;
       if (screen === "chat_room" && chatRoomBackHandlerRef.current) {
         if (chatRoomBackHandlerRef.current()) {
@@ -508,6 +517,20 @@ export default function PhoneSimulator({
   const [addMemberLoading, setAddMemberLoading] = useState(false);
   const [invitingContactId, setInvitingContactId] = useState<string | null>(null);
   const [contactActions, setContactActions] = useState<Contact | null>(null);
+
+  // ── Compartir desde la galería (Android share target) ──────────────────────
+  // El plugin nativo copia las imágenes a la caché privada y entrega sus rutas.
+  // Al recibirlas se abre un selector para enviarlas a un chat/contacto. No
+  // altera la navegación existente: solo monta un modal por encima.
+  const { images: sharedImages, clear: clearSharedImages } = useSharedImages();
+  const [shareTargetOpen, setShareTargetOpen] = useState(false);
+  const shareTargetOpenRef = useRef(false);
+  const [sharingMedia, setSharingMedia] = useState(false);
+
+  useEffect(() => {
+    if (sharedImages.length === 0) return;
+    setShareTargetOpen(true);
+  }, [sharedImages.length]);
 
   // Ringback tone for outgoing calls (synthesized via Web Audio API)
   const ringbackCtxRef = useRef<AudioContext | null>(null);
@@ -1751,6 +1774,7 @@ const lastSentAtRef = useRef<Record<string, number>>({});
   activeCallRef.current = activeCall;
   contextMenuChatRef.current = contextMenuChat;
   showActionMenuRef.current = showActionMenu;
+  shareTargetOpenRef.current = shareTargetOpen;
 
   // ChatRoom internal back handler (replyTo, editingMessage, etc.)
   const chatRoomBackHandlerRef = useRef<(() => boolean) | null>(null);
@@ -3314,14 +3338,13 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     });
   }, [chats]);
 
-  const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }): Promise<string | null> => {
+  // Crea (si hace falta) el chat con un contacto y devuelve su id SIN navegar.
+  // Lo usa el flujo de compartir, que necesita enviar la imagen antes de abrir
+  // el chat para que ChatRoom la cargue desde el servidor.
+  const ensureChatWithContact = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }): Promise<string | null> => {
     const displayName = profile.contactName || profile.name;
     const existing = getChatByPartnerId(profile.id);
-    if (existing) {
-      setSelectedChatId(existing.id);
-      setCurrentScreen("chat_room");
-      return existing.id;
-    }
+    if (existing) return existing.id;
     try {
       const chat = await createChatInSupabase({
         name: displayName,
@@ -3344,8 +3367,6 @@ const lastSentAtRef = useRef<Record<string, number>>({});
             messages: [],
           }, ...prev];
         });
-        setSelectedChatId(chat.id);
-        setCurrentScreen("chat_room");
         return chat.id;
       }
       return null;
@@ -3354,6 +3375,53 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       showToast(`No se pudo crear el chat: ${msg}`);
       return null;
     }
+  };
+
+  const handleStartChatFromSynced = async (profile: { id: string; name: string; contactName?: string; avatar_url?: string; phone_number?: string }): Promise<string | null> => {
+    const chatId = await ensureChatWithContact(profile);
+    if (chatId) {
+      setSelectedChatId(chatId);
+      setCurrentScreen("chat_room");
+    }
+    return chatId;
+  };
+
+  const handleCloseShareTarget = () => {
+    if (sharingMedia) return;
+    setShareTargetOpen(false);
+    clearSharedImages();
+  };
+
+  const handleShareToChat = async (chatId: string) => {
+    if (!user || sharingMedia || sharedImages.length === 0) return;
+    setSharingMedia(true);
+    try {
+      await sendSharedImagesToChat(chatId, sharedImages, user.id);
+      setShareTargetOpen(false);
+      clearSharedImages();
+      setSelectedChatId(chatId);
+      setCurrentScreen("chat_room");
+      setRefetchTrigger(n => n + 1);
+      showToast("Imagen enviada ✅");
+    } catch (e: any) {
+      logger.error("[SHARE] No se pudo enviar la imagen compartida", { error: e, chatId });
+      showToast(e?.message || "No se pudo enviar la imagen");
+    } finally {
+      setSharingMedia(false);
+    }
+  };
+
+  const handleShareToContact = async (contact: Contact) => {
+    if (!contact.contact_user_id || sharingMedia) return;
+    const chatId = await ensureChatWithContact({
+      id: contact.contact_user_id,
+      name: contact.name,
+      contactName: contact.name,
+      avatar_url: contact.avatar || "",
+      phone_number: contact.phone || "",
+    });
+    if (!chatId) return;
+    await handleShareToChat(chatId);
   };
 
   const handleStartChatFromCall = async (partnerId: string, name: string, avatar: string) => {
@@ -4068,6 +4136,19 @@ try {
             setCallRating(null);
           }}
           onSkip={() => setCallRating(null)}
+        />
+      )}
+
+      {/* SHARE TARGET MODAL (imagen compartida desde la galería) */}
+      {shareTargetOpen && sharedImages.length > 0 && (
+        <ShareTargetModal
+          images={sharedImages}
+          chats={chats}
+          contacts={dedupedContacts}
+          busy={sharingMedia}
+          onClose={handleCloseShareTarget}
+          onSelectChat={handleShareToChat}
+          onSelectContact={handleShareToContact}
         />
       )}
 

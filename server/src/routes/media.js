@@ -199,6 +199,73 @@ router.post('/compress-video', (req, res) => {
   });
 });
 
+// Recorte real de video para flyers/estados. Recibe `video`, `start` y `end`
+// (segundos), corta con FFmpeg, comprime y devuelve la URL pública del clip.
+// Autenticado por el middleware global de /api/media.
+router.post('/trim-video', (req, res) => {
+  uploadVideo.single('video')(req, res, async (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'El video excede el tamaño máximo (100 MB)' });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se recibió ningún video' });
+    }
+
+    const inputPath = req.file.path;
+    const outputPath = getOutputPath();
+
+    try {
+      const start = Number(req.body.start);
+      const end = Number(req.body.end);
+
+      if (!Number.isFinite(start) || !Number.isFinite(end)) {
+        return res.status(400).json({ error: 'start y end deben ser números (segundos)' });
+      }
+      if (start < 0 || end <= start) {
+        return res.status(400).json({ error: 'Rango de recorte inválido' });
+      }
+      if (start > 3600) {
+        return res.status(400).json({ error: 'El inicio del recorte es demasiado grande' });
+      }
+
+      const clipDuration = Math.min(end - start, 180);
+      if (clipDuration <= 0) {
+        return res.status(400).json({ error: 'Rango de recorte inválido' });
+      }
+
+      await new Promise((resolve, reject) => {
+        ffmpeg(inputPath)
+          .setStartTime(start)
+          .duration(clipDuration)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .audioBitrate('128k')
+          .outputOptions([
+            '-preset veryfast',
+            '-crf 28',
+            '-movflags +faststart',
+            '-vf', "scale='min(720,iw)':min'(720,ih)':force_original_aspect_ratio=decrease",
+          ])
+          .on('end', resolve)
+          .on('error', reject)
+          .save(outputPath);
+      });
+
+      const url = await uploadToSupabase(outputPath, 'video/mp4');
+      res.json({ url, start, end: start + clipDuration, duration: clipDuration });
+    } catch (trimErr) {
+      console.error('[MEDIA] trim-video error:', trimErr.message);
+      res.status(500).json({ error: 'Error al recortar el video' });
+    } finally {
+      await fs.unlink(inputPath).catch(() => {});
+      await fs.unlink(outputPath).catch(() => {});
+    }
+  });
+});
+
 router.post('/upload', uploadAny.single('file'), async (req, res) => {
   try {
     if (!req.file) {

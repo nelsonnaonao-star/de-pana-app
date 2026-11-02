@@ -1,14 +1,18 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   Sparkles, ImageIcon, Video, Music, Volume2, 
-  Check, Play, Pause, X, Award, Zap,
-  Compass, Sliders, Type, Tag, Upload, Download
+  Check, Play, Pause, X, Award, Zap, ArrowLeft, Loader2, Scissors,
+  Compass, Sliders, Type, Upload, Download
 } from "lucide-react";
 import { BusinessFlyer } from "./BusinessPanel";
 import { STATIC_PRESET_IMAGES, PRESET_FILTERS_EXPANDED, ANIMATION_PRESETS, STICKER_TEMPLATES_PRO } from "./editor/editorConstants";
 import EditorTabPanels from "./editor/EditorTabPanels";
+import FilterRail from "./editor/FilterRail";
+import AdjustmentsRail from "./editor/AdjustmentsRail";
+import TextRail from "./editor/TextRail";
 import { renderEditedMedia, EditedMediaBadgeOverlay } from "./editor/renderEditedMedia";
 import { supabase } from "../lib/supabase";
+import { apiUrl, authUpload } from "../lib/api";
 import { saveMediaToGalleryDirect } from "../services/mediaUtils";
 import { uploadChatMedia } from "../services/storage";
 import { Capacitor } from "@capacitor/core";
@@ -106,17 +110,32 @@ export default function MediaEditor({
 
   // Video playback simulation (Fluid for low-end devices)
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
-  const [videoDuration, setVideoDuration] = useState(15);
+  const [videoDuration, setVideoDuration] = useState(0);
   const [selectedMusicId, setSelectedMusicId] = useState("none");
   const [transitionStyle, setTransitionStyle] = useState<"fade" | "zoom" | "slide">("fade");
   const [currentTime, setCurrentTime] = useState(0);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [showTrim, setShowTrim] = useState(false);
   const [musicLibrary, setMusicLibrary] = useState<MusicTrack[]>([]);
 
   // Ref holders
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasAreaRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const selectedVideoFileRef = useRef<File | null>(null);
+  const videoObjectUrlRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const timerIntervalRef = useRef<number | null>(null);
+  const audioSrcRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (videoObjectUrlRef.current) {
+        URL.revokeObjectURL(videoObjectUrlRef.current);
+        videoObjectUrlRef.current = null;
+      }
+    };
+  }, []);
 
   // Sound and simulation loop for videos
   const activeMusic = musicLibrary.find(m => m.id === selectedMusicId);
@@ -125,49 +144,27 @@ export default function MediaEditor({
     getMusicLibrary().then(setMusicLibrary).catch(() => setMusicLibrary([]));
   }, []);
 
+  // La música de fondo sigue el estado real del <video> (play/pausa). El
+  // progreso del video ya NO se simula: llega de `onTimeUpdate`.
   useEffect(() => {
     if (isVideoPlaying) {
-      // Audio trigger
       if (activeMusic?.file_url) {
-        if (!audioRef.current) {
+        if (!audioRef.current || audioSrcRef.current !== activeMusic.file_url) {
+          audioRef.current?.pause();
           audioRef.current = new Audio(activeMusic.file_url);
           audioRef.current.loop = true;
+          audioSrcRef.current = activeMusic.file_url;
         }
         audioRef.current.play().catch(e => console.log("Audio play error", e));
       }
-
-      // Smooth frame simulator for UI performance metrics
-      const intervalMs = 100;
-      timerIntervalRef.current = window.setInterval(() => {
-        setCurrentTime(prev => {
-          if (prev >= videoDuration) {
-            // Loop back
-            if (audioRef.current) {
-              audioRef.current.currentTime = 0;
-            }
-            return 0;
-          }
-          return Number((prev + intervalMs / 1000).toFixed(2));
-        });
-      }, intervalMs);
     } else {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
+      audioRef.current?.pause();
     }
 
     return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
+      audioRef.current?.pause();
     };
-  }, [isVideoPlaying, selectedMusicId, videoDuration]);
+  }, [isVideoPlaying, selectedMusicId, activeMusic?.file_url]);
 
   // Sync editorTab when activeTool changes
   useEffect(() => {
@@ -186,23 +183,139 @@ export default function MediaEditor({
     };
   }, []);
 
-  // Handle custom image upload from device
+  // Handle custom image/video upload from device
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          setUploadedImage(event.target.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    if (file.type.startsWith("video/")) {
+      // Guardamos el archivo original para subirlo/recortarlo al publicar.
+      selectedVideoFileRef.current = file;
+      setEditorMode("video");
+      // URL de objeto para el <video>: evita convertir el video a base64.
+      if (videoObjectUrlRef.current) URL.revokeObjectURL(videoObjectUrlRef.current);
+      const objectUrl = URL.createObjectURL(file);
+      videoObjectUrlRef.current = objectUrl;
+      setUploadedImage(objectUrl);
+      return;
     }
+
+    selectedVideoFileRef.current = null;
+    if (videoObjectUrlRef.current) {
+      URL.revokeObjectURL(videoObjectUrlRef.current);
+      videoObjectUrlRef.current = null;
+    }
+    if (file.type.startsWith("image/")) setEditorMode("image");
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setUploadedImage(event.target.result as string);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleResetMedia = () => {
+    selectedVideoFileRef.current = null;
+    if (videoObjectUrlRef.current) {
+      URL.revokeObjectURL(videoObjectUrlRef.current);
+      videoObjectUrlRef.current = null;
+    }
+    setUploadedImage(null);
   };
 
   // Toggle playback
+  const formatClock = (value: number) => {
+    const total = Math.max(0, Math.floor(Number(value) || 0));
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  };
+
+  const effectiveTrimEnd = () => (trimEnd > 0 ? trimEnd : videoDuration);
+
   const handleTogglePlay = () => {
-    setIsVideoPlaying(prev => !prev);
+    const video = videoRef.current;
+    if (!video) {
+      setIsVideoPlaying(prev => !prev);
+      return;
+    }
+    if (video.paused) {
+      const end = effectiveTrimEnd();
+      if (end > 0 && video.currentTime >= end - 0.05) {
+        video.currentTime = trimStart;
+      }
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  };
+
+  const handleVideoLoadedMetadata = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    setVideoDuration(duration);
+    setTrimStart(0);
+    setTrimEnd(duration);
+    video.currentTime = 0;
+    setCurrentTime(0);
+  };
+
+  const handleVideoTimeUpdate = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const time = video.currentTime;
+    setCurrentTime(time);
+
+    const end = effectiveTrimEnd();
+    if (end > 0 && time >= end) {
+      video.currentTime = trimStart;
+      setCurrentTime(trimStart);
+      if (audioRef.current) audioRef.current.currentTime = 0;
+    }
+  };
+
+  const handleVideoEnded = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = trimStart;
+    setCurrentTime(trimStart);
+    if (audioRef.current) audioRef.current.currentTime = 0;
+    video.play().catch(() => {});
+  };
+
+  const handleTrimStartChange = (value: number) => {
+    const video = videoRef.current;
+    const max = videoDuration > 0 ? videoDuration : value;
+    const end = trimEnd > 0 ? trimEnd : max;
+    const next = Math.min(Math.max(0, value), Math.max(0, end - 0.1));
+    setTrimStart(next);
+    if (video && video.currentTime < next) {
+      video.currentTime = next;
+      setCurrentTime(next);
+    }
+  };
+
+  const handleTrimEndChange = (value: number) => {
+    const max = videoDuration > 0 ? videoDuration : value;
+    const next = Math.max(Math.min(value, max), trimStart + 0.1);
+    setTrimEnd(next);
+    const video = videoRef.current;
+    if (video && video.currentTime >= next) {
+      video.currentTime = trimStart;
+      setCurrentTime(trimStart);
+    }
+  };
+
+  const handleResetTrim = () => {
+    setTrimStart(0);
+    setTrimEnd(videoDuration);
+    const video = videoRef.current;
+    if (video) {
+      video.currentTime = 0;
+      setCurrentTime(0);
+    }
   };
 
   // Reset Adjustments sliders back to normal
@@ -327,6 +440,12 @@ export default function MediaEditor({
   // Compile base images
   const defaultImageSource = STATIC_PRESET_IMAGES[activePresetIdx].url;
   const currentImageSource = uploadedImage || defaultImageSource;
+  // Determina si la fuente actual es un video (archivo local o URL remota).
+  // Se usa para renderizar <video>, mostrar la barra de reproducción y el
+  // recorte. En modo video con una imagen cargada NO se considera video.
+  const isVideoMedia =
+    currentImageSource.startsWith("data:video") ||
+    (editorMode === "video" && !currentImageSource.startsWith("data:image"));
 
   // Publicación de flyer: evita doble submit / doble upload y muestra error reintentable
   const [isPublishing, setIsPublishing] = useState(false);
@@ -427,6 +546,36 @@ export default function MediaEditor({
     }
   };
 
+  // Sube el video al servidor para recortarlo con FFmpeg y obtener una URL
+  // remota. Solo aplica cuando el usuario eligió un archivo de video local.
+  const prepareVideoForPublish = async (): Promise<string | null> => {
+    const file = selectedVideoFileRef.current;
+    if (!file) return null;
+
+    const end = trimEnd > 0 ? trimEnd : videoDuration;
+    const start = Math.min(Math.max(0, trimStart), Math.max(0, end - 0.1));
+    if (!(end > start)) {
+      throw new Error("El rango de recorte no es válido.");
+    }
+    if (end - start > 180) {
+      throw new Error("El recorte máximo es de 3 minutos.");
+    }
+
+    const form = new FormData();
+    form.append("video", file, file.name || "video.mp4");
+    form.append("start", String(start));
+    form.append("end", String(end));
+
+    const res = await authUpload(apiUrl("/api/media/trim-video"), form);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error || `No se pudo procesar el video (${res.status}).`);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!data?.url) throw new Error("El servidor no devolvió el video recortado.");
+    return data.url as string;
+  };
+
   const handleExportAndPublishFlyer = async () => {
     if (isPublishing) return;
     setIsPublishing(true);
@@ -435,8 +584,14 @@ export default function MediaEditor({
     try {
       const baked = await bakeEditedImage();
 
+      // En modo video, sube el archivo real (recortado si aplica) y usa su URL.
+      let videoUrl: string | null = null;
+      if (editorMode === "video" && selectedVideoFileRef.current) {
+        videoUrl = await prepareVideoForPublish();
+      }
+
       if (isStateMode && onPublishState) {
-        onPublishState(baked || currentImageSource, editorMode, bannerTitle);
+        onPublishState(baked || videoUrl || currentImageSource, editorMode, bannerTitle);
         return;
       }
 
@@ -451,6 +606,8 @@ export default function MediaEditor({
         flyerUrl = await uploadChatMedia(dataUrlToBlob(baked), "flyers");
       } else if (isBase64Raster) {
         flyerUrl = await uploadChatMedia(dataUrlToBlob(currentImageSource), "flyers");
+      } else if (videoUrl) {
+        flyerUrl = videoUrl;
       } else {
         flyerUrl = currentImageSource;
       }
@@ -476,7 +633,11 @@ export default function MediaEditor({
       onPublishFlyer(finalFlyer);
     } catch (err) {
       console.error("[MediaEditor] Error al publicar el flyer:", err);
-      setPublishError("No se pudo publicar tu flyer. Revisa tu conexión e intenta de nuevo.");
+      setPublishError(
+        err instanceof Error && err.message
+          ? err.message
+          : "No se pudo publicar tu flyer. Revisa tu conexión e intenta de nuevo.",
+      );
     } finally {
       setIsPublishing(false);
     }
@@ -507,7 +668,6 @@ export default function MediaEditor({
     { id: "presets", icon: ImageIcon, label: "Imagen" },
     { id: "sliders", icon: Sliders, label: "Ajustes" },
     { id: "text", icon: Type, label: "Texto" },
-    { id: "stickers", icon: Tag, label: "Stickers" },
     { id: "premium", icon: Award, label: "VIP" },
   ];
 
@@ -550,8 +710,8 @@ export default function MediaEditor({
         }
       `}} />
 
-      {/* IMAGE CANVAS (flex-1 to fill remaining space) */}
-      <div ref={canvasAreaRef} className="relative flex-1 w-full min-h-0 overflow-hidden">
+      {/* IMAGE CANVAS (ocupa toda la pantalla; las herramientas van encima) */}
+      <div ref={canvasAreaRef} className="absolute inset-0 z-0 w-full h-full overflow-hidden">
         {/* Image with filters */}
         <div 
           style={{ 
@@ -560,12 +720,17 @@ export default function MediaEditor({
           }}
           className="absolute inset-0 w-full h-full transition-all duration-150"
         >
-          {currentImageSource.startsWith("data:video") ? (
-            <video 
-              src={currentImageSource} 
-              autoPlay 
-              loop 
+          {isVideoMedia ? (
+            <video
+              ref={videoRef}
+              src={currentImageSource}
+              autoPlay
               playsInline
+              onLoadedMetadata={handleVideoLoadedMetadata}
+              onTimeUpdate={handleVideoTimeUpdate}
+              onPlay={() => setIsVideoPlaying(true)}
+              onPause={() => setIsVideoPlaying(false)}
+              onEnded={handleVideoEnded}
               className="w-full h-full object-cover select-none"
             />
           ) : (
@@ -583,7 +748,7 @@ export default function MediaEditor({
           <div className="absolute inset-0 z-20 flex items-center justify-center">
             <input
               type="file"
-              accept="image/*"
+              accept={editorMode === "video" ? "video/*" : "image/*"}
               onChange={handleImageFileChange}
               className="hidden"
               id="media-editor-upload"
@@ -596,7 +761,9 @@ export default function MediaEditor({
               <span className="w-12 h-12 rounded-full bg-teal-400/90 shadow-lg flex items-center justify-center animate-pulse">
                 <Upload className="w-5 h-5 text-white" />
               </span>
-              <span className="text-xs font-black uppercase tracking-widest drop-shadow-lg">Sube tu imagen</span>
+              <span className="text-xs font-black uppercase tracking-widest drop-shadow-lg">
+                {editorMode === "video" ? "Sube tu video" : "Sube tu imagen"}
+              </span>
               <span className="text-[8px] text-slate-300 font-medium drop-shadow">Toca para abrir tu galería</span>
             </button>
           </div>
@@ -699,85 +866,183 @@ export default function MediaEditor({
       </div>
 
       {/* TOP FLOATING BAR */}
-      <div className="absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/80 via-black/50 to-transparent px-3 pt-2 pb-6 pointer-events-none">
-        <div className="flex flex-col gap-2 pointer-events-auto">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black via-black/80 to-transparent px-3 pt-[calc(6px+env(safe-area-inset-top))] pb-8">
+        <div className="pointer-events-auto">
+          <div className="flex items-center gap-1.5">
+            {/* Volver */}
             <button
               onClick={onGoToFeed}
-              className="bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-[11px] font-bold px-3.5 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-1 shrink-0"
+              aria-label="Volver"
+              title="Volver"
+              className="h-8 w-8 shrink-0 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md text-white flex items-center justify-center transition-all active:scale-95 cursor-pointer"
             >
-              ✕ Volver
+              <ArrowLeft className="w-4 h-4" />
             </button>
 
-            <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
+            {/* Foto / Video (centrado en el espacio libre) */}
+            <div className="flex-1 min-w-0 flex justify-center">
+              <div className="flex items-center bg-black/50 backdrop-blur-md p-0.5 rounded-full border border-white/15 shadow-lg">
+                <button
+                  onClick={() => { setEditorMode("image"); setIsVideoPlaying(false); }}
+                  className={`h-7 px-2.5 rounded-full text-[9px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                    editorMode === "image" ? "bg-teal-500 text-white shadow" : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  <ImageIcon className="w-3 h-3" /> Foto
+                </button>
+                <button
+                  onClick={() => setEditorMode("video")}
+                  className={`h-7 px-2.5 rounded-full text-[9px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                    editorMode === "video" ? "bg-teal-500 text-white shadow" : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  <Video className="w-3 h-3" /> Video
+                </button>
+              </div>
+            </div>
+
+            {/* Guardar + Exportar */}
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 onClick={handleSaveToDevice}
                 disabled={isSavingToDevice}
-                className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-extrabold text-[11px] px-3 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                className="h-8 px-2.5 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md text-white text-[9px] font-bold flex items-center gap-1 transition-all active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap"
               >
-                <Download className="w-4 h-4" /> {isSavingToDevice ? "Guardando..." : "Guardar"}
+                {isSavingToDevice ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Download className="w-3 h-3" />
+                )}
+                {isSavingToDevice ? "Guardando" : "Guardar"}
               </button>
               <button
                 onClick={handleExportAndPublishFlyer}
                 disabled={isPublishing}
-                className="bg-teal-500 hover:bg-teal-400 disabled:opacity-50 text-white font-extrabold text-[11px] px-3 py-2 rounded-lg transition-all shadow-lg cursor-pointer flex items-center gap-1.5 whitespace-nowrap"
+                className="h-8 px-3 rounded-full bg-teal-500 hover:bg-teal-400 text-white text-[9px] font-extrabold flex items-center gap-1 shadow-lg shadow-teal-500/25 transition-all active:scale-95 disabled:opacity-50 cursor-pointer whitespace-nowrap"
               >
-                <Check className="w-4 h-4" /> {isPublishing ? "Publicando..." : isStateMode ? "Publicar" : "Exportar & Publicar"}
+                {isPublishing ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Check className="w-3 h-3" />
+                )}
+                {isPublishing ? "Publicando" : isStateMode ? "Publicar" : "Exportar"}
               </button>
             </div>
           </div>
 
-          <div className="flex justify-center">
-            <div className="flex bg-black/60 p-0.5 rounded-lg border border-white/10 text-[10px] font-bold shrink-0">
-              <button
-                onClick={() => { setEditorMode("image"); setIsVideoPlaying(false); }}
-                className={`px-3 py-1 rounded transition-all cursor-pointer ${
-                  editorMode === "image" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <ImageIcon className="w-4 h-4 inline mr-1" /> Foto
-              </button>
-              <button
-                onClick={() => setEditorMode("video")}
-                className={`px-3 py-1 rounded transition-all cursor-pointer ${
-                  editorMode === "video" ? "bg-teal-500 text-white shadow-sm" : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Video className="w-4 h-4 inline mr-1" /> Video
-              </button>
-            </div>
-          </div>
-          {saveMessage && (
-            <div className="absolute right-2 top-10 z-30 bg-black/90 text-white text-[8px] font-bold px-2.5 py-1.5 rounded-lg shadow-xl border border-white/10">
-              {saveMessage}
+          {(saveMessage || publishError) && (
+            <div className="mt-2 flex flex-col items-end gap-1">
+              {saveMessage && (
+                <span className="bg-black/85 text-white text-[9px] font-bold px-2.5 py-1 rounded-lg border border-white/10 shadow-lg">
+                  {saveMessage}
+                </span>
+              )}
+              {publishError && (
+                <span className="bg-red-600/95 text-white text-[9px] font-bold px-2.5 py-1 rounded-lg border border-red-400/30 shadow-lg">
+                  {publishError}
+                </span>
+              )}
             </div>
           )}
-          {publishError && (
-            <div className="absolute right-2 top-20 z-30 bg-red-600/95 text-white text-[8px] font-bold px-2.5 py-1.5 rounded-lg shadow-xl border border-white/10">
-              {publishError}
+
+          {/* Video scrubber + recorte */}
+          {isVideoMedia && (
+            <div className="mt-2 rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md">
+              <div className="flex items-center gap-2 px-2 py-1.5">
+                <button
+                  onClick={handleTogglePlay}
+                  className="h-6 w-6 rounded-full bg-teal-500 hover:bg-teal-400 text-white flex items-center justify-center cursor-pointer shrink-0"
+                >
+                  {isVideoPlaying ? (
+                    <Pause className="w-3 h-3 fill-white" />
+                  ) : (
+                    <Play className="w-3 h-3 fill-white ml-0.5" />
+                  )}
+                </button>
+
+                <div className="relative flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
+                  {videoDuration > 0 && (
+                    <div
+                      className="absolute inset-y-0 bg-teal-500/30"
+                      style={{
+                        left: `${(trimStart / videoDuration) * 100}%`,
+                        width: `${((Math.max(trimStart, effectiveTrimEnd()) - trimStart) / videoDuration) * 100}%`,
+                      }}
+                    />
+                  )}
+                  <div
+                    className="absolute inset-y-0 left-0 bg-teal-400 rounded-full transition-all duration-100 ease-linear"
+                    style={{ width: `${videoDuration > 0 ? (currentTime / videoDuration) * 100 : 0}%` }}
+                  />
+                </div>
+
+                <span className="text-[8px] font-mono text-slate-300 tabular-nums shrink-0">
+                  {formatClock(currentTime)} / {formatClock(videoDuration)}
+                </span>
+
+                <button
+                  onClick={() => setShowTrim(v => !v)}
+                  title="Recortar video"
+                  className={`h-6 w-6 shrink-0 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                    showTrim ? "bg-teal-500 text-white" : "bg-white/10 text-slate-300 hover:bg-white/20"
+                  }`}
+                >
+                  <Scissors className="w-3 h-3" />
+                </button>
+              </div>
+
+              {showTrim && (
+                <div className="px-2 pb-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[8px] font-bold text-slate-400 w-9 shrink-0">Inicio</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={videoDuration > 0 ? videoDuration : 0}
+                      step={0.1}
+                      value={trimStart}
+                      onChange={(e) => handleTrimStartChange(Number(e.target.value))}
+                      className="flex-1 accent-teal-400 cursor-pointer"
+                    />
+                    <span className="text-[8px] font-mono text-teal-300 w-9 text-right shrink-0">
+                      {formatClock(trimStart)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[8px] font-bold text-slate-400 w-9 shrink-0">Fin</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={videoDuration > 0 ? videoDuration : 0}
+                      step={0.1}
+                      value={effectiveTrimEnd()}
+                      onChange={(e) => handleTrimEndChange(Number(e.target.value))}
+                      className="flex-1 accent-teal-400 cursor-pointer"
+                    />
+                    <span className="text-[8px] font-mono text-teal-300 w-9 text-right shrink-0">
+                      {formatClock(effectiveTrimEnd())}
+                    </span>
+                    <button
+                      onClick={handleResetTrim}
+                      title="Quitar recorte"
+                      className="w-6 h-6 shrink-0 rounded-full bg-white/10 text-slate-300 hover:bg-white/20 flex items-center justify-center cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
-
-        {/* Video scrubber */}
-        {editorMode === "video" && (
-          <div className="flex items-center gap-2 mt-2 bg-black/40 p-1.5 rounded-lg pointer-events-auto">
-            <button
-              onClick={handleTogglePlay}
-              className="w-5 h-5 rounded bg-teal-600 hover:bg-teal-500 text-white flex items-center justify-center cursor-pointer shrink-0"
-            >
-              {isVideoPlaying ? <Pause className="w-2.5 h-2.5 fill-white" /> : <Play className="w-2.5 h-2.5 fill-white" />}
-            </button>
-            <div className="flex-1 h-1 bg-slate-900 rounded overflow-hidden">
-              <div className="h-full bg-rose-500 rounded transition-all duration-100 ease-linear" style={{ width: `${(currentTime / videoDuration) * 100}%` }}></div>
-            </div>
-            <span className="text-[6px] font-mono text-slate-400 shrink-0">00:{currentTime.toFixed(0)}s</span>
-          </div>
-        )}
       </div>
 
+      {/* OVERLAY INFERIOR: hoja de herramientas + barra de iconos.
+          Va absoluto para que el lienzo ocupe toda la pantalla por detrás.
+          flex-col-reverse mantiene la barra abajo y la hoja justo encima. */}
+      <div className="absolute bottom-0 left-0 right-0 z-30 flex flex-col-reverse">
       {/* BOTTOM TOOLBAR (iconos) */}
-      <div className="shrink-0 bg-gradient-to-t from-black/90 via-black/80 to-black/60 px-2 pt-2 pb-1.5 z-20">
+      <div className="bg-gradient-to-t from-black/95 via-black/85 to-black/60 px-2 pt-2 pb-[calc(6px+env(safe-area-inset-bottom))]">
         <div className="flex justify-around items-end">
           {TOOLS.map(tool => {
             const IconComponent = tool.icon;
@@ -802,9 +1067,64 @@ export default function MediaEditor({
         </div>
       </div>
 
-      {/* BOTTOM SHEET (shown when tool is active) */}
-      {activeTool && (
-        <div className="shrink-0 bg-[#0c1617] border-t border-teal-950/40 flex flex-col shadow-2xl animate-fade-in">
+      {/* IMAGEN: riel horizontal de filtros (no tapa la foto) */}
+      {activeTool === "presets" && (
+        <FilterRail
+          filters={PRESET_FILTERS_EXPANDED}
+          selectedFilterId={selectedFilterId}
+          onSelectFilter={setSelectedFilterId}
+          fileInputRef={fileInputRef}
+          onFileChange={handleImageFileChange}
+          hasUploadedImage={!!uploadedImage}
+          onResetImage={handleResetMedia}
+          editorMode={editorMode}
+          selectedMusicId={selectedMusicId}
+          setSelectedMusicId={setSelectedMusicId}
+          transitionStyle={transitionStyle}
+          setTransitionStyle={setTransitionStyle}
+          setIsVideoPlaying={setIsVideoPlaying}
+          musicLibrary={musicLibrary}
+        />
+      )}
+
+      {/* AJUSTES: chips + un slider horizontal activo */}
+      {activeTool === "sliders" && (
+        <AdjustmentsRail
+          adjustments={adjustments}
+          setAdjustments={setAdjustments}
+          onReset={handleResetAdjustments}
+          editorMode={editorMode}
+          selectedMusicId={selectedMusicId}
+          setSelectedMusicId={setSelectedMusicId}
+          transitionStyle={transitionStyle}
+          setTransitionStyle={setTransitionStyle}
+          setIsVideoPlaying={setIsVideoPlaying}
+          musicLibrary={musicLibrary}
+        />
+      )}
+
+      {/* TEXTO: caja compacta + tamaño + animaciones */}
+      {activeTool === "text" && (
+        <TextRail
+          bannerTitle={bannerTitle}
+          setBannerTitle={setBannerTitle}
+          textSizePercent={textSizePercent}
+          setTextSizePercent={setTextSizePercent}
+          textAnimation={textAnimation}
+          setTextAnimation={setTextAnimation}
+          editorMode={editorMode}
+          selectedMusicId={selectedMusicId}
+          setSelectedMusicId={setSelectedMusicId}
+          transitionStyle={transitionStyle}
+          setTransitionStyle={setTransitionStyle}
+          setIsVideoPlaying={setIsVideoPlaying}
+          musicLibrary={musicLibrary}
+        />
+      )}
+
+      {/* BOTTOM SHEET (resto de herramientas) */}
+      {activeTool && activeTool !== "presets" && activeTool !== "sliders" && activeTool !== "text" && (
+        <div className="bg-[#0c1617]/95 backdrop-blur-md border-t border-teal-950/40 flex flex-col shadow-2xl animate-fade-in">
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 shrink-0">
             <span className="text-[9px] font-bold text-teal-400 uppercase tracking-wider">
@@ -865,6 +1185,7 @@ export default function MediaEditor({
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

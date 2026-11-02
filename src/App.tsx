@@ -14,6 +14,7 @@ import { syncService } from "./services/sync/SyncService";
 import { syncSoundPrefsFromNative } from "./services/soundService";
 import ChatListSkeleton from "./components/ChatListSkeleton";
 import FullSplash from "./components/FullSplash";
+import UpdateModal from "./components/UpdateModal";
 
 function AppContent() {
   const { user, loading, passwordRecovery } = useSupabase();
@@ -288,6 +289,7 @@ function AppContent() {
               success: { style: { background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0" } },
             }}
           />
+          <UpdateModal enabled={!fullSplashVisible} />
           {loading ? (
             <div className="w-screen h-screen bg-white flex flex-col">
               <div className="h-[170px] bg-[#0a4d52] relative shrink-0">

@@ -17,8 +17,11 @@ import android.view.WindowManager;
 import android.webkit.WebView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.IntentCompat;
 import androidx.core.splashscreen.SplashScreen;
 import com.getcapacitor.BridgeActivity;
+
+import java.util.ArrayList;
 
 public class MainActivity extends BridgeActivity {
 
@@ -35,6 +38,8 @@ public class MainActivity extends BridgeActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         SplashScreen.installSplashScreen(this);
+        registerPlugin(AppUpdatePlugin.class);
+        registerPlugin(ShareReceiverPlugin.class);
         super.onCreate(savedInstanceState);
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);
@@ -44,6 +49,7 @@ public class MainActivity extends BridgeActivity {
         requestNotificationPermission();
         requestFullScreenIntentPermission();
         handleCallIntent(getIntent());
+        handleShareIntent(getIntent());
     }
 
     @Override
@@ -60,6 +66,27 @@ public class MainActivity extends BridgeActivity {
         // notificación entran por aquí y no por onCreate).
         setIntent(intent);
         handleCallIntent(intent);
+        handleShareIntent(intent);
+    }
+
+    private void handleShareIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)) return;
+
+        ArrayList<Uri> uris = new ArrayList<>();
+        if (Intent.ACTION_SEND.equals(action)) {
+            Uri uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri.class);
+            if (uri != null) uris.add(uri);
+        } else {
+            ArrayList<Uri> list = IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri.class);
+            if (list != null) uris.addAll(list);
+        }
+
+        if (uris.isEmpty()) return;
+        ShareReceiverPlugin.deliver(this, uris);
+        // Evita reprocesar el mismo intent si la actividad se recrea.
+        intent.removeExtra(Intent.EXTRA_STREAM);
     }
 
     private void handleCallIntent(Intent intent) {
