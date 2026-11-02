@@ -54,6 +54,111 @@ const STICKER_COLORS: Record<string, { bg: string; text: string; border: string 
   promo: { bg: "#ec4899", text: "#ffffff", border: "#ffffff" },
 };
 
+const VIDEO_EXT_RE = /\.(mp4|m4v|mov|qt|webm|3gp|mkv|avi)$/i;
+
+function isVideoFile(file: File): boolean {
+  return file.type.startsWith("video/") || VIDEO_EXT_RE.test(file.name || "");
+}
+
+// Android a veces entrega el video con MIME vacío o genérico. Para la subida
+// normalizamos el tipo a uno admitido por el servidor (MP4/MOV/WebM); FFmpeg
+// detecta el formato real por el contenido.
+function normalizeVideoForUpload(file: File): File {
+  const allowed = ["video/mp4", "video/quicktime", "video/webm"];
+  const type = (file.type || "").trim().toLowerCase();
+  if (allowed.includes(type)) return file;
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  const mime =
+    ext === "mov" || ext === "qt" ? "video/quicktime" :
+    ext === "webm" ? "video/webm" :
+    "video/mp4";
+  return new File([file], file.name || `video.${ext || "mp4"}`, { type: mime });
+}
+
+function waitForVideoEvent(
+  video: HTMLVideoElement,
+  eventName: "loadedmetadata" | "seeked",
+  timeoutMs = 2500,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      video.removeEventListener(eventName, onOk);
+      video.removeEventListener("error", onError);
+      clearTimeout(timer);
+    };
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (ok) resolve();
+      else reject(new Error(`video ${eventName} failed`));
+    };
+    const onOk = () => finish(true);
+    const onError = () => finish(false);
+    const timer = window.setTimeout(() => finish(false), timeoutMs);
+    video.addEventListener(eventName, onOk, { once: true });
+    video.addEventListener("error", onError, { once: true });
+  });
+}
+
+// Genera una tira de miniaturas (data URLs) repartidas a lo largo del video.
+// Usa un <video> oculto para no interrumpir la reproducción del editor.
+async function generateVideoThumbnails(src: string, count = 8): Promise<string[]> {
+  const video = document.createElement("video");
+  video.src = src;
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.crossOrigin = "anonymous";
+
+  try {
+    if (video.readyState < 1) {
+      await waitForVideoEvent(video, "loadedmetadata", 4000);
+    }
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    if (duration <= 0) return [];
+
+    const width = 96;
+    const height = 54;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return [];
+
+    const thumbnails: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const time = count === 1 ? 0 : (duration * i) / (count - 1);
+      try {
+        video.currentTime = Math.min(Math.max(0, time), Math.max(0, duration - 0.05));
+        await waitForVideoEvent(video, "seeked", 2000);
+      } catch {
+        // Si un frame falla, se omite y se conserva el resto.
+      }
+      if (video.readyState < 2) continue;
+      const vw = video.videoWidth || width;
+      const vh = video.videoHeight || height;
+      const scale = Math.max(width / vw, height / vh);
+      const drawW = vw * scale;
+      const drawH = vh * scale;
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(video, (width - drawW) / 2, (height - drawH) / 2, drawW, drawH);
+      try {
+        thumbnails.push(canvas.toDataURL("image/jpeg", 0.6));
+      } catch {
+        return thumbnails;
+      }
+    }
+    return thumbnails;
+  } catch {
+    return [];
+  } finally {
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
 export default function MediaEditor({ 
   onPublishFlyer, 
   onGoToFeed,
@@ -116,13 +221,19 @@ export default function MediaEditor({
   const [currentTime, setCurrentTime] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
-  const [showTrim, setShowTrim] = useState(false);
+  const [trimThumbs, setTrimThumbs] = useState<string[]>([]);
+  const [thumbsLoading, setThumbsLoading] = useState(false);
+  const [activeTrimHandle, setActiveTrimHandle] = useState<"start" | "end" | null>(null);
+  const trimThumbsSourceRef = useRef<string | null>(null);
+  const [tapFeedback, setTapFeedback] = useState<"play" | "pause" | null>(null);
+  const tapFeedbackTimerRef = useRef<number | null>(null);
   const [musicLibrary, setMusicLibrary] = useState<MusicTrack[]>([]);
 
   // Ref holders
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasAreaRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const trimBarRef = useRef<HTMLDivElement | null>(null);
   const selectedVideoFileRef = useRef<File | null>(null);
   const videoObjectUrlRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -133,6 +244,10 @@ export default function MediaEditor({
       if (videoObjectUrlRef.current) {
         URL.revokeObjectURL(videoObjectUrlRef.current);
         videoObjectUrlRef.current = null;
+      }
+      if (tapFeedbackTimerRef.current) {
+        window.clearTimeout(tapFeedbackTimerRef.current);
+        tapFeedbackTimerRef.current = null;
       }
     };
   }, []);
@@ -188,7 +303,7 @@ export default function MediaEditor({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type.startsWith("video/")) {
+    if (isVideoFile(file)) {
       // Guardamos el archivo original para subirlo/recortarlo al publicar.
       selectedVideoFileRef.current = file;
       setEditorMode("video");
@@ -251,6 +366,19 @@ export default function MediaEditor({
     }
   };
 
+  const flashTapFeedback = (kind: "play" | "pause") => {
+    setTapFeedback(kind);
+    if (tapFeedbackTimerRef.current) window.clearTimeout(tapFeedbackTimerRef.current);
+    tapFeedbackTimerRef.current = window.setTimeout(() => setTapFeedback(null), 650);
+  };
+
+  const handleVideoTap = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    flashTapFeedback(video.paused ? "play" : "pause");
+    handleTogglePlay();
+  };
+
   const handleVideoLoadedMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -285,27 +413,67 @@ export default function MediaEditor({
     video.play().catch(() => {});
   };
 
-  const handleTrimStartChange = (value: number) => {
-    const video = videoRef.current;
+  const applyTrimStart = (value: number) => {
     const max = videoDuration > 0 ? videoDuration : value;
     const end = trimEnd > 0 ? trimEnd : max;
     const next = Math.min(Math.max(0, value), Math.max(0, end - 0.1));
     setTrimStart(next);
-    if (video && video.currentTime < next) {
-      video.currentTime = next;
-      setCurrentTime(next);
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      if (Math.abs(video.currentTime - next) > 0.05) video.currentTime = next;
     }
+    setCurrentTime(next);
   };
 
-  const handleTrimEndChange = (value: number) => {
+  const applyTrimEnd = (value: number) => {
     const max = videoDuration > 0 ? videoDuration : value;
     const next = Math.max(Math.min(value, max), trimStart + 0.1);
     setTrimEnd(next);
     const video = videoRef.current;
-    if (video && video.currentTime >= next) {
-      video.currentTime = trimStart;
-      setCurrentTime(trimStart);
+    if (video) {
+      video.pause();
+      if (Math.abs(video.currentTime - next) > 0.05) video.currentTime = next;
     }
+    setCurrentTime(next);
+  };
+
+  // Arrastre tipo WhatsApp: se toca una manija y se desliza sobre la barra.
+  const startTrimDrag = (handle: "start" | "end", e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const bar = trimBarRef.current;
+    if (!bar || videoDuration <= 0) return;
+    const rect = bar.getBoundingClientRect();
+    const timeFromClientX = (clientX: number) => {
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      return ratio * videoDuration;
+    };
+
+    setActiveTrimHandle(handle);
+
+    const video = videoRef.current;
+    if (video) {
+      video.pause();
+      const initial = handle === "start" ? trimStart : effectiveTrimEnd();
+      video.currentTime = initial;
+      setCurrentTime(initial);
+    }
+
+    const onMove = (ev: PointerEvent) => {
+      const time = timeFromClientX(ev.clientX);
+      if (handle === "start") applyTrimStart(time);
+      else applyTrimEnd(time);
+    };
+    const onUp = () => {
+      setActiveTrimHandle(null);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   const handleResetTrim = () => {
@@ -447,6 +615,37 @@ export default function MediaEditor({
     currentImageSource.startsWith("data:video") ||
     (editorMode === "video" && !currentImageSource.startsWith("data:image"));
 
+  // Si se cambia a una imagen, cerrar la herramienta de recorte.
+  useEffect(() => {
+    if (activeTool === "trim" && !isVideoMedia) setActiveTool(null);
+  }, [activeTool, isVideoMedia]);
+
+  // Genera el filmstrip de miniaturas una vez por video, al abrir Recorte.
+  useEffect(() => {
+    if (activeTool !== "trim" || !isVideoMedia || videoDuration <= 0) return;
+    if (!currentImageSource) return;
+    if (trimThumbsSourceRef.current === currentImageSource && trimThumbs.length > 0) return;
+
+    let cancelled = false;
+    setThumbsLoading(true);
+    generateVideoThumbnails(currentImageSource, 8)
+      .then((urls) => {
+        if (cancelled) return;
+        setTrimThumbs(urls);
+        if (urls.length > 0) trimThumbsSourceRef.current = currentImageSource;
+      })
+      .catch(() => {
+        if (!cancelled) setTrimThumbs([]);
+      })
+      .finally(() => {
+        if (!cancelled) setThumbsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTool, isVideoMedia, currentImageSource, videoDuration, trimThumbs.length]);
+
   // Publicación de flyer: evita doble submit / doble upload y muestra error reintentable
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -548,8 +747,24 @@ export default function MediaEditor({
 
   // Sube el video al servidor para recortarlo con FFmpeg y obtener una URL
   // remota. Solo aplica cuando el usuario eligió un archivo de video local.
-  const prepareVideoForPublish = async (): Promise<string | null> => {
-    const file = selectedVideoFileRef.current;
+  const getCurrentVideoFile = async (): Promise<File | null> => {
+    if (selectedVideoFileRef.current) return selectedVideoFileRef.current;
+    if (!currentImageSource || currentImageSource.startsWith("data:image")) return null;
+    try {
+      const res = await fetch(currentImageSource);
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      if (!blob.size) return null;
+      return new File([blob], `video-${Date.now()}.mp4`, {
+        type: blob.type || "video/mp4",
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const prepareVideoForPublish = async (fileOverride?: File): Promise<string | null> => {
+    const file = fileOverride ?? selectedVideoFileRef.current;
     if (!file) return null;
 
     const end = trimEnd > 0 ? trimEnd : videoDuration;
@@ -561,15 +776,17 @@ export default function MediaEditor({
       throw new Error("El recorte máximo es de 3 minutos.");
     }
 
+    const uploadFile = normalizeVideoForUpload(file);
     const form = new FormData();
-    form.append("video", file, file.name || "video.mp4");
+    form.append("video", uploadFile, uploadFile.name || "video.mp4");
     form.append("start", String(start));
     form.append("end", String(end));
 
     const res = await authUpload(apiUrl("/api/media/trim-video"), form);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data?.error || `No se pudo procesar el video (${res.status}).`);
+      const message = data?.error || `No se pudo procesar el video (${res.status}).`;
+      throw new Error(data?.detail ? `${message}: ${data.detail}` : message);
     }
     const data = await res.json().catch(() => ({}));
     if (!data?.url) throw new Error("El servidor no devolvió el video recortado.");
@@ -651,13 +868,36 @@ export default function MediaEditor({
     try {
       setIsSavingToDevice(true);
       setSaveMessage(null);
+
+      if (isVideoMedia) {
+        const trimmed =
+          trimStart > 0.05 || effectiveTrimEnd() < videoDuration - 0.05;
+        let videoUrl = currentImageSource;
+
+        if (trimmed) {
+          const file = await getCurrentVideoFile();
+          if (!file) throw new Error("No se pudo acceder al video para recortarlo.");
+          const uploaded = await prepareVideoForPublish(file);
+          if (!uploaded) throw new Error("No se pudo preparar el video recortado.");
+          videoUrl = uploaded;
+        }
+
+        await saveMediaToGalleryDirect(videoUrl, `wepa-video-${Date.now()}.mp4`);
+        setSaveMessage("Video guardado en tu galería (álbum RED ON) ✅");
+        return;
+      }
+
       const baked = await bakeEditedImage();
       const fileName = `redon-flyer-${Date.now()}.png`;
       await saveMediaToGalleryDirect(baked || currentImageSource, fileName);
       setSaveMessage("Guardada en tu galería (álbum RED ON) ✅");
     } catch (err) {
       console.error("[MediaEditor] Error al guardar en galería:", err);
-      setSaveMessage("No se pudo guardar en la galería. Intenta de nuevo.");
+      setSaveMessage(
+        err instanceof Error && err.message
+          ? err.message
+          : "No se pudo guardar en la galería. Intenta de nuevo.",
+      );
     } finally {
       setIsSavingToDevice(false);
       setTimeout(() => setSaveMessage(null), 4000);
@@ -668,6 +908,7 @@ export default function MediaEditor({
     { id: "presets", icon: ImageIcon, label: "Imagen" },
     { id: "sliders", icon: Sliders, label: "Ajustes" },
     { id: "text", icon: Type, label: "Texto" },
+    ...(isVideoMedia ? [{ id: "trim", icon: Scissors, label: "Recorte" }] : []),
     { id: "premium", icon: Award, label: "VIP" },
   ];
 
@@ -726,6 +967,7 @@ export default function MediaEditor({
               src={currentImageSource}
               autoPlay
               playsInline
+              onClick={handleVideoTap}
               onLoadedMetadata={handleVideoLoadedMetadata}
               onTimeUpdate={handleVideoTimeUpdate}
               onPlay={() => setIsVideoPlaying(true)}
@@ -742,6 +984,19 @@ export default function MediaEditor({
             />
           )}
         </div>
+
+        {/* Feedback visual al tocar el video (play/pausa) */}
+        {tapFeedback && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
+            <span className="w-16 h-16 rounded-full bg-black/55 backdrop-blur-md flex items-center justify-center shadow-2xl">
+              {tapFeedback === "play" ? (
+                <Play className="w-8 h-8 fill-white text-white ml-1" />
+              ) : (
+                <Pause className="w-8 h-8 fill-white text-white" />
+              )}
+            </span>
+          </div>
+        )}
 
         {/* Upload prompt overlay when no image is selected */}
         {!uploadedImage && (
@@ -945,95 +1200,6 @@ export default function MediaEditor({
             </div>
           )}
 
-          {/* Video scrubber + recorte */}
-          {isVideoMedia && (
-            <div className="mt-2 rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md">
-              <div className="flex items-center gap-2 px-2 py-1.5">
-                <button
-                  onClick={handleTogglePlay}
-                  className="h-6 w-6 rounded-full bg-teal-500 hover:bg-teal-400 text-white flex items-center justify-center cursor-pointer shrink-0"
-                >
-                  {isVideoPlaying ? (
-                    <Pause className="w-3 h-3 fill-white" />
-                  ) : (
-                    <Play className="w-3 h-3 fill-white ml-0.5" />
-                  )}
-                </button>
-
-                <div className="relative flex-1 h-1.5 bg-white/15 rounded-full overflow-hidden">
-                  {videoDuration > 0 && (
-                    <div
-                      className="absolute inset-y-0 bg-teal-500/30"
-                      style={{
-                        left: `${(trimStart / videoDuration) * 100}%`,
-                        width: `${((Math.max(trimStart, effectiveTrimEnd()) - trimStart) / videoDuration) * 100}%`,
-                      }}
-                    />
-                  )}
-                  <div
-                    className="absolute inset-y-0 left-0 bg-teal-400 rounded-full transition-all duration-100 ease-linear"
-                    style={{ width: `${videoDuration > 0 ? (currentTime / videoDuration) * 100 : 0}%` }}
-                  />
-                </div>
-
-                <span className="text-[8px] font-mono text-slate-300 tabular-nums shrink-0">
-                  {formatClock(currentTime)} / {formatClock(videoDuration)}
-                </span>
-
-                <button
-                  onClick={() => setShowTrim(v => !v)}
-                  title="Recortar video"
-                  className={`h-6 w-6 shrink-0 rounded-full flex items-center justify-center transition-all cursor-pointer ${
-                    showTrim ? "bg-teal-500 text-white" : "bg-white/10 text-slate-300 hover:bg-white/20"
-                  }`}
-                >
-                  <Scissors className="w-3 h-3" />
-                </button>
-              </div>
-
-              {showTrim && (
-                <div className="px-2 pb-2 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[8px] font-bold text-slate-400 w-9 shrink-0">Inicio</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={videoDuration > 0 ? videoDuration : 0}
-                      step={0.1}
-                      value={trimStart}
-                      onChange={(e) => handleTrimStartChange(Number(e.target.value))}
-                      className="flex-1 accent-teal-400 cursor-pointer"
-                    />
-                    <span className="text-[8px] font-mono text-teal-300 w-9 text-right shrink-0">
-                      {formatClock(trimStart)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[8px] font-bold text-slate-400 w-9 shrink-0">Fin</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={videoDuration > 0 ? videoDuration : 0}
-                      step={0.1}
-                      value={effectiveTrimEnd()}
-                      onChange={(e) => handleTrimEndChange(Number(e.target.value))}
-                      className="flex-1 accent-teal-400 cursor-pointer"
-                    />
-                    <span className="text-[8px] font-mono text-teal-300 w-9 text-right shrink-0">
-                      {formatClock(effectiveTrimEnd())}
-                    </span>
-                    <button
-                      onClick={handleResetTrim}
-                      title="Quitar recorte"
-                      className="w-6 h-6 shrink-0 rounded-full bg-white/10 text-slate-300 hover:bg-white/20 flex items-center justify-center cursor-pointer"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
@@ -1122,8 +1288,122 @@ export default function MediaEditor({
         />
       )}
 
+      {/* RECORTE DE VIDEO: barra con manijas arrastrables (herramienta inferior) */}
+      {activeTool === "trim" && isVideoMedia && (
+        <div className="bg-[#0c1617]/95 backdrop-blur-md border-t border-teal-950/40 shadow-2xl animate-fade-in px-3 pt-2 pb-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[9px] font-bold text-teal-400 uppercase tracking-wider">
+              Recorte de video
+            </span>
+            <button
+              onClick={() => setActiveTool(null)}
+              aria-label="Cerrar recorte"
+              className="text-slate-400 hover:text-white transition-colors cursor-pointer p-0.5"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <div ref={trimBarRef} className="relative h-9 mt-6 select-none touch-none">
+            <div className="absolute inset-0 rounded-xl overflow-hidden bg-gradient-to-r from-slate-700/70 via-slate-600/50 to-slate-700/70">
+              {/* Filmstrip de miniaturas */}
+              {trimThumbs.length > 0 ? (
+                <div className="absolute inset-0 flex">
+                  {trimThumbs.map((thumb, index) => (
+                    <img
+                      key={index}
+                      src={thumb}
+                      alt=""
+                      draggable={false}
+                      className="flex-1 min-w-0 h-full object-cover"
+                    />
+                  ))}
+                </div>
+              ) : thumbsLoading ? (
+                <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-slate-700/70 via-slate-500/50 to-slate-700/70" />
+              ) : null}
+
+              {/* Zonas fuera del recorte */}
+              <div
+                className="absolute inset-y-0 left-0 bg-black/60"
+                style={{ width: `${videoDuration > 0 ? (trimStart / videoDuration) * 100 : 0}%` }}
+              />
+              <div
+                className="absolute inset-y-0 right-0 bg-black/60"
+                style={{ width: `${videoDuration > 0 ? ((videoDuration - effectiveTrimEnd()) / videoDuration) * 100 : 0}%` }}
+              />
+              {/* Región seleccionada */}
+              <div
+                className="absolute inset-y-0 border-y-2 border-teal-400"
+                style={{
+                  left: `${videoDuration > 0 ? (trimStart / videoDuration) * 100 : 0}%`,
+                  width: `${videoDuration > 0 ? ((Math.max(trimStart, effectiveTrimEnd()) - trimStart) / videoDuration) * 100 : 0}%`,
+                }}
+              />
+              {/* Playhead */}
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-white/90 pointer-events-none"
+                style={{ left: `${videoDuration > 0 ? (currentTime / videoDuration) * 100 : 0}%` }}
+              />
+            </div>
+
+            {/* Burbuja con el tiempo de la manija activa */}
+            {activeTrimHandle && (
+              <div
+                className="absolute -top-6 z-10 -translate-x-1/2 px-1.5 py-0.5 rounded bg-black/85 border border-white/15 text-[8px] font-mono text-teal-300 shadow-lg pointer-events-none"
+                style={{
+                  left: `${videoDuration > 0 ? ((activeTrimHandle === "start" ? trimStart : effectiveTrimEnd()) / videoDuration) * 100 : 0}%`,
+                }}
+              >
+                {formatClock(activeTrimHandle === "start" ? trimStart : effectiveTrimEnd())}
+              </div>
+            )}
+
+            {/* Manija inicio */}
+            <div
+              onPointerDown={(e) => startTrimDrag("start", e)}
+              className="absolute top-0 bottom-0 w-6 -ml-3 flex items-center justify-center cursor-ew-resize touch-none"
+              style={{ left: `${videoDuration > 0 ? (trimStart / videoDuration) * 100 : 0}%` }}
+            >
+              <div className="w-2.5 h-8 rounded-sm bg-teal-400 shadow-lg flex items-center justify-center">
+                <span className="w-0.5 h-4 bg-teal-900/50 rounded" />
+              </div>
+            </div>
+
+            {/* Manija fin */}
+            <div
+              onPointerDown={(e) => startTrimDrag("end", e)}
+              className="absolute top-0 bottom-0 w-6 -ml-3 flex items-center justify-center cursor-ew-resize touch-none"
+              style={{ left: `${videoDuration > 0 ? (effectiveTrimEnd() / videoDuration) * 100 : 100}%` }}
+            >
+              <div className="w-2.5 h-8 rounded-sm bg-teal-400 shadow-lg flex items-center justify-center">
+                <span className="w-0.5 h-4 bg-teal-900/50 rounded" />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between mt-2">
+            <p className="text-[8px] text-slate-400">
+              Recorte:{" "}
+              <span className="font-mono text-teal-300">
+                {formatClock(trimStart)} → {formatClock(effectiveTrimEnd())}
+              </span>
+            </p>
+            <button
+              onClick={handleResetTrim}
+              className="h-6 px-2 rounded-lg bg-white/10 text-slate-300 hover:bg-white/20 text-[8px] font-bold flex items-center gap-1 cursor-pointer"
+            >
+              <X className="w-3 h-3" /> Quitar
+            </button>
+          </div>
+          <p className="text-center text-[7px] text-slate-500 mt-1">
+            Arrastra las manijas para elegir el inicio y el fin.
+          </p>
+        </div>
+      )}
+
       {/* BOTTOM SHEET (resto de herramientas) */}
-      {activeTool && activeTool !== "presets" && activeTool !== "sliders" && activeTool !== "text" && (
+      {activeTool && activeTool !== "presets" && activeTool !== "sliders" && activeTool !== "text" && activeTool !== "trim" && (
         <div className="bg-[#0c1617]/95 backdrop-blur-md border-t border-teal-950/40 flex flex-col shadow-2xl animate-fade-in">
           {/* Header */}
           <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 shrink-0">

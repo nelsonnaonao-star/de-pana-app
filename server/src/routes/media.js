@@ -170,7 +170,7 @@ router.post('/compress-video', (req, res) => {
             '-preset veryfast',
             '-crf 28',
             '-movflags +faststart',
-            '-vf', "scale='min(720,iw)':min'(720,ih)':force_original_aspect_ratio=decrease",
+            '-vf', "scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
           ])
           .on('end', resolve)
           .on('error', (ffmpegErr) => {
@@ -247,7 +247,8 @@ router.post('/trim-video', (req, res) => {
             '-preset veryfast',
             '-crf 28',
             '-movflags +faststart',
-            '-vf', "scale='min(720,iw)':min'(720,ih)':force_original_aspect_ratio=decrease",
+            '-pix_fmt', 'yuv420p',
+            '-vf', "scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
           ])
           .on('end', resolve)
           .on('error', reject)
@@ -258,7 +259,10 @@ router.post('/trim-video', (req, res) => {
       res.json({ url, start, end: start + clipDuration, duration: clipDuration });
     } catch (trimErr) {
       console.error('[MEDIA] trim-video error:', trimErr.message);
-      res.status(500).json({ error: 'Error al recortar el video' });
+      res.status(500).json({
+        error: 'Error al recortar el video',
+        detail: trimErr?.message || String(trimErr),
+      });
     } finally {
       await fs.unlink(inputPath).catch(() => {});
       await fs.unlink(outputPath).catch(() => {});
@@ -405,7 +409,7 @@ function uploadVideoPrivate(req, res) {
                 '-preset veryfast',
                 '-crf 28',
                 '-movflags +faststart',
-                '-vf', "scale='min(720,iw)':min'(720,ih)':force_original_aspect_ratio=decrease",
+                '-vf', "scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
               ])
               .on('end', resolve)
               .on('error', reject)
