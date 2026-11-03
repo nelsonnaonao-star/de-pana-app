@@ -19,3 +19,11 @@ Los links de chat se abren en WebView (no navegador externo). Restringir `allowN
 Refactorizar todos los handlers a `AppLauncher.openUrl()` antes de restringir `allowNavigation`.
 
 ### Estado: ⏸️ PENDIENTE — Riesgo aceptado hasta que se refactorizen handlers
+
+## Retomar 2026-11-03 — prioridades
+
+1. Verificar deploy del fix SSRF: `/api/link-preview` sin token debe dar `401` y producción debe correr el commit con el parche.
+2. Auditar políticas del bucket `chat-images` y aplicar la versión segura del SQL 07 (quitar solo SELECT, mantener INSERT/DELETE).
+3. Cerrar `/unmute` sin authz: permitir solo chats propios.
+4. Revisar RLS/triggers de escrituras restantes: `messages.sender_id`, `contacts`, `calls`.
+5. Evaluar advisories críticos restantes (`proxy-addr`, `shell-quote`); actualizar sin `--force`.
