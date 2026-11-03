@@ -37,3 +37,12 @@ server/audit*.json
 *.bak
 *.backup
 *.backup-*
+
+# Artefactos locales de diagnóstico
+log.txt
+test_fcm.json
+test_call_fcm.json
+debug-server.cjs
+check_tokens.mjs
+check_columns.mjs
+check_openapi.mjs
