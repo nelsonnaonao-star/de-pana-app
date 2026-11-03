@@ -1,0 +1,27 @@
+diff --git a/server/src/index.js b/server/src/index.js
+index 7ff9d6e..f5a2abf 100644
+--- a/server/src/index.js
++++ b/server/src/index.js
+@@ -58,7 +58,8 @@ async function main() {
+     staticOrigins.push(clientOrigin);
+   }
+ 
+-  const isProduction = process.env.NODE_ENV === 'production';
++  // Seguro por defecto: solo desarrollo/pruebas permiten CORS permisivo.
++  const isProduction = !['development', 'test'].includes(process.env.NODE_ENV || '');
+ 
+   app.use(cors({
+     origin: (origin, callback) => {
+diff --git a/server/src/routes/auth.js b/server/src/routes/auth.js
+index 5f924c2..24fed8c 100644
+--- a/server/src/routes/auth.js
++++ b/server/src/routes/auth.js
+@@ -452,7 +452,7 @@ router.post('/update-password', verifyLimiter, async (req, res) => {
+ 
+ // ─── Auto-confirm user (DEVELOPMENT ONLY) ─────────────────────────
+ router.post('/auto-confirm', profileLimiter, async (req, res) => {
+-  if (process.env.NODE_ENV === 'production') {
++  if (process.env.NODE_ENV !== 'development') {
+     return res.status(403).json({ error: 'Endpoint no disponible en producción' });
+   }
+   try {

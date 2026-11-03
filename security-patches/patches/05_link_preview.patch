@@ -1,0 +1,114 @@
+diff --git a/server/src/index.js b/server/src/index.js
+index 7ff9d6e..c7dbe2a 100644
+--- a/server/src/index.js
++++ b/server/src/index.js
+@@ -124,7 +124,7 @@ async function main() {
+   app.use('/api/auth', strictLimiter, authRoutes);
+   app.use('/api/rates', globalLimiter, ratesRoutes);
+   app.use('/api/turn', globalLimiter, authMiddleware, turnRoutes);
+-  app.use('/api/link-preview', globalLimiter, linkPreviewRoutes);
++  app.use('/api/link-preview', globalLimiter, authMiddleware, linkPreviewRoutes);
+ 
+   // FCM: webhook uses webhookLimiter (no JWT auth — Supabase server-to-server)
+   // FCM: register/send require JWT auth + globalLimiter
+diff --git a/server/src/routes/linkpreview.js b/server/src/routes/linkpreview.js
+index 39ee184..d657036 100644
+--- a/server/src/routes/linkpreview.js
++++ b/server/src/routes/linkpreview.js
+@@ -1,6 +1,7 @@
+ import { Router } from 'express';
+ import { URL } from 'url';
+ import { isIPv4 } from 'net';
++import { lookup } from 'node:dns/promises';
+ 
+ const router = Router();
+ 
+@@ -37,7 +38,11 @@ function isPrivateIP(hostname) {
+   if (/^172\.(1[6-9]|2\d|3[01])\./.test(cleaned)) return true;
+   if (/^192\.168\./.test(cleaned)) return true;
+   if (/^169\.254\./.test(cleaned)) return true;
+-  if (/^::ffff:127\.|^::ffff:10\.|^::ffff:172\.(1[6-9]|2\d|3[01])\.|^::ffff:192\.168\./.test(cleaned)) return true;
++  if (/^0\./.test(cleaned)) return true;
++  if (/^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(cleaned)) return true;
++  if (/^198\.(1[89])\./.test(cleaned)) return true;
++  if (/^(22[4-9]|23\d|24\d|25[0-5])\./.test(cleaned)) return true;
++  if (/^::ffff:127\.|^::ffff:10\.|^::ffff:172\.(1[6-9]|2\d|3[01])\.|^::ffff:192\.168\.|^::ffff:169\.254\.|^::ffff:0\./.test(cleaned)) return true;
+   if (/^fc00:/i.test(cleaned) || /^fd00:/i.test(cleaned)) return true;
+   if (/^fe80:/i.test(cleaned)) return true;
+   if (cleaned === '::' || cleaned === '0:0:0:0:0:0:0:0') return true;
+@@ -45,6 +50,18 @@ function isPrivateIP(hostname) {
+   return false;
+ }
+ 
++async function assertPublicHost(hostname) {
++  const host = String(hostname || '').replace(/^\[|\]$/g, '');
++  if (!host) throw new Error('SSRF blocked: empty host');
++  if (isPrivateIP(host)) throw new Error('SSRF blocked: private host');
++  if (isIPv4(host) || host.includes(':')) return;
++  const addresses = await lookup(host, { all: true, verbatim: true });
++  if (!addresses.length) throw new Error('SSRF blocked: unresolved host');
++  for (const entry of addresses) {
++    if (isPrivateIP(entry.address)) throw new Error('SSRF blocked: private DNS');
++  }
++}
++
+ async function fetchWithTimeout(url, timeoutMs = 5000) {
+   const controller = new AbortController();
+   const id = setTimeout(() => controller.abort(), timeoutMs);
+@@ -87,6 +104,7 @@ async function followRedirects(initialUrl, timeoutMs = 5000) {
+     if (isPrivateIP(redirectTarget.hostname)) {
+       throw new Error('SSRF blocked: redirect to private/internal host');
+     }
++    await assertPublicHost(redirectTarget.hostname);
+ 
+     currentUrl = redirectTarget.href;
+   }
+@@ -94,6 +112,24 @@ async function followRedirects(initialUrl, timeoutMs = 5000) {
+   return response;
+ }
+ 
++async function readTextLimited(response, maxBytes) {
++  if (!response.body) return '';
++  const reader = response.body.getReader();
++  const chunks = [];
++  let total = 0;
++  while (true) {
++    const { done, value } = await reader.read();
++    if (done) break;
++    total += value.byteLength;
++    if (total > maxBytes) {
++      await reader.cancel().catch(() => {});
++      break;
++    }
++    chunks.push(Buffer.from(value));
++  }
++  return Buffer.concat(chunks).toString('utf8');
++}
++
+ router.post('/', async (req, res) => {
+   const { url } = req.body;
+   if (!url || typeof url !== 'string') {
+@@ -115,6 +151,12 @@ router.post('/', async (req, res) => {
+     return res.status(400).json({ error: 'No se permiten URLs internas/privadas' });
+   }
+ 
++  try {
++    await assertPublicHost(parsed.hostname);
++  } catch {
++    return res.status(400).json({ error: 'No se permiten URLs internas/privadas' });
++  }
++
+   try {
+     const response = await followRedirects(url);
+     if (!response.ok) {
+@@ -126,8 +168,8 @@ router.post('/', async (req, res) => {
+       return res.json({ url, title: '', description: '', image: '' });
+     }
+ 
+-    const html = await response.text();
+-    const truncated = html.slice(0, 1024 * 1024);
++    const html = await readTextLimited(response, 1024 * 1024);
++    const truncated = html;
+ 
+     const title = extractMeta(truncated, ['og:title', 'twitter:title', 'title']) || '';
+     const description = extractMeta(truncated, ['og:description', 'twitter:description', 'description']) || '';

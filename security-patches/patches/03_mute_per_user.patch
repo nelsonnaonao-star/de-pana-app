@@ -1,0 +1,146 @@
+diff --git a/server/src/routes/groups.js b/server/src/routes/groups.js
+index 3ad6a02..acb9b0d 100644
+--- a/server/src/routes/groups.js
++++ b/server/src/routes/groups.js
+@@ -3,15 +3,35 @@ import { supabaseAdmin } from '../db.js';
+ 
+ const router = Router();
+ 
++async function isChatMember(chatId, userId) {
++  if (!chatId || !userId) return false;
++  const { data: chat } = await supabaseAdmin
++    .from('chats')
++    .select('id, profile_id, admin_id')
++    .eq('id', chatId)
++    .maybeSingle();
++  if (!chat) return false;
++  if (chat.profile_id === userId || chat.admin_id === userId) return true;
++  const { data: participant } = await supabaseAdmin
++    .from('chat_participants')
++    .select('profile_id')
++    .eq('chat_id', chatId)
++    .eq('profile_id', userId)
++    .maybeSingle();
++  return !!participant;
++}
++
+ // ─── Mute helpers ───────────────────────────────────────────────────
+ // Retorna true si el grupo está silenciado y la mute sigue activa
+ // (muted_until NULL = "Siempre" mientras active; si no, hasta la fecha).
+-export async function isGroupMuted(chatId) {
++export async function isGroupMuted(chatId, userId) {
++  if (!chatId || !userId) return false;
+   try {
+     const { data, error } = await supabaseAdmin
+       .from('chat_mutes')
+       .select('active, muted_until')
+       .eq('chat_id', chatId)
++      .eq('user_id', userId)
+       .maybeSingle();
+     if (error || !data) return false;
+     if (!data.active) return false;
+@@ -58,15 +78,20 @@ router.post('/mute', async (req, res) => {
+       ? null
+       : new Date(Date.now() + (hours[duration] || 24) * 3600 * 1000).toISOString();
+ 
++    if (!req.userId) {
++      return res.status(401).json({ ok: false, error: 'No autenticado' });
++    }
++
+     const { error } = await supabaseAdmin
+       .from('chat_mutes')
+       .upsert({
+         chat_id,
++        user_id: req.userId,
+         active: true,
+         muted_until,
+-        muted_by: req.userId || null,
++        muted_by: req.userId,
+         updated_at: new Date().toISOString(),
+-      }, { onConflict: 'chat_id' });
++      }, { onConflict: 'chat_id,user_id' });
+ 
+     if (error) {
+       console.error('[GROUPS] mute upsert error:', error);
+@@ -89,13 +114,18 @@ router.post('/unmute', async (req, res) => {
+       return res.status(400).json({ ok: false, error: 'chat_id requerido' });
+     }
+ 
++    if (!(await isChatMember(chat_id, req.userId))) {
++      return res.status(403).json({ ok: false, error: 'No eres miembro de este chat' });
++    }
++
+     const { error } = await supabaseAdmin
+       .from('chat_mutes')
+       .upsert({
+         chat_id,
++        user_id: req.userId,
+         active: false,
+         updated_at: new Date().toISOString(),
+-      }, { onConflict: 'chat_id' });
++      }, { onConflict: 'chat_id,user_id' });
+ 
+     if (error) {
+       console.error('[GROUPS] unmute upsert error:', error);
+@@ -114,10 +144,14 @@ router.post('/unmute', async (req, res) => {
+ router.get('/mute/:chat_id', async (req, res) => {
+   try {
+     const { chat_id } = req.params;
++    if (!(await isChatMember(chat_id, req.userId))) {
++      return res.status(403).json({ ok: false, error: 'No eres miembro de este chat' });
++    }
+     const { data, error } = await supabaseAdmin
+       .from('chat_mutes')
+       .select('active, muted_until')
+       .eq('chat_id', chat_id)
++      .eq('user_id', req.userId)
+       .maybeSingle();
+     if (error) {
+       return res.status(500).json({ ok: false, error: 'Error interno del servidor' });
+diff --git a/server/src/routes/messages.js b/server/src/routes/messages.js
+index 1465729..1bec900 100644
+--- a/server/src/routes/messages.js
++++ b/server/src/routes/messages.js
+@@ -64,9 +64,6 @@ async function sendPushToChat(chatId, senderId, senderName, senderAvatar, text)
+       .maybeSingle();
+     if (!chat) return;
+ 
+-    // Silencio de grupo: si el grupo está silenciado, no se envía push a nadie.
+-    if (chat.is_group && (await isGroupMuted(chatId))) return;
+-
+     let receiverIds = [];
+     if (chat.is_group) {
+       const { data: participants } = await supabaseAdmin
+@@ -81,6 +78,8 @@ async function sendPushToChat(chatId, senderId, senderName, senderAvatar, text)
+     }
+ 
+     for (const rid of receiverIds) {
++      if (chat.is_group && (await isGroupMuted(chatId, rid))) continue;
++
+       const { data: tokens } = await supabaseAdmin
+         .from('push_tokens')
+         .select('token, device')
+diff --git a/server/src/routes/fcm.js b/server/src/routes/fcm.js
+index 6da4711..ef31ce4 100644
+--- a/server/src/routes/fcm.js
++++ b/server/src/routes/fcm.js
+@@ -360,11 +360,6 @@ router.post('/webhook', async (req, res) => {
+       const isGroup = chat?.is_group;
+       const chatName = chat?.name || 'RED ON';
+ 
+-      // Si el grupo está silenciado, no se envía push a ningún participante.
+-      if (isGroup && (await isGroupMuted(chat_id))) {
+-        return res.json({ ok: true, skipped: 'group muted' });
+-      }
+-
+       let receiverIds = [];
+       if (isGroup) {
+         const { data: participants } = await supabase
+@@ -381,6 +376,7 @@ router.post('/webhook', async (req, res) => {
+       const body = showPreview ? (text || 'Nuevo mensaje') : 'Nuevo mensaje';
+ 
+       for (const rid of receiverIds) {
++        if (isGroup && (await isGroupMuted(chat_id, rid))) continue;
+         try {
+           const { data: blockCheck } = await supabase
+             .from('blocks')

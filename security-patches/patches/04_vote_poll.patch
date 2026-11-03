@@ -1,0 +1,122 @@
+diff --git a/server/src/routes/messages.js b/server/src/routes/messages.js
+index 1465729..b724d92 100644
+--- a/server/src/routes/messages.js
++++ b/server/src/routes/messages.js
+@@ -738,30 +738,15 @@ router.post('/ephemeral-setting', async (req, res) => {
+ // ─── Poll vote (via server to enforce chat membership) ────────
+ router.post('/vote-poll', async (req, res) => {
+   try {
+-    const { message_id, poll_options } = req.body;
++    const { message_id, option_id } = req.body;
+ 
+-    if (!message_id || !poll_options) {
+-      return res.status(400).json({ error: 'message_id y poll_options requeridos' });
++    if (!message_id || !option_id || typeof option_id !== 'string' || option_id.length > 100) {
++      return res.status(400).json({ error: 'message_id y option_id requeridos' });
+     }
+ 
+-    // Validate poll_options is a valid JSON array string or array
+-    let parsed;
+-    if (typeof poll_options === 'string') {
+-      try { parsed = JSON.parse(poll_options); } catch {
+-        return res.status(400).json({ error: 'poll_options JSON inválido' });
+-      }
+-    } else {
+-      parsed = poll_options;
+-    }
+-
+-    if (!Array.isArray(parsed)) {
+-      return res.status(400).json({ error: 'poll_options debe ser un array' });
+-    }
+-
+-    // Fetch message to verify it exists and user is chat member
+     const { data: msg, error: fetchError } = await supabaseAdmin
+       .from('messages')
+-      .select('id, chat_id, type')
++      .select('id, chat_id, type, poll_options')
+       .eq('id', message_id)
+       .single();
+ 
+@@ -773,20 +758,48 @@ router.post('/vote-poll', async (req, res) => {
+       return res.status(400).json({ error: 'El mensaje no es una encuesta' });
+     }
+ 
+-    // Verify user is chat member
+     if (!(await isChatMember(msg.chat_id, req.userId))) {
+       return res.status(403).json({ error: 'No eres miembro de este chat' });
+     }
+ 
+-    // Update poll_options via service_role (bypasses RLS triggers)
++    let options;
++    try {
++      options = typeof msg.poll_options === 'string' ? JSON.parse(msg.poll_options) : msg.poll_options;
++    } catch {
++      return res.status(500).json({ error: 'Encuesta inválida' });
++    }
++    if (!Array.isArray(options)) {
++      return res.status(500).json({ error: 'Encuesta inválida' });
++    }
++
++    const target = options.find((o) => o && o.id === option_id);
++    if (!target) {
++      return res.status(400).json({ error: 'Opción no encontrada' });
++    }
++
++    const updated = options.map((o) => {
++      const votedUsers = Array.isArray(o.votedUsers) ? o.votedUsers : [];
++      const hadVote = votedUsers.includes(req.userId);
++      const shouldVote = o.id === option_id ? !hadVote : false;
++      const nextVotedUsers = shouldVote
++        ? [...votedUsers.filter((u) => u !== req.userId), req.userId]
++        : votedUsers.filter((u) => u !== req.userId);
++      const delta = (shouldVote ? 1 : 0) - (hadVote ? 1 : 0);
++      return {
++        ...o,
++        votes: Math.max(0, (Number(o.votes) || 0) + delta),
++        votedUsers: nextVotedUsers,
++      };
++    });
++
+     const { error: updateError } = await supabaseAdmin
+       .from('messages')
+-      .update({ poll_options: JSON.stringify(parsed) })
++      .update({ poll_options: JSON.stringify(updated) })
+       .eq('id', message_id);
+ 
+     if (updateError) throw updateError;
+ 
+-    res.json({ success: true });
++    res.json({ success: true, poll_options: updated });
+   } catch (err) {
+     console.error('[MESSAGES] vote-poll error:', err);
+     res.status(500).json({ error: 'Error interno del servidor' });
+diff --git a/src/services/messages.ts b/src/services/messages.ts
+index 4a2dd4c..5af956b 100644
+--- a/src/services/messages.ts
++++ b/src/services/messages.ts
+@@ -290,10 +290,10 @@ export async function setEphemeralTimer(chatId: string, timer: number) {
+   return res.json();
+ }
+ 
+-export async function votePoll(messageId: string, pollOptions: any[]) {
++export async function votePoll(messageId: string, optionId: string) {
+   const res = await authFetch(apiUrl("/api/messages/vote-poll"), {
+     method: "POST",
+-    body: JSON.stringify({ message_id: messageId, poll_options: pollOptions }),
++    body: JSON.stringify({ message_id: messageId, option_id: optionId }),
+   });
+   if (!res.ok) {
+     const err = await res.json().catch(() => ({ error: res.statusText }));
+diff --git a/src/hooks/chat/useMessageActions.ts b/src/hooks/chat/useMessageActions.ts
+index d178359..da802df 100644
+--- a/src/hooks/chat/useMessageActions.ts
++++ b/src/hooks/chat/useMessageActions.ts
+@@ -869,7 +869,7 @@ pendingSendIdsRef.current.add(tempId);
+     });
+ 
+     if (updatedPollOptions) {
+-      votePoll(messageId, updatedPollOptions).catch(err => console.error("[ChatRoom] update poll options failed:", err));
++      votePoll(messageId, optionId).catch(err => console.error("[ChatRoom] update poll options failed:", err));
+     }
+   };
+ 

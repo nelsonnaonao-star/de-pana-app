@@ -1,0 +1,106 @@
+diff --git a/server/src/routes/media.js b/server/src/routes/media.js
+index c7b4613..4e5908b 100644
+--- a/server/src/routes/media.js
++++ b/server/src/routes/media.js
+@@ -118,6 +118,7 @@ function getOutputPath() {
+   return path.join(__dirname, '..', '..', 'uploads', `compressed-${Date.now()}-${Math.random().toString(36).slice(2)}.mp4`);
+ }
+ 
++// LEGACY (sin uso): la subida pública de chat ya no usa chat-images.
+ async function uploadBufferToSupabase(buffer, mimeType, ext = 'bin') {
+   if (!supabaseAdmin) throw new Error('Supabase no configurado');
+ 
+@@ -134,84 +135,26 @@ async function uploadBufferToSupabase(buffer, mimeType, ext = 'bin') {
+   return data.publicUrl;
+ }
+ 
+-router.post('/compress-video', (req, res) => {
+-  uploadVideo.single('video')(req, res, async (err) => {
+-    if (err) {
+-      return res.status(400).json({ error: err.message });
+-    }
+-
+-    if (!req.file) {
+-      return res.status(400).json({ error: 'No se recibió ningún video' });
+-    }
+-
+-    const inputPath = req.file.path;
+-    const outputPath = getOutputPath();
+-    const originalSize = req.file.size;
+-
+-    if (originalSize < 2 * 1024 * 1024) {
+-      try {
+-        const origExt = req.file.originalname.split('.').pop() || 'mp4';
+-        const url = await uploadToSupabase(inputPath, req.file.mimetype, origExt);
+-        await fs.unlink(inputPath).catch(() => {});
+-        return res.json({ url, compressed: false, originalSize, compressedSize: originalSize });
+-      } catch (uploadErr) {
+-        await fs.unlink(inputPath).catch(() => {});
+-        return res.status(500).json({ error: 'Error al subir el video' });
+-      }
+-    }
+-
+-    try {
+-      await new Promise((resolve, reject) => {
+-        ffmpeg(inputPath)
+-          .videoCodec('libx264')
+-          .audioCodec('aac')
+-          .audioBitrate('128k')
+-          .outputOptions([
+-            '-preset veryfast',
+-            '-crf 28',
+-            '-movflags +faststart',
+-            '-vf', "scale='min(720,iw)':min'(720,ih)':force_original_aspect_ratio=decrease",
+-          ])
+-          .on('end', resolve)
+-          .on('error', (ffmpegErr) => {
+-            reject(ffmpegErr);
+-          })
+-          .save(outputPath);
+-      });
+-
+-      const compressedSize = (await fs.stat(outputPath)).size;
+-      const url = await uploadToSupabase(outputPath, 'video/mp4');
+-      await fs.unlink(inputPath).catch(() => {});
+-      await fs.unlink(outputPath).catch(() => {});
+-
+-      res.json({ url, compressed: true, originalSize, compressedSize });
+-    } catch (compressErr) {
+-      try {
+-        const origExt = req.file.originalname.split('.').pop() || 'mp4';
+-        const url = await uploadToSupabase(inputPath, req.file.mimetype, origExt);
+-        await fs.unlink(inputPath).catch(() => {});
+-        return res.json({ url, compressed: false, originalSize, compressedSize: originalSize });
+-      } catch (uploadErr) {
+-        await fs.unlink(inputPath).catch(() => {});
+-        return res.status(500).json({ error: 'Error al comprimir y subir el video' });
+-      }
+-    }
+-  });
++router.post('/compress-video', (req, res, next) => requireChatMembership(req, res, next), (req, res) => {
++  uploadVideoPrivate(req, res);
+ });
+ 
+-router.post('/upload', uploadAny.single('file'), async (req, res) => {
++router.post('/upload', (req, res, next) => requireChatMembership(req, res, next), uploadAny.single('file'), async (req, res) => {
+   try {
+     if (!req.file) {
+       return res.status(400).json({ error: 'No se recibió ningún archivo' });
+     }
+-    const ext = req.file.originalname.split('.').pop() || 'bin';
+-    const url = await uploadBufferToSupabase(req.file.buffer, req.file.mimetype, ext);
+-    res.json({ url });
++    const ext = extForMime(req.file.mimetype);
++    const objectPath = privateObjectPath(req.chatId, ext);
++    const { url, path: storedPath } = await uploadPrivateBufferToSupabase(req.file.buffer, req.file.mimetype, objectPath);
++    res.json({ url, bucket: PRIVATE_BUCKET, path: storedPath });
+   } catch (err) {
++    console.error('[MEDIA] upload error:', err.message);
+     res.status(500).json({ error: 'Error al subir el archivo' });
+   }
+ });
+ 
++// LEGACY (sin uso): los endpoints públicos ya no escriben en chat-images.
+ async function uploadToSupabase(filePath, mimeType, ext = 'mp4') {
+   if (!supabaseAdmin) throw new Error('Supabase no configurado');
+ 

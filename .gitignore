@@ -25,6 +25,7 @@ android/key.properties
 # Logs/backups locales que no deben versionarse
 android/build_log.txt
 *.patch
+!security-patches/patches/*.patch
 
 supabase/.temp/
 

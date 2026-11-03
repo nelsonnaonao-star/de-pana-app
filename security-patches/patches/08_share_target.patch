@@ -1,0 +1,429 @@
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index 52fbc4f..d84ab29 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -40,6 +40,16 @@
+                 <action android:name="OPEN_APP" />
+                 <category android:name="android.intent.category.DEFAULT" />
+             </intent-filter>
++            <intent-filter>
++                <action android:name="android.intent.action.SEND" />
++                <category android:name="android.intent.category.DEFAULT" />
++                <data android:mimeType="image/*" />
++            </intent-filter>
++            <intent-filter>
++                <action android:name="android.intent.action.SEND_MULTIPLE" />
++                <category android:name="android.intent.category.DEFAULT" />
++                <data android:mimeType="image/*" />
++            </intent-filter>
+         </activity>
+ 
+         <activity
+diff --git a/android/app/src/main/java/com/redon/app/MainActivity.java b/android/app/src/main/java/com/redon/app/MainActivity.java
+index 47b9144..fafa9dd 100644
+--- a/android/app/src/main/java/com/redon/app/MainActivity.java
++++ b/android/app/src/main/java/com/redon/app/MainActivity.java
+@@ -17,9 +17,12 @@ import android.view.WindowManager;
+ import android.webkit.WebView;
+ import androidx.core.app.ActivityCompat;
+ import androidx.core.app.NotificationManagerCompat;
++import androidx.core.content.IntentCompat;
+ import androidx.core.splashscreen.SplashScreen;
+ import com.getcapacitor.BridgeActivity;
+ 
++import java.util.ArrayList;
++
+ public class MainActivity extends BridgeActivity {
+ 
+     private static final String TAG = "MainActivity";
+@@ -36,6 +39,7 @@ public class MainActivity extends BridgeActivity {
+     protected void onCreate(Bundle savedInstanceState) {
+         SplashScreen.installSplashScreen(this);
+         registerPlugin(AppUpdatePlugin.class);
++        registerPlugin(ShareReceiverPlugin.class);
+         super.onCreate(savedInstanceState);
+         if (BuildConfig.DEBUG) {
+             WebView.setWebContentsDebuggingEnabled(true);
+@@ -45,6 +49,7 @@ public class MainActivity extends BridgeActivity {
+         requestNotificationPermission();
+         requestFullScreenIntentPermission();
+         handleCallIntent(getIntent());
++        handleShareIntent(getIntent());
+     }
+ 
+     @Override
+@@ -61,6 +66,27 @@ public class MainActivity extends BridgeActivity {
+         // notificación entran por aquí y no por onCreate).
+         setIntent(intent);
+         handleCallIntent(intent);
++        handleShareIntent(intent);
++    }
++
++    private void handleShareIntent(Intent intent) {
++        if (intent == null) return;
++        String action = intent.getAction();
++        if (!Intent.ACTION_SEND.equals(action) && !Intent.ACTION_SEND_MULTIPLE.equals(action)) return;
++
++        ArrayList<Uri> uris = new ArrayList<>();
++        if (Intent.ACTION_SEND.equals(action)) {
++            Uri uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri.class);
++            if (uri != null) uris.add(uri);
++        } else {
++            ArrayList<Uri> list = IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri.class);
++            if (list != null) uris.addAll(list);
++        }
++
++        if (uris.isEmpty()) return;
++        ShareReceiverPlugin.deliver(this, uris);
++        // Evita reprocesar el mismo intent si la actividad se recrea.
++        intent.removeExtra(Intent.EXTRA_STREAM);
+     }
+ 
+     private void handleCallIntent(Intent intent) {
+diff --git a/android/app/src/main/java/com/redon/app/ShareReceiverPlugin.java b/android/app/src/main/java/com/redon/app/ShareReceiverPlugin.java
+new file mode 100644
+index 0000000..70d9f4e
+--- /dev/null
++++ b/android/app/src/main/java/com/redon/app/ShareReceiverPlugin.java
+@@ -0,0 +1,215 @@
++package com.redon.app;
++
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import android.util.Log;
++import android.webkit.MimeTypeMap;
++
++import com.getcapacitor.JSArray;
++import com.getcapacitor.JSObject;
++import com.getcapacitor.Plugin;
++import com.getcapacitor.PluginCall;
++import com.getcapacitor.PluginMethod;
++import com.getcapacitor.annotation.CapacitorPlugin;
++
++import org.json.JSONArray;
++
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.UUID;
++
++/**
++ * Recibe imágenes compartidas desde el menú "Compartir" de Android.
++ *
++ * Flujo:
++ *  1. MainActivity recibe ACTION_SEND / ACTION_SEND_MULTIPLE.
++ *  2. MainActivity llama a ShareReceiverPlugin.deliver(context, uris).
++ *  3. El plugin copia cada content:// a cache/shared/ (el WebView no lee
++ *     content:// directamente).
++ *  4. Persiste las rutas en SharedPreferences (arranque en frío) y notifica
++ *     a JS el evento "shareReceived" con { paths: string[] }.
++ *  5. JS también puede llamar a getPendingShare() al montar para consumir
++ *     las rutas pendientes.
++ *
++ * Seguridad:
++ *  - Copia inmediata mientras el permiso temporal del intent está vigente.
++ *  - Nombre generado por la app; nunca se usa el nombre original.
++ *  - Extensión derivada del MIME y saneada.
++ *  - Límite de 50 MB por archivo.
++ */
++@CapacitorPlugin(name = "ShareReceiver")
++public class ShareReceiverPlugin extends Plugin {
++
++    private static final String TAG = "ShareReceiver";
++    private static final String PREFS = "CapacitorStorage";
++    private static final String PENDING_KEY = "redon_pending_share";
++    private static final long MAX_BYTES = 50L * 1024L * 1024L;
++
++    private static ShareReceiverPlugin instance;
++
++    @Override
++    public void load() {
++        instance = this;
++    }
++
++    @Override
++    protected void handleOnDestroy() {
++        if (instance == this) instance = null;
++        super.handleOnDestroy();
++    }
++
++    /** Devuelve y limpia las rutas pendientes (respaldo de arranque en frío). */
++    @PluginMethod
++    public void getPendingShare(PluginCall call) {
++        List<String> paths = readAndClearPending(getContext());
++        JSObject result = new JSObject();
++        result.put("paths", new JSArray(paths));
++        call.resolve(result);
++    }
++
++    /** Llamado desde MainActivity con los URIs del intent. */
++    public static void deliver(Context context, List<Uri> uris) {
++        List<String> paths = new ArrayList<>();
++        for (Uri uri : uris) {
++            String path = copyToCache(context, uri);
++            if (path != null) paths.add(path);
++        }
++        if (paths.isEmpty()) return;
++
++        persistPending(context, paths);
++
++        ShareReceiverPlugin plugin = instance;
++        if (plugin == null || plugin.getActivity() == null) return;
++
++        JSObject data = new JSObject();
++        data.put("paths", new JSArray(paths));
++        plugin.getActivity().runOnUiThread(() -> {
++            try {
++                plugin.notifyListeners("shareReceived", data, true);
++            } catch (Exception e) {
++                Log.e(TAG, "No se pudo notificar a JS", e);
++            }
++        });
++    }
++
++    private static String copyToCache(Context context, Uri uri) {
++        if (uri == null) return null;
++
++        InputStream in = null;
++        FileOutputStream out = null;
++        try {
++            String mime = context.getContentResolver().getType(uri);
++            String ext = extensionForMime(mime);
++
++            File dir = new File(context.getCacheDir(), "shared");
++            if (!dir.exists() && !dir.mkdirs()) return null;
++            cleanupOldFiles(dir);
++
++            File file = new File(dir, "share-" + System.currentTimeMillis() + "-" + UUID.randomUUID() + "." + ext);
++            in = context.getContentResolver().openInputStream(uri);
++            if (in == null) return null;
++
++            out = new FileOutputStream(file);
++            byte[] buffer = new byte[8192];
++            long total = 0;
++            int read;
++            while ((read = in.read(buffer)) != -1) {
++                total += read;
++                if (total > MAX_BYTES) {
++                    throw new IOException("Imagen compartida demasiado grande");
++                }
++                out.write(buffer, 0, read);
++            }
++            out.flush();
++            return file.getAbsolutePath();
++        } catch (Exception e) {
++            Log.e(TAG, "No se pudo copiar la imagen compartida", e);
++            return null;
++        } finally {
++            try {
++                if (in != null) in.close();
++            } catch (Exception ignored) {}
++            try {
++                if (out != null) out.close();
++            } catch (Exception ignored) {}
++        }
++    }
++
++    private static String extensionForMime(String mime) {
++        if (mime != null) {
++            switch (mime) {
++                case "image/jpeg": return "jpg";
++                case "image/png": return "png";
++                case "image/webp": return "webp";
++                case "image/gif": return "gif";
++                case "image/heic": return "heic";
++                case "image/heif": return "heif";
++                default: break;
++            }
++            String fromMap = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime);
++            if (fromMap != null && fromMap.matches("[a-zA-Z0-9]{1,8}")) {
++                return fromMap.toLowerCase();
++            }
++        }
++        return "bin";
++    }
++
++    private static void cleanupOldFiles(File dir) {
++        File[] files = dir.listFiles();
++        if (files == null) return;
++        long cutoff = System.currentTimeMillis() - 24L * 60L * 60L * 1000L;
++        for (File file : files) {
++            if (file.isFile() && file.lastModified() < cutoff) {
++                //noinspection ResultOfMethodCallIgnored
++                file.delete();
++            }
++        }
++    }
++
++    private static void persistPending(Context context, List<String> paths) {
++        try {
++            SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++            JSONArray current;
++            try {
++                current = new JSONArray(prefs.getString(PENDING_KEY, "[]"));
++            } catch (Exception e) {
++                current = new JSONArray();
++            }
++            for (String path : paths) {
++                boolean exists = false;
++                for (int i = 0; i < current.length(); i++) {
++                    if (path.equals(current.optString(i))) {
++                        exists = true;
++                        break;
++                    }
++                }
++                if (!exists) current.put(path);
++            }
++            prefs.edit().putString(PENDING_KEY, current.toString()).apply();
++        } catch (Exception e) {
++            Log.e(TAG, "No se pudo persistir el share pendiente", e);
++        }
++    }
++
++    private static List<String> readAndClearPending(Context context) {
++        List<String> result = new ArrayList<>();
++        try {
++            SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++            JSONArray arr = new JSONArray(prefs.getString(PENDING_KEY, "[]"));
++            for (int i = 0; i < arr.length(); i++) {
++                String path = arr.optString(i, null);
++                if (path != null && !path.isEmpty()) result.add(path);
++            }
++            prefs.edit().remove(PENDING_KEY).apply();
++        } catch (Exception e) {
++            Log.e(TAG, "No se pudo leer el share pendiente", e);
++        }
++        return result;
++    }
++}
+diff --git a/src/hooks/useSharedImages.ts b/src/hooks/useSharedImages.ts
+new file mode 100644
+index 0000000..e5d2027
+--- /dev/null
++++ b/src/hooks/useSharedImages.ts
+@@ -0,0 +1,47 @@
++import { useEffect, useState } from "react";
++import { initShareReceiver, type SharedImage } from "../services/shareReceiver";
++
++/**
++ * Hook de ejemplo para recibir imágenes compartidas desde Android.
++ *
++ * Uso:
++ *   const { images, clear } = useSharedImages();
++ *   // images[0].path -> ruta absoluta en caché
++ *   // images[0].url  -> URL para <img src={images[0].url} />
++ *
++ * Para subir la imagen:
++ *   const blob = await fetch(images[0].url).then((r) => r.blob());
++ */
++export function useSharedImages() {
++  const [images, setImages] = useState<SharedImage[]>([]);
++
++  useEffect(() => {
++    let disposed = false;
++    let cleanup: (() => void) | undefined;
++
++    initShareReceiver((incoming) => {
++      if (disposed || incoming.length === 0) return;
++      setImages((prev) => [...prev, ...incoming]);
++    })
++      .then((fn) => {
++        if (disposed) {
++          fn();
++        } else {
++          cleanup = fn;
++        }
++      })
++      .catch(() => {
++        // En web o si el plugin no está disponible, no hay nada que hacer.
++      });
++
++    return () => {
++      disposed = true;
++      cleanup?.();
++    };
++  }, []);
++
++  return {
++    images,
++    clear: () => setImages([]),
++  };
++}
+diff --git a/src/services/shareReceiver.ts b/src/services/shareReceiver.ts
+new file mode 100644
+index 0000000..bcf30ea
+--- /dev/null
++++ b/src/services/shareReceiver.ts
+@@ -0,0 +1,67 @@
++import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
++
++/**
++ * Plugin nativo ShareReceiver (android/app/src/main/java/com/redon/app/ShareReceiverPlugin.java).
++ * Recibe rutas absolutas de archivos ya copiados a la caché privada de la app.
++ */
++export interface ShareReceiverPlugin {
++  getPendingShare(): Promise<{ paths: string[] }>;
++  addListener(
++    eventName: "shareReceived",
++    listener: (data: { paths: string[] }) => void,
++  ): Promise<PluginListenerHandle>;
++}
++
++const ShareReceiver = registerPlugin<ShareReceiverPlugin>("ShareReceiver");
++
++export interface SharedImage {
++  /** Ruta absoluta en la caché privada de la app. */
++  path: string;
++  /** URL utilizable por el WebView (<img src>, fetch, etc.). */
++  url: string;
++}
++
++const seenPaths = new Set<string>();
++
++function toSharedImages(paths: unknown): SharedImage[] {
++  if (!Array.isArray(paths)) return [];
++  const fresh: SharedImage[] = [];
++  for (const value of paths) {
++    if (typeof value !== "string" || value.length === 0 || seenPaths.has(value)) continue;
++    seenPaths.add(value);
++    fresh.push({ path: value, url: Capacitor.convertFileSrc(value) });
++  }
++  return fresh;
++}
++
++/**
++ * Escucha imágenes compartidas desde Android.
++ *
++ * - En web/dev no hace nada.
++ * - Al montar consume las pendientes (arranque en frío).
++ * - Deduplica rutas para que el evento y getPendingShare no procesen dos veces.
++ *
++ * Devuelve una función para quitar el listener.
++ */
++export async function initShareReceiver(
++  onImages: (images: SharedImage[]) => void,
++): Promise<() => void> {
++  if (!Capacitor.isNativePlatform()) return () => {};
++
++  const handle = await ShareReceiver.addListener("shareReceived", (data) => {
++    const images = toSharedImages(data?.paths);
++    if (images.length > 0) onImages(images);
++  });
++
++  try {
++    const pending = await ShareReceiver.getPendingShare();
++    const images = toSharedImages(pending?.paths);
++    if (images.length > 0) onImages(images);
++  } catch {
++    // Sin pendientes: es normal.
++  }
++
++  return () => {
++    void handle.remove();
++  };
++}
