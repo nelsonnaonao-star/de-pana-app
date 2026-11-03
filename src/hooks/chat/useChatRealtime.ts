@@ -35,6 +35,8 @@ export function useChatRealtime(
   const typingIndicatorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesRetryRef = useRef(0);
   const typingRetryRef = useRef(0);
+  const messagesRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onMessageEventRef = useRef(onMessageEvent);
   onMessageEventRef.current = onMessageEvent;
@@ -84,6 +86,11 @@ export function useChatRealtime(
       channel.subscribe((status: string) => {
         console.log('[REALTIME] channel subscribe status:', status, 'for chat.id:', chatId);
         if (status === 'SUBSCRIBED') {
+          messagesRetryRef.current = 0;
+          if (messagesRetryTimerRef.current) {
+            clearTimeout(messagesRetryTimerRef.current);
+            messagesRetryTimerRef.current = null;
+          }
           messagesChannelRef.current = channel;
           if (firstSubscribeDone || lastSyncTimestampRef.current) {
             firstSubscribeDone = true;
@@ -97,7 +104,11 @@ export function useChatRealtime(
           messagesRetryRef.current++;
           const delay = retryDelay(messagesRetryRef.current);
           console.log(`[REALTIME] messages channel retry ${messagesRetryRef.current} in ${delay}ms`);
-          setTimeout(setup, delay);
+          if (messagesRetryTimerRef.current) clearTimeout(messagesRetryTimerRef.current);
+          messagesRetryTimerRef.current = setTimeout(() => {
+            messagesRetryTimerRef.current = null;
+            setup();
+          }, delay);
         }
       });
     };
@@ -107,6 +118,10 @@ export function useChatRealtime(
     return () => {
       cancelled = true;
       messagesRetryRef.current = 0;
+      if (messagesRetryTimerRef.current) {
+        clearTimeout(messagesRetryTimerRef.current);
+        messagesRetryTimerRef.current = null;
+      }
       if (messagesChannelRef.current) {
         supabase.removeChannel(messagesChannelRef.current);
         messagesChannelRef.current = null;
@@ -147,12 +162,20 @@ export function useChatRealtime(
       channel.subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           typingRetryRef.current = 0;
+          if (typingRetryTimerRef.current) {
+            clearTimeout(typingRetryTimerRef.current);
+            typingRetryTimerRef.current = null;
+          }
           typingChannelRef.current = channel;
         } else if ((status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') && !cancelled) {
           typingRetryRef.current++;
           const delay = retryDelay(typingRetryRef.current);
           console.log(`[REALTIME] typing channel retry ${typingRetryRef.current} in ${delay}ms`);
-          setTimeout(setup, delay);
+          if (typingRetryTimerRef.current) clearTimeout(typingRetryTimerRef.current);
+          typingRetryTimerRef.current = setTimeout(() => {
+            typingRetryTimerRef.current = null;
+            setup();
+          }, delay);
         }
       });
     };
@@ -162,6 +185,10 @@ export function useChatRealtime(
     return () => {
       cancelled = true;
       typingRetryRef.current = 0;
+      if (typingRetryTimerRef.current) {
+        clearTimeout(typingRetryTimerRef.current);
+        typingRetryTimerRef.current = null;
+      }
       if (typingChannelRef.current) {
         supabase.removeChannel(typingChannelRef.current);
         typingChannelRef.current = null;
