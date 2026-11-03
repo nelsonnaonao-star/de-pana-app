@@ -8,7 +8,7 @@ const config: CapacitorConfig = {
     androidScheme: 'https',
     allowNavigation: ['de-pana-app-kucq.onrender.com', '*.supabase.co'],
   },
-  loggingBehavior: 'production',
+  loggingBehavior: 'debug',
   plugins: {
     CapacitorSQLite: {
       androidIsEncryption: true,
