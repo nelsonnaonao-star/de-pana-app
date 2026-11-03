@@ -97,6 +97,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
   const [storyReplyText, setStoryReplyText] = useState("");
   const [isStoryPaused, setIsStoryPaused] = useState(false);
   const isStoryPausedRef = useRef(false);
+  const storyProgressRef = useRef(0);
   const [replyFeedback, setReplyFeedback] = useState<string | null>(null);
 
   const [viewersData, setViewersData] = useState<{ viewers: Array<{ viewer_id: string; name: string; avatar: string; viewed_at: string; reactions: string[] }>; total: number } | null>(null);
@@ -219,20 +220,22 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     if (!activeUserStates) return;
 
     setStoryProgress(0);
+    storyProgressRef.current = 0;
     const interval = setInterval(() => {
       if (isStoryPausedRef.current) return;
-      setStoryProgress(prev => {
-        if (prev >= 100) {
-          if (activeStoryIdx < activeUserStates.stories.length - 1) {
-            setActiveStoryIdx(idx => idx + 1);
-            return 0;
-          } else {
-            handleCloseStoryViewer();
-            return 0;
-          }
+      const next = storyProgressRef.current + 2;
+      if (next >= 100) {
+        storyProgressRef.current = 0;
+        if (activeStoryIdx < activeUserStates.stories.length - 1) {
+          setActiveStoryIdx(idx => idx + 1);
+        } else {
+          handleCloseStoryViewer();
         }
-        return prev + 2;
-      });
+        setStoryProgress(0);
+        return;
+      }
+      storyProgressRef.current = next;
+      setStoryProgress(next);
     }, 100);
 
     return () => clearInterval(interval);

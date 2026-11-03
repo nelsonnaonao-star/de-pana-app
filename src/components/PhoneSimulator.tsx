@@ -1654,33 +1654,35 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         // Keeping it here would trigger effect 932 which replaces the full chats state
         // before Supabase has propagated the new chat, causing activeChat=undefined (white screen).
       } else if (event === "UPDATE") {
+        const chatExists = chatsRef.current.some(c => c.id === chat.id);
+        if (!chatExists) {
+          // Chat not in list — might be hidden via chat_clears.
+          // Only unhide if the new message is AFTER cleared_at (frontera permanente).
+          const newRawTime = chat.last_message_time || "";
+          if (newRawTime && user?.id) {
+            supabase.from("chat_clears")
+              .select("cleared_at")
+              .eq("chat_id", chat.id)
+              .eq("user_id", user.id)
+              .maybeSingle()
+              .then(({ data }) => {
+                const clearedAt = data?.cleared_at;
+                // Unhide only if there's a message AFTER the clear boundary
+                if (!clearedAt || newRawTime > clearedAt) {
+                  // Never modify cleared_at — only change hidden
+                  supabase.from("chat_clears")
+                    .update({ hidden: false })
+                    .eq("chat_id", chat.id)
+                    .eq("user_id", user.id)
+                    .then(() => refreshChats());
+                }
+              });
+          }
+          return;
+        }
         setChats(prev => {
           const idx = prev.findIndex(c => c.id === chat.id);
-          if (idx === -1) {
-            // Chat not in list — might be hidden via chat_clears.
-            // Only unhide if the new message is AFTER cleared_at (frontera permanente).
-            const newRawTime = chat.last_message_time || "";
-            if (newRawTime && user?.id) {
-              supabase.from("chat_clears")
-                .select("cleared_at")
-                .eq("chat_id", chat.id)
-                .eq("user_id", user.id)
-                .maybeSingle()
-                .then(({ data }) => {
-                  const clearedAt = data?.cleared_at;
-                  // Unhide only if there's a message AFTER the clear boundary
-                  if (!clearedAt || newRawTime > clearedAt) {
-                    // Never modify cleared_at — only change hidden
-                    supabase.from("chat_clears")
-                      .update({ hidden: false })
-                      .eq("chat_id", chat.id)
-                      .eq("user_id", user.id)
-                      .then(() => refreshChats());
-                  }
-                });
-            }
-            return prev;
-          }
+          if (idx === -1) return prev;
           const existing = prev[idx];
           const newRawTime = chat.last_message_time || "";
           const isNewMessage = newRawTime && newRawTime !== (existing as any).lastMessageTimeRaw;
@@ -2092,17 +2094,20 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         setChats(prev => {
           const idx = prev.findIndex(chat => chat.id === d.chatId);
           if (idx === -1) return prev;
-          const updated = [...prev];
-          if (d.body) updated[idx].lastMessage = d.body;
-          if (d.ts && d.ts > (updated[idx].lastMessageTimeRaw || "")) {
+          const existing = prev[idx];
+          const next = { ...existing };
+          if (d.body) next.lastMessage = d.body;
+          if (d.ts && d.ts > (existing.lastMessageTimeRaw || "")) {
             const fcmTime = new Date(d.ts);
             const currentDate = new Date();
-            updated[idx].lastMessageTimeRaw = d.ts;
-            updated[idx].updated_at = d.ts;
-            updated[idx].lastMessageTime = fcmTime.toDateString() === currentDate.toDateString()
+            next.lastMessageTimeRaw = d.ts;
+            next.updated_at = d.ts;
+            next.lastMessageTime = fcmTime.toDateString() === currentDate.toDateString()
               ? fcmTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
               : fcmTime.toLocaleDateString([], { day: "numeric", month: "short" });
           }
+          const updated = [...prev];
+          updated[idx] = next;
           return updated.sort(sortChats);
         });
       }
