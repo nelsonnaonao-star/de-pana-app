@@ -81,7 +81,6 @@ const ContactsList = React.lazy(() => import("./ContactsList"));
 const CallLog = React.lazy(() => import("./CallLog"));
 const RatesPanel = React.lazy(() => import("./RatesPanel"));
 const BusinessPanel = React.lazy(() => import("./BusinessPanel"));
-const AddContact = React.lazy(() => import("./AddContact"));
 const AddContactManual = React.lazy(() => import("./AddContactManual"));
 const SyncedContacts = React.lazy(() => import("./SyncedContacts"));
 const SimulatorCreateGroup = React.lazy(() => import("./simulator/SimulatorCreateGroup"));
@@ -239,7 +238,7 @@ export default function PhoneSimulator({
 
   // Application Screen State
   const [currentScreen, setCurrentScreen] = useState<
-    "welcome" | "chats" | "chat_room" | "qr_scanner" | "synced_contacts" | "contacts" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact" | "add_contact_manual" | "create_group" | "calls"
+    "welcome" | "chats" | "chat_room" | "qr_scanner" | "synced_contacts" | "contacts" | "states" | "channels" | "rates" | "business" | "profile" | "my_qr" | "add_contact_manual" | "create_group" | "calls"
   >("chats");
   const currentScreenRef = useRef(currentScreen);
   currentScreenRef.current = currentScreen;
@@ -309,7 +308,6 @@ export default function PhoneSimulator({
       calls: "chats",
       qr_scanner: "chats",
       my_qr: "chats",
-      add_contact: "chats",
       add_contact_manual: "chats",
       create_group: "chats",
       synced_contacts: "chats",
@@ -4394,17 +4392,6 @@ try {
               </React.Suspense>
             </div>
           )}
-          {currentScreen === "add_contact" && (
-            <div className="absolute inset-0 z-50 bg-white">
-              <LazyPanel label="Cargando contacto…">
-              <AddContact
-                currentUserId={user?.id || ""}
-                onBack={() => setCurrentScreen("chats")}
-                onContactAdded={handleContactAddedByQr}
-              />
-              </LazyPanel>
-            </div>
-          )}
           {currentScreen === "add_contact_manual" && (
             <div className="absolute inset-0 z-50 bg-white">
               <LazyPanel label="Cargando formulario…">
@@ -4459,12 +4446,12 @@ try {
           {/* FASE E1: `chat_room` sale de la lista de `hidden` a propósito. Chats
               deja de recibir `display:none` y queda pintado como capa inferior
               mientras el ChatRoom se prepara y hasta que se revela. El resto de
-              overlays a pantalla completa (qr_scanner, my_qr, add_contact, …)
+              overlays a pantalla completa (qr_scanner, my_qr, add_contact_manual, …)
               sigue ocultándolo exactamente igual que antes: solo se exceptúa el
               chat, que es el único caso cuyo destino se compone encima. */}
           <div className={`flex-1 flex flex-col overflow-hidden h-full relative ${
             currentScreen === "qr_scanner" || currentScreen === "my_qr" ||
-            currentScreen === "add_contact" || currentScreen === "add_contact_manual" ||
+            currentScreen === "add_contact_manual" ||
             currentScreen === "synced_contacts" || currentScreen === "create_group"
               ? "hidden"
               : ""
