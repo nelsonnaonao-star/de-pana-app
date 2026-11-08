@@ -390,44 +390,76 @@ function uploadVideoPrivate(req, res) {
     const inputPath = req.file.path;
     const outputPath = getOutputPath();
     const originalSize = req.file.size;
+    // El cliente ya comprimió con el encoder de hardware (Media3) y avisa con
+    // `precompressed=1`: no hace falta re-encodear otra vez. Bastan unos
+    // milisegundos de remux (`-c copy -movflags +faststart`) para que el MP4
+    // quede reproducible en streaming. Si el remux falla, se cae al re-encode
+    // completo de siempre para no perder el envío.
+    const wantsPrecompressed =
+      req.query.precompressed === '1' || req.query.precompressed === 'true';
 
     try {
       let sourcePath = inputPath;
       let mimeType = req.file.mimetype;
       let ext = extForMime(mimeType);
       let compressed = false;
+      let remuxed = false;
       let compressedSize = originalSize;
 
       if (originalSize >= 2 * 1024 * 1024) {
-        try {
-          await new Promise((resolve, reject) => {
-            ffmpeg(inputPath)
-              .videoCodec('libx264')
-              .audioCodec('aac')
-              .audioBitrate('128k')
-              .outputOptions([
-                '-preset veryfast',
-                '-crf 28',
-                '-movflags +faststart',
-                '-vf', "scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
-              ])
-              .on('end', resolve)
-              .on('error', reject)
-              .save(outputPath);
-          });
-          sourcePath = outputPath;
-          mimeType = 'video/mp4';
-          ext = 'mp4';
-          compressed = true;
-          compressedSize = (await fs.stat(outputPath)).size;
-        } catch (compressErr) {
-          console.error('[MEDIA] private video compress failed, uploading original:', compressErr.message);
+        if (wantsPrecompressed) {
+          try {
+            await new Promise((resolve, reject) => {
+              ffmpeg(inputPath)
+                .videoCodec('copy')
+                .audioCodec('copy')
+                .outputOptions(['-movflags', '+faststart'])
+                .on('end', resolve)
+                .on('error', reject)
+                .save(outputPath);
+            });
+            sourcePath = outputPath;
+            mimeType = 'video/mp4';
+            ext = 'mp4';
+            remuxed = true;
+            compressedSize = (await fs.stat(outputPath)).size;
+          } catch (remuxErr) {
+            console.error('[MEDIA] precompressed remux failed, re-encoding:', remuxErr.message);
+            await fs.unlink(outputPath).catch(() => {});
+          }
+        }
+
+        if (!remuxed) {
+          try {
+            await new Promise((resolve, reject) => {
+              ffmpeg(inputPath)
+                .videoCodec('libx264')
+                .audioCodec('aac')
+                .audioBitrate('128k')
+                .outputOptions([
+                  '-preset veryfast',
+                  '-crf 28',
+                  '-movflags +faststart',
+                  '-vf', "scale=w='min(720,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                ])
+                .on('end', resolve)
+                .on('error', reject)
+                .save(outputPath);
+            });
+            sourcePath = outputPath;
+            mimeType = 'video/mp4';
+            ext = 'mp4';
+            compressed = true;
+            compressedSize = (await fs.stat(outputPath)).size;
+          } catch (compressErr) {
+            console.error('[MEDIA] private video compress failed, uploading original:', compressErr.message);
+          }
         }
       }
 
       const objectPath = privateObjectPath(chatId, ext);
       const { url, path: storedPath } = await uploadPrivateFileToSupabase(sourcePath, mimeType, objectPath);
-      res.json({ url, bucket: PRIVATE_BUCKET, path: storedPath, compressed, originalSize, compressedSize });
+      res.json({ url, bucket: PRIVATE_BUCKET, path: storedPath, compressed, remuxed, originalSize, compressedSize });
     } catch (uploadErr) {
       console.error('[MEDIA] private video upload error:', uploadErr.message);
       res.status(500).json({ error: 'Error al subir el video' });
