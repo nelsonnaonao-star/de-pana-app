@@ -3,18 +3,15 @@ import {
   Plus, Search, Sparkles, Volume2, VolumeX, MessageSquare, 
   MapPin, Eye, MousePointerClick, Image as ImageIcon, Music, 
   Check, Play, Pause, RefreshCw, BarChart3, Star, Tag, Compass,
-  Layers, ChevronRight, Share2, HelpCircle, AlertCircle, Upload, X, Trash2, Download,
+  Layers, ChevronRight, HelpCircle, AlertCircle, Upload, X, Trash2,
   Crown
 } from "lucide-react";
-import { Share } from "@capacitor/share";
-import { Capacitor } from "@capacitor/core";
 import { Chat, Message } from "../types";
 import CachedImage, { precacheImage } from "./CachedImage";
 import MediaEditor from "./MediaEditor";
 import EmprendedorAccessModal from "./EmprendedorAccessModal";
 import { supabase } from "../lib/supabase";
 import { uploadChatMedia } from "../services/storage";
-import { saveMediaToGalleryDirect } from "../services/mediaUtils";
 import { getMusicLibrary, MusicTrack } from "../services/stickerService";
 import { fetchEmprendedorAccess } from "../services/emprendedorAccess";
 import { getFlyerPaywallActive } from "../services/featureFlags";
@@ -157,8 +154,6 @@ export default function BusinessPanel({
 
   // Track search filters in Explorar
   const [searchQuery, setSearchQuery] = useState("");
-  const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState("");
 
   // ===== MEMBRESÍA EMPRENDEDOR (planes + código de administrador) =====
   const [hasMembership, setHasMembership] = useState(false);
@@ -398,64 +393,11 @@ export default function BusinessPanel({
     onStartBusinessChat(flyer.businessName, flyer.flyerUrl || flyer.ownerAvatar, initialText, flyer.id, flyer.contactPhone || "");
   };
 
-  // Share flyer image as a real file (not just a link)
-  const handleShareFlyer = async (flyer: BusinessFlyer) => {
-    const text = `${flyer.businessName} - ${flyer.description}${flyer.location ? " en " + flyer.location : ""}`;
-    const imgUrl = flyer.flyerUrl || "";
-    try {
-      if (imgUrl) {
-        if (!imgUrl.startsWith("http://") && !imgUrl.startsWith("https://")) {
-          throw new Error("URL no permitida");
-        }
-        const res = await fetch(imgUrl);
-        const blob = await res.blob();
-        const dataUri: string = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-        if (Capacitor.isNativePlatform()) {
-          await Share.share({ title: flyer.businessName, text, files: [dataUri] });
-        } else if (navigator.share) {
-          const file = new File([blob], `${flyer.businessName}.jpg`, { type: blob.type || "image/jpeg" });
-          await navigator.share({ title: flyer.businessName, text, files: [file] }).catch(() => {});
-        } else {
-          await navigator.clipboard.writeText(text);
-        }
-      } else if (Capacitor.isNativePlatform()) {
-        await Share.share({ title: flyer.businessName, text });
-      } else if (navigator.share) {
-        await navigator.share({ title: flyer.businessName, text }).catch(() => {});
-      } else {
-        await navigator.clipboard.writeText(text);
-      }
-    } catch (e) {
-      console.log("Share error", e);
-    }
-  };
-
   // Delete own flyer with confirmation
   const handleDeleteFlyer = (flyer: BusinessFlyer) => {
     if (!window.confirm(`¿Eliminar tu publicación "${flyer.businessName}"? Esta acción no se puede deshacer.`)) return;
     onDeleteFlyer(flyer.id);
     if (viewingFlyer?.id === flyer.id) closeFlyerViewer();
-  };
-
-  // Download flyer image to device gallery
-  const handleDownloadFlyer = async (flyer: BusinessFlyer) => {
-    if (!flyer.flyerUrl) return;
-    const ext = flyer.flyerUrl.split(".").pop()?.split("?")[0].split("#")[0] || "jpg";
-    const fileName = `${flyer.businessName.replace(/\s+/g, "_")}.${ext}`;
-    try {
-      await saveMediaToGalleryDirect(flyer.flyerUrl, fileName);
-      setShowToast(true);
-      setToastMessage("¡Estado descargado!");
-    } catch (e) {
-      console.error("[BusinessPanel] Download error:", e);
-      setShowToast(true);
-      setToastMessage("Error al descargar");
-    }
   };
 
   // Filtered public flyers based on search
@@ -610,16 +552,7 @@ export default function BusinessPanel({
                         <span className="flex items-center gap-0.5" title="Clicks a Chat">
                           <MousePointerClick className="w-3 h-3 text-indigo-500" /> {flyer.clicks}
                         </span>
-                        {flyer.flyerUrl && (
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); handleDownloadFlyer(flyer); }}
-                            className="p-1 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-full transition-colors cursor-pointer"
-                            title="Descargar estado"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+
                       </div>
                     </div>
 
@@ -723,13 +656,6 @@ export default function BusinessPanel({
                         className="flex-1 bg-[#0a4d52] hover:bg-[#10646a] text-white font-bold text-[10px] py-2 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-sm cursor-pointer"
                       >
                         <MessageSquare className="w-3.5 h-3.5" /> Chatear con el Negocio
-                      </button>
-                      <button
-                        onClick={() => handleShareFlyer(flyer)}
-                        className="px-3 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 font-bold text-[10px] rounded-xl flex items-center justify-center gap-1 transition-all cursor-pointer"
-                        title="Compartir"
-                      >
-                        <Share2 className="w-3.5 h-3.5" />
                       </button>
                       {isMyFlyer && (
                         <button
@@ -1449,22 +1375,8 @@ export default function BusinessPanel({
               </div>
             )}
 
-            {/* Share + Chat buttons */}
+            {/* Chat button */}
             <div className="flex gap-3 pt-2 pb-6">
-              <button
-                onClick={() => handleShareFlyer(viewingFlyer)}
-                className="flex-1 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-              >
-                <Share2 className="w-3.5 h-3.5" /> Compartir
-              </button>
-              {viewingFlyer.flyerUrl && (
-                <button
-                  onClick={() => handleDownloadFlyer(viewingFlyer)}
-                  className="flex-1 border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-700 font-bold text-[10px] py-3 px-4 rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" /> Descargar
-                </button>
-              )}
               <button
                 onClick={() => {
                   onIncrementClick(viewingFlyer.id);

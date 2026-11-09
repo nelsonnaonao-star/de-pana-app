@@ -92,11 +92,22 @@ export function setReadMarker(
 ): void {
   if (!userId || !chatId) return;
   const map = readMap(userId);
-  map[chatId] = {
-    messageId: messageId || "",
-    at: at || new Date().toISOString(),
-    pending: [],
-  };
+  const existing = normalize(map[chatId]);
+
+  const rawAt = at || new Date().toISOString();
+  const nextAt = Number.isNaN(toMs(rawAt)) ? new Date().toISOString() : rawAt;
+  const nextMs = toMs(nextAt);
+  const existingMs = toMs(existing.at);
+
+  // La frontera de lectura solo AVANZA. Si una lectura de SQLite resuelve tarde
+  // con un mensaje más viejo que un snapshot ya marcado como leído, no debe
+  // retroceder el marcador y volver a contar como no leído lo que el usuario ya
+  // vio. En cualquier caso se limpian los pendientes: quedan cubiertos por la
+  // frontera vigente.
+  const keepExisting = !Number.isNaN(existingMs) && existingMs >= nextMs;
+  map[chatId] = keepExisting
+    ? { messageId: existing.messageId, at: existing.at, pending: [] }
+    : { messageId: messageId || "", at: nextAt, pending: [] };
   writeMap(userId, map);
 }
 

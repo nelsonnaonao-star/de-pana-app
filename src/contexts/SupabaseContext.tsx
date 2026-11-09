@@ -195,11 +195,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   // detect stale online users who died without logout).
   const heartbeatWrite = (uid: string) => {
     const now = new Date().toISOString();
-    supabase.from("profiles").update({ status: "online" }).eq("id", uid).then(() => {}).catch(() => {});
+    supabase.from("profiles").update({ status: "online" }).eq("id", uid).then(() => {}, () => {});
     supabase.from("user_presence").upsert(
       { user_id: uid, last_seen: now, status: "online" },
       { onConflict: "user_id" }
-    ).then(() => {}).catch(() => {});
+    ).then(() => {}, () => {});
   };
 
   // Debounced presence update to avoid flapping on micro network cuts / tab switches
@@ -218,7 +218,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
             supabase.from("user_presence").upsert(
               { user_id: userId, last_seen: new Date().toISOString(), status: "online" },
               { onConflict: "user_id" }
-            ).then(() => {}).catch(() => {});
+            ).then(() => {}, () => {});
             logger.debug("[Presence] Online status confirmed", { userId });
           } catch {}
           ref.onlineTimer = undefined;
@@ -238,7 +238,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
             supabase.from("user_presence").upsert(
               { user_id: userId, last_seen: new Date().toISOString(), status: "offline" },
               { onConflict: "user_id" }
-            ).then(() => {}).catch(() => {});
+            ).then(() => {}, () => {});
             logger.debug("[Presence] Offline status confirmed", { userId });
           } catch {}
           ref.offlineTimer = undefined;
@@ -266,7 +266,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         supabase.from("user_presence").upsert(
           { user_id: userId, last_seen: new Date().toISOString(), status: ref.pendingStatus },
           { onConflict: "user_id" }
-        ).then(() => {}).catch(() => {});
+        ).then(() => {}, () => {});
         logger.debug("[Presence] Flushed pending status", { userId, status: ref.pendingStatus });
       } catch {}
       ref.pendingStatus = undefined;
@@ -726,11 +726,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       });
       presenceChannelRef.current = channel;
     };
-    supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {}).catch(() => {});
+    supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {}, () => {});
     supabase.from("user_presence").upsert(
       { user_id: userId, last_seen: new Date().toISOString(), status: "online" },
       { onConflict: "user_id" }
-    ).then(() => {}).catch(() => {});
+    ).then(() => {}, () => {});
     createPresenceChannel();
 
     // Heartbeat: re-set status online every 30s
@@ -1006,20 +1006,20 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         presenceChannelConnectedRef.current = false;
         supabase.from("profiles").update({ status: "offline" }).eq("id", userId).then(() => {
           logger.info("[Presence] Background → offline (immediate)");
-        }).catch(() => {});
+        }, () => {});
         supabase.from("user_presence").upsert(
           { user_id: userId, last_seen: new Date().toISOString(), status: "offline" },
           { onConflict: "user_id" }
-        ).then(() => {}).catch(() => {});
+        ).then(() => {}, () => {});
       } else {
         // FOREGROUND: marcar online + reconectar presence channel + heartbeat
         supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {
           logger.info("[Presence] Foreground → online (immediate)");
-        }).catch(() => {});
+        }, () => {});
         supabase.from("user_presence").upsert(
           { user_id: userId, last_seen: new Date().toISOString(), status: "online" },
           { onConflict: "user_id" }
-        ).then(() => {}).catch(() => {});
+        ).then(() => {}, () => {});
         if (presenceChannelRef.current && presenceChannelConnectedRef.current) {
           presenceChannelRef.current.track({ user_id: userId, online_at: new Date().toISOString() }).catch(() => {});
         } else {

@@ -1,7 +1,7 @@
 import { supabase } from "../lib/supabase";
 import { logger } from "../lib/logger";
 import { apiUrl, authUpload } from "../lib/api";
-import { performPrivateUpload, type PrivateMediaKind } from "./privateUploadClient";
+import { performPrivateUpload, type PrivateMediaKind, type PrivateUploadOptions } from "./privateUploadClient";
 
 const BUCKET = "chat-images";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
@@ -169,17 +169,19 @@ export {
   isPrivateUploadAllowedMime,
   isValidChatId,
   isPrivateUploadSupported,
+  isSupportedPrivateVideoMime,
   planConversationUpload,
 } from "./privateUploadClient";
-export type { PrivateMediaKind, ConversationUploadPlan } from "./privateUploadClient";
+export type { PrivateMediaKind, ConversationUploadPlan, PrivateUploadOptions } from "./privateUploadClient";
 
 export async function uploadPrivateChatMedia(
   blob: Blob,
   chatId: string,
   kind: PrivateMediaKind = "file",
+  options: PrivateUploadOptions = {},
 ): Promise<string> {
   return performPrivateUpload(blob, chatId, kind, {
-    postMultipart: (url, form) => authUpload(apiUrl(url), form),
+    postMultipart: (url, form, progress) => authUpload(apiUrl(url), form, progress?.onProgress),
     compressImage,
-  });
+  }, options);
 }

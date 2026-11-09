@@ -353,6 +353,12 @@ export default function PhoneSimulator({
       if (target) {
         logger.info("[BACK] Navigating from", { from: screen, to: target });
         if (screen === "chat_room") {
+          if (selectedChatIdRef.current) {
+            // Red de seguridad al salir por botón físico: el marcador ya debería
+            // venir avanzado por onChatMessagesChanged, y setReadMarker es
+            // monotónico, así que esto nunca retrocede la frontera.
+            markChatAsReadRef.current(selectedChatIdRef.current);
+          }
           setSelectedChatId(null);
         }
         setCurrentScreen(target as any);
@@ -1559,6 +1565,37 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     }
     await recalculateUnread(chatId);
   }, [user, recalculateUnread]);
+
+  // Avanza la frontera de lectura usando el snapshot de mensajes que ChatRoom ya
+  // tiene pintado. `markChatAsRead` lee de SQLite y puede quedarse corto si el
+  // mensaje acaba de llegar (o resolver tarde y retroceder el marcador). Este es
+  // el que garantiza que, al salir del chat, el badge ya esté en 0 para todo lo
+  // que el usuario vio, tanto al abrir como con mensajes entrantes en vivo.
+  const markChatReadFromMessages = useCallback((
+    chatId: string,
+    msgs: Array<{ id?: string; rawCreatedAt?: string; timestamp?: string }>,
+  ) => {
+    if (!user) return;
+    let boundaryMs = NaN;
+    let lastAt = "";
+    let lastId = "";
+    for (const m of msgs) {
+      const ts = m.rawCreatedAt || m.timestamp || "";
+      if (!ts) continue;
+      const ms = new Date(ts).getTime();
+      if (Number.isNaN(ms)) continue;
+      if (Number.isNaN(boundaryMs) || ms > boundaryMs) {
+        boundaryMs = ms;
+        lastAt = new Date(ms).toISOString();
+        lastId = m.id || "";
+      }
+    }
+    if (Number.isNaN(boundaryMs)) return;
+    setReadMarker(user.id, chatId, lastId, lastAt);
+    setChats(prev => prev.map(c =>
+      c.id === chatId && c.unreadCount !== 0 ? { ...c, unreadCount: 0 } : c
+    ));
+  }, [user]);
 
   // Ref para los handlers de eventos declarados antes de markChatAsRead.
   const markChatAsReadRef = useRef<(chatId: string) => Promise<void>>(async () => {});
@@ -4274,11 +4311,19 @@ try {
                 key={activeChat.id}
                 chat={activeChat}
                 onBack={() => {
+                  if (activeChat?.id) markChatAsRead(activeChat.id);
                   setSelectedChatId(null);
                   setCurrentScreen("chats");
                 }}
                 onSendMessage={handleSendMessageInRoom}
                 onChatMessagesChanged={(chatId, msgs) => {
+                  // El chat está abierto y visible: todo lo que ChatRoom ya tiene
+                  // pintado se considera leído. Avanzar la frontera aquí cubre el
+                  // primer render y los mensajes que llegan en vivo, sin depender
+                  // del timing de persistencia en SQLite.
+                  if (selectedChatIdRef.current === chatId) {
+                    markChatReadFromMessages(chatId, msgs);
+                  }
                   setChats(prev => {
                     const mapped = prev.map(c => {
                       if (c.id !== chatId) return c;

@@ -110,23 +110,58 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
 // Subida multipart autenticada (FormData). Reutiliza la MISMA resolución de
 // sesión que authFetch, pero NO fija `Content-Type`: el cliente HTTP debe
 // generar el boundary de multipart. No registra tokens ni URLs en logs.
-export async function authUpload(url: string, formData: FormData): Promise<Response> {
-  const send = async (token: string | null): Promise<Response> => {
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 120000);
-    try {
-      return await fetch(url, {
-        method: 'POST',
-        body: formData,
-        headers,
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+//
+// Se usa XMLHttpRequest en vez de fetch porque `fetch` NO expone progreso de
+// subida en navegadores/WebView: con XHR (`upload.onprogress`) se puede pintar
+// la barra "Subiendo X%" en la burbuja mientras el cuerpo viaja al servidor.
+export type UploadProgressHandler = (loaded: number, total: number) => void;
+
+export async function authUpload(
+  url: string,
+  formData: FormData,
+  onProgress?: UploadProgressHandler,
+): Promise<Response> {
+  const send = (token: string | null): Promise<Response> =>
+    new Promise<Response>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      // Los videos que caben en el límite del servidor pueden ser grandes:
+      // margen para redes móviles lentas antes de abortar.
+      xhr.timeout = 180000;
+
+      if (onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            onProgress(event.loaded, event.total);
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status === 0) {
+          reject(new TypeError('Network request failed'));
+          return;
+        }
+        const headers = new Headers();
+        const contentType = xhr.getResponseHeader('content-type');
+        if (contentType) headers.set('content-type', contentType);
+        const body =
+          xhr.status === 204 || xhr.status === 205 || xhr.status === 304
+            ? null
+            : xhr.responseText;
+        resolve(new Response(body, {
+          status: xhr.status,
+          statusText: xhr.statusText,
+          headers,
+        }));
+      };
+      xhr.onerror = () => reject(new TypeError('Network request failed'));
+      xhr.ontimeout = () => reject(new DOMException('La subida tardó demasiado', 'TimeoutError'));
+      xhr.onabort = () => reject(new DOMException('Subida cancelada', 'AbortError'));
+
+      xhr.send(formData);
+    });
 
   let response = await send(await resolveAccessToken());
 

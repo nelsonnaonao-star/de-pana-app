@@ -484,7 +484,7 @@ export default function AuthScreen() {
                   </div>
                 )}
 
-                {mode !== "forgot" && (
+                {(mode === "login" || mode === "register") && (
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
                       <Lock className="w-3 h-3 text-teal-400" /> Contraseña

@@ -35,12 +35,13 @@ export async function getCachedVideoPath(url: string): Promise<string | null> {
   if (!Capacitor.isNativePlatform() || !url) return null;
   try {
     const fileName = `${hashUrl(url)}.mp4`;
-    const result = await Filesystem.readFile({
-      path: `${CACHE_DIR}/${fileName}`,
-      directory: Directory.Data,
-    });
-    // Return a file:// URI for <video> src
-    return result.uri;
+    const path = `${CACHE_DIR}/${fileName}`;
+    // stat comprueba que existe sin leer el archivo en memoria (readFile
+    // decodificaba el video completo a base64 solo para validar existencia).
+    await Filesystem.stat({ path, directory: Directory.Data });
+    const { uri } = await Filesystem.getUri({ path, directory: Directory.Data });
+    // URI jugable por el <video> del WebView (mismo origen que la app).
+    return Capacitor.convertFileSrc(uri);
   } catch {
     return null;
   }

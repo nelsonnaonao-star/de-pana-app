@@ -1,4 +1,4 @@
-import { BiometricAuth, BiometryType, BiometryError } from "@aparajita/capacitor-biometric-auth";
+import { BiometricAuth, BiometryType, BiometryError, AndroidBiometryStrength } from "@aparajita/capacitor-biometric-auth";
 import { Preferences } from "@capacitor/preferences";
 import { logger } from "../lib/logger";
 
@@ -109,7 +109,7 @@ export async function authenticateWithBiometric(
     await BiometricAuth.authenticate({
       reason,
       allowDeviceCredential: opts?.allowDeviceCredential ?? fallback,
-      androidBiometryStrength: "weak",
+      androidBiometryStrength: AndroidBiometryStrength.weak,
     });
     return { success: true };
   } catch (e: any) {

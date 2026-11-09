@@ -21,6 +21,7 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.IntentCompat;
 import androidx.core.splashscreen.SplashScreen;
 import com.getcapacitor.BridgeActivity;
+import com.redon.app.plugins.VideoCompressorPlugin;
 
 import java.util.ArrayList;
 
@@ -41,6 +42,7 @@ public class MainActivity extends BridgeActivity {
         SplashScreen.installSplashScreen(this);
         registerPlugin(AppUpdatePlugin.class);
         registerPlugin(ShareReceiverPlugin.class);
+        registerPlugin(VideoCompressorPlugin.class);
         super.onCreate(savedInstanceState);
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);

@@ -26,6 +26,13 @@ export interface Message {
   price?: string;
   posterUrl?: string;
   localVideoUrl?: string;
+  // Estado efímero de transferencia (solo UI en memoria; nunca se persiste):
+  // permite pintar la barra de compresión/subida/procesado en la burbuja.
+  transferStage?: "preparing" | "compressing" | "uploading" | "processing";
+  transferProgress?: number;
+  transferLoaded?: number;
+  transferTotal?: number;
+  transferSpeed?: number;
   synced?: boolean;
   chatId?: string;
   sender_id?: string;

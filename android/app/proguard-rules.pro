@@ -15,6 +15,10 @@
 -keep class com.redon.app.CallFcmService { *; }
 -keep class com.redon.app.CallActionReceiver { *; }
 
+# Plugin nativo de compresión de video (Media3 Transformer + MediaCodec)
+-keep class com.redon.app.plugins.** { *; }
+-dontwarn androidx.media3.**
+
 # WebView JS interface
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;

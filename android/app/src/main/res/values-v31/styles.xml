@@ -7,7 +7,11 @@
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
-        <item name="android:windowBackground">#111827</item>
+        <!-- Ver values/styles.xml: mismo color que el splash para que las barras
+             de sistema no muestren una franja distinta durante el arranque. -->
+        <item name="android:windowBackground">#0A1F1C</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="windowSplashScreenBackground">#0A1F1C</item>
         <item name="android:windowSplashScreenBackground">#0A1F1C</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/wepa_splash_icon</item>

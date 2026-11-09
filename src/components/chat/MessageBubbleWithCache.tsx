@@ -178,6 +178,11 @@ function arePropsEqual(prev: MessageBubbleWithCacheProps, next: MessageBubbleWit
     p.chatId === n.chatId &&
     p.isEphemeral === n.isEphemeral &&
     p.ephemeralExpiresAt === n.ephemeralExpiresAt &&
+    p.transferStage === n.transferStage &&
+    p.transferProgress === n.transferProgress &&
+    p.transferLoaded === n.transferLoaded &&
+    p.transferTotal === n.transferTotal &&
+    p.transferSpeed === n.transferSpeed &&
     JSON.stringify(p.reactions) === JSON.stringify(n.reactions) &&
     JSON.stringify(p.pollOptions) === JSON.stringify(n.pollOptions) &&
     prev.isMe === next.isMe &&

@@ -1,15 +1,21 @@
 import { MutableRefObject, FormEvent, useRef } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
-import { Camera as CapacitorCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Capacitor } from '@capacitor/core';
+import { Camera as CapacitorCamera, CameraResultType, CameraSource, MediaTypeSelection } from '@capacitor/camera';
 import { Chat, Message } from "../../types";
 import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction, votePoll } from "../../services/messages";
-import { uploadChatMedia, uploadPrivateChatMedia, isValidChatId, planConversationUpload } from "../../services/storage";
+import { uploadChatMedia, uploadPrivateChatMedia, isValidChatId, planConversationUpload, isSupportedPrivateVideoMime } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
 import { cacheVideoBlob } from "../../services/videoCache";
 import { revokeCachedMedia } from "../../services/mediaCache";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
 import { inFlightMessageIds, syncService } from "../../services/sync/SyncService";
 import { generateVideoThumbnail } from "../../utils/videoThumbnail";
+import {
+  compressVideoNative,
+  deleteNativeVideoFile,
+  isNativeVideoCompressionAvailable,
+} from "../../services/nativeVideoCompression";
 import { precacheImage } from "../../components/CachedImage";
 import toast from "react-hot-toast";
 
@@ -17,6 +23,77 @@ function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return "0 KB";
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Recomprimir en el teléfono con MediaRecorder avanza EN TIEMPO REAL: un clip
+// de 1 min tarda ~1 min solo en comprimirse y luego el servidor lo vuelve a
+// transcodificar a MP4. Para no duplicar el trabajo, los videos que ya caben
+// holgados en el límite del servidor/bucket (50 MiB) se envían tal cual y el
+// servidor hace la única compresión a MP4. Por encima de este umbral, o si el
+// formato no lo admite el endpoint privado (mkv/avi/3gp), se recomprime en el
+// cliente como antes para no romper el envío.
+const CLIENT_VIDEO_COMPRESS_THRESHOLD = 45 * 1024 * 1024;
+
+// Con el plugin nativo (Media3/MediaCodec) comprimir deja de ser el cuello de
+// botella: tarda segundos y por hardware. El servidor re-encodea TODO video
+// >= 2 MiB antes de responder, así que a partir de ese tamaño conviene
+// comprimirlo aquí y avisar `precompressed=1` para que el servidor solo haga
+// un remux `-c copy` (milisegundos) en vez de un re-encode de decenas de
+// segundos. Los videos < 2 MiB no disparan transcode en el servidor.
+const NATIVE_VIDEO_COMPRESS_THRESHOLD = 2 * 1024 * 1024;
+// En chats locales/simulador NO hay transcode en servidor: mantener el umbral
+// bajo anterior para no subir archivos pesados a un bucket sin conversión.
+const NATIVE_LOCAL_VIDEO_COMPRESS_THRESHOLD = 5 * 1024 * 1024;
+const NATIVE_VIDEO_COMPRESS_HEIGHT = 720;
+const NATIVE_VIDEO_COMPRESS_BITRATE = 2_000_000;
+
+const VIDEO_MIME_BY_FORMAT: Record<string, string> = {
+  mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime",
+  qt: "video/quicktime", webm: "video/webm", mkv: "video/x-matroska",
+  "3gp": "video/3gpp", avi: "video/x-msvideo", ts: "video/mp2t",
+  mts: "video/mp2t", m2ts: "video/mp2t",
+};
+
+function resolveVideoMime(format?: string, fallbackName?: string): string {
+  const normalizedFormat = (format || "").toLowerCase().replace(/^\./, "");
+  if (normalizedFormat.includes("/")) return normalizedFormat;
+  if (VIDEO_MIME_BY_FORMAT[normalizedFormat]) return VIDEO_MIME_BY_FORMAT[normalizedFormat];
+  const ext = (fallbackName || "").split(".").pop()?.toLowerCase() || "";
+  return VIDEO_MIME_BY_FORMAT[ext] || "video/mp4";
+}
+
+function videoExtensionForMime(mimeType: string): string {
+  if (mimeType === "video/quicktime") return "mov";
+  if (mimeType === "video/webm") return "webm";
+  if (mimeType === "video/x-matroska") return "mkv";
+  if (mimeType === "video/3gpp") return "3gp";
+  if (mimeType === "video/x-msvideo") return "avi";
+  if (mimeType === "video/mp2t") return "ts";
+  return "mp4";
+}
+
+/** El plugin Camera devuelve la miniatura como base64 crudo (sin prefijo). */
+function normalizeThumbnail(thumbnail?: string): string | undefined {
+  if (!thumbnail) return undefined;
+  return thumbnail.startsWith("data:") ? thumbnail : `data:image/jpeg;base64,${thumbnail}`;
+}
+
+/**
+ * Lee un URI nativo (file://, content:// o ruta absoluta) como `File` en el
+ * WebView. `convertFileSrc` lo expone por el servidor local de Capacitor, que
+ * conoce tanto `_capacitor_file_` como `_capacitor_content_`. Así el archivo
+ * entra al pipeline de subida existente sin pasar por Filesystem (que en
+ * Android exige base64 y duplicaría el video en memoria).
+ */
+async function fetchNativeMediaAsFile(uri: string, name: string, mimeType: string): Promise<File> {
+  const sourceUrl = /^https?:\/\//i.test(uri) ? uri : Capacitor.convertFileSrc(uri);
+  const response = await fetch(sourceUrl);
+  if (!response.ok) {
+    throw new Error(`No se pudo leer el video seleccionado (${response.status})`);
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("El video seleccionado llegó vacío");
+  return new File([blob], name, { type: mimeType, lastModified: Date.now() });
 }
 
 // UUID para idempotencia de envíos (el servidor lo usa como clave de reintento:
@@ -469,41 +546,110 @@ pendingSendIdsRef.current.add(tempId);
       }
     }
 
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = accept;
-    // Android/WebView: el `File` del picker es un stream `content://` de UN SOLO
-    // USO propiedad de este input. Con el input fuera del documento nada lo
-    // mantiene vivo: el GC puede recuperarlo mientras el handler asíncrono
-    // sigue leyendo y la lectura revienta con `NotReadableError`. Se ancla al
-    // DOM (invisible) durante toda la vida del handler y se retira al terminar.
-    input.style.position = "fixed";
-    input.style.left = "-9999px";
-    input.style.top = "0";
-    input.style.width = "1px";
-    input.style.height = "1px";
-    input.style.opacity = "0";
-    input.style.pointerEvents = "none";
-    document.body.appendChild(input);
-    const disposeInput = () => {
-      try {
-        if (input.parentNode) input.parentNode.removeChild(input);
-      } catch { /* el input ya se detached */ }
+    // Burbuja provisional del video: se pinta en cuanto el picker devuelve el
+    // archivo, ANTES de comprimirlo o leerlo. El usuario ve el video con su
+    // miniatura de inmediato y todo el progreso ocurre sobre esa misma burbuja.
+    const createPendingVideoBubble = (params: {
+      previewUrl: string;
+      poster?: string;
+      fileName: string;
+      size: number;
+    }) => {
+      const pending = {
+        tempId: `msg_${Date.now()}`,
+        clientId: newClientId(),
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      const msg: Message = {
+        id: pending.tempId,
+        sender: "me",
+        timestamp: pending.timestamp,
+        rawCreatedAt: new Date().toISOString(),
+        type: "video",
+        mediaUrl: params.previewUrl,
+        posterUrl: params.poster,
+        fileName: params.fileName,
+        fileSize: formatFileSize(params.size),
+        status: "sending",
+        synced: false,
+        clientId: pending.clientId,
+        sender_id: uid,
+      };
+      setMessages(prev => [...prev, msg]);
+      onSendMessage(msg);
+      messageRepo.upsertMessage(chatId, msg, uid);
+      pendingSendIdsRef.current.add(pending.tempId);
+      inFlightMessageIds.add(pending.tempId);
+      return pending;
     };
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) {
-        // Usuario canceló el picker: liberar el candado o quedaría bloqueado.
-        disposeInput();
-        isSendingRef.current = false;
-        return;
-      }
 
-      const tempId = "msg_" + Date.now();
-      let bubbleCreated = false;
+    const sendPickedFile = async (
+      file: File,
+      options: {
+        poster?: string;
+        skipWebViewCompress?: boolean;
+        precompressedVideo?: boolean;
+        pending?: { tempId: string; clientId: string; timestamp: string };
+        onCleanup?: () => void;
+      } = {},
+    ) => {
+      const pending = options.pending;
+      const tempId = pending?.tempId ?? "msg_" + Date.now();
+      let bubbleCreated = !!pending;
+      // Progreso efímero para la barra de la burbuja. Se pinta como máximo
+      // ~7 veces/segundo para no re-renderizar en cada evento de XHR.
+      let lastTransferPaint = 0;
+      let lastProgressLoaded = 0;
+      let lastProgressAt = 0;
+      const updateTransfer = (
+        patch: Partial<Pick<Message,
+          "transferStage" | "transferProgress" | "transferLoaded" | "transferTotal" | "transferSpeed">>,
+        force = false,
+      ) => {
+        if (!bubbleCreated) return;
+        const now = Date.now();
+        if (!force && now - lastTransferPaint < 140) return;
+        lastTransferPaint = now;
+        setMessages(prev => prev.map(m => m.id === tempId ? { ...m, ...patch } : m));
+      };
+      const reportUploadProgress = (loaded: number, total: number) => {
+        const now = Date.now();
+        if (!lastProgressAt) {
+          lastProgressAt = now;
+          lastProgressLoaded = loaded;
+        }
+        const elapsed = now - lastProgressAt;
+        let speed = 0;
+        if (elapsed >= 350) {
+          speed = Math.max(0, ((loaded - lastProgressLoaded) * 1000) / elapsed);
+          lastProgressAt = now;
+          lastProgressLoaded = loaded;
+        }
+        updateTransfer({
+          transferStage: "uploading",
+          transferProgress: total > 0 ? (loaded / total) * 100 : undefined,
+          transferLoaded: loaded,
+          transferTotal: total,
+          transferSpeed: speed,
+        }, total > 0 && loaded >= total);
+      };
+      const clearTransfer = (extra: Partial<Message> = {}) => {
+        if (!bubbleCreated) return;
+        lastTransferPaint = 0;
+        setMessages(prev => prev.map(m => m.id === tempId ? {
+          ...m,
+          transferStage: undefined,
+          transferProgress: undefined,
+          transferLoaded: undefined,
+          transferTotal: undefined,
+          transferSpeed: undefined,
+          ...extra,
+        } : m));
+      };
       try {
-        const clientIdFile = newClientId();
-        const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const clientIdFile = pending?.clientId ?? newClientId();
+        const timestamp = pending?.timestamp ??
+          new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
         // El handle del archivo del picker en Android es de UN SOLO USO (stream
         // content:// que se consume): cualquier segunda lectura lanza
@@ -619,7 +765,20 @@ pendingSendIdsRef.current.add(tempId);
         const localBlob: Blob = localFile;
         console.log(`[VIDSEND] step=read-ok ${(localBlob.size / 1048576).toFixed(2)}MB type=${localBlob.type}`);
 
-        const shouldCompress = type === "video" && localBlob.size > 5 * 1024 * 1024;
+        // Solo se omite la recompresión del teléfono si el destino es un chat
+        // privado (UUID): ahí el servidor transcodifica SIEMPRE a MP4. En chats
+        // locales/simulador el archivo va directo al bucket público sin
+        // transcode, así que se mantiene el comportamiento anterior.
+        const skipWebViewCompress = options.skipWebViewCompress === true;
+        const canSkipClientCompress =
+          isValidChatId(chatId) &&
+          localBlob.size <= CLIENT_VIDEO_COMPRESS_THRESHOLD &&
+          isSupportedPrivateVideoMime(localBlob.type);
+        const shouldCompress =
+          !skipWebViewCompress &&
+          type === "video" &&
+          localBlob.size > 5 * 1024 * 1024 &&
+          !canSkipClientCompress;
         // Tope duro para videos: el WebView no puede recomprimirlos si falla la
         // decodificación, y subir crudos muy grandes suele abortar. Mejor fallar
         // temprano con un mensaje claro que colgarse o romper en silencio.
@@ -629,43 +788,63 @@ pendingSendIdsRef.current.add(tempId);
         }
 
         // La miniatura NO bloquea: se lanza en paralelo con la compresión y la
-        // subida, y se recoge DESPUÉS de `uploadChatMedia`. Antes se esperaba
-        // aquí (`onloadeddata` + `seeked`) antes de siquiera pintar la burbuja.
+        // subida. El picker nativo ya entrega una miniatura del video elegido
+        // (más barata que decodificar el archivo en el WebView). Se usa si viene
+        // y, si no, se cae al generador de siempre.
+        const nativePoster = options.poster;
         const posterPromise: Promise<string | undefined> =
           type === "video"
-            ? generateVideoThumbnail(localFile)
+            ? (nativePoster
+                ? Promise.resolve<string | undefined>(nativePoster)
+                : generateVideoThumbnail(localFile)
+                    .then((p) => p || undefined)
+                    .catch((e: any) => {
+                      console.log(`[VIDSEND] step=poster FAIL ${e?.message}`);
+                      return undefined;
+                    }))
                 .then((p) => {
-                  console.log(`[VIDSEND] step=poster ok=${!!p}`);
-                  return p || undefined;
-                })
-                .catch((e: any) => {
-                  console.log(`[VIDSEND] step=poster FAIL ${e?.message}`);
-                  return undefined;
+                  console.log(`[VIDSEND] step=poster ok=${!!p} source=${nativePoster ? "nativo" : "canvas"}`);
+                  return p;
                 })
             : Promise.resolve(undefined);
+
+        // La miniatura aparece en la burbuja en cuanto está lista, sin esperar
+        // a que termine la subida (antes el video se veía negro hasta el final).
+        posterPromise.then((p) => {
+          if (!p) return;
+          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, posterUrl: m.posterUrl || p } : m));
+        });
 
         const blobUrl = URL.createObjectURL(localBlob);
         const sendingMsg: Message = {
           id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type,
           mediaUrl: blobUrl,
+          posterUrl: options.poster,
           fileName: localFile.name,
-          fileSize: shouldCompress ? "Comprimiendo…" : formatFileSize(localBlob.size),
+          fileSize: formatFileSize(localBlob.size),
           status: "sending",
           synced: false,
           clientId: clientIdFile,
           sender_id: uid,
         };
-        setMessages(prev => [...prev, sendingMsg]);
-        onSendMessage(sendingMsg);
-        messageRepo.upsertMessage(chatId, sendingMsg, uid);
-        pendingSendIdsRef.current.add(tempId);
-        inFlightMessageIds.add(tempId);
-        bubbleCreated = true;
+        if (pending) {
+          // La burbuja ya existe (creada al elegir el video): solo se le pone
+          // el blob final para reproducir/arrastrar sin tocar el archivo nativo.
+          setMessages(prev => prev.map(m => m.id === tempId ? sendingMsg : m));
+        } else {
+          setMessages(prev => [...prev, sendingMsg]);
+          onSendMessage(sendingMsg);
+          messageRepo.upsertMessage(chatId, sendingMsg, uid);
+          pendingSendIdsRef.current.add(tempId);
+          inFlightMessageIds.add(tempId);
+          bubbleCreated = true;
+        }
 
         let fileToUpload: Blob = localFile;
         try {
           if (shouldCompress) {
-            console.log(`[VIDSEND] step=compress start (${(localBlob.size / 1048576).toFixed(2)}MB > 5MB)`);
+            console.log(`[VIDSEND] step=compress start (${(localBlob.size / 1048576).toFixed(2)}MB > ${(CLIENT_VIDEO_COMPRESS_THRESHOLD / 1048576).toFixed(0)}MB o formato no soportado)`);
+            updateTransfer({ transferStage: "compressing", transferProgress: undefined }, true);
             const compressed = await compressVideo(localFile);
             // `compressVideo` devuelve un `Blob` y `uploadChatMedia` acepta
             // `Blob`: no hace falta reenvolverlo en un `File`.
@@ -673,8 +852,10 @@ pendingSendIdsRef.current.add(tempId);
             console.log(`[VIDSEND] step=compress done -> ${(fileToUpload.size / 1048576).toFixed(2)}MB type=${fileToUpload.type}`);
             const newSize = formatFileSize(fileToUpload.size);
             setMessages(prev => prev.map(m => m.id === tempId ? { ...m, fileSize: newSize } : m));
+          } else if (skipWebViewCompress) {
+            console.log(`[VIDSEND] step=compress skipped (video ya comprimido en nativo)`);
           } else {
-            console.log(`[VIDSEND] step=compress skipped (${(localBlob.size / 1048576).toFixed(2)}MB <= 5MB o no-video)`);
+            console.log(`[VIDSEND] step=compress skipped (${(localBlob.size / 1048576).toFixed(2)}MB <= ${(CLIENT_VIDEO_COMPRESS_THRESHOLD / 1048576).toFixed(0)}MB y formato soportado; comprime el servidor)`);
           }
         } catch (e: any) {
           console.warn(`[VIDSEND] step=compress FAIL fallback-original: ${e?.message}`);
@@ -703,10 +884,35 @@ pendingSendIdsRef.current.add(tempId);
           }
           const dest = plan.action === "private" ? `chat-media` : `chat-images/${plan.folder}`;
           console.log(`[VIDSEND] step=upload-start ${(blob.size / 1048576).toFixed(2)}MB contentType=${blob.type} dest=${dest}`);
-          const url = plan.action === "private"
-            ? await uploadPrivateChatMedia(blob, chatId, plan.kind)
+          // La subida directa a Supabase no expone progreso; la privada (XHR
+          // contra el servidor) sí. En el primer caso la barra queda
+          // indeterminada hasta que termine.
+          const isPrivateUpload = plan.action === "private";
+          updateTransfer({
+            transferStage: "uploading",
+            transferProgress: isPrivateUpload ? 0 : undefined,
+            transferLoaded: 0,
+            transferTotal: blob.size,
+            transferSpeed: 0,
+          }, true);
+          const url = isPrivateUpload
+            ? await uploadPrivateChatMedia(blob, chatId, plan.kind, {
+                precompressedVideo: options.precompressedVideo,
+                onProgress: reportUploadProgress,
+              })
             : await uploadChatMedia(blob, plan.folder);
           console.log(`[VIDSEND] step=upload-ok ok=${!!url}`);
+          if (isPrivateUpload) {
+            // El cuerpo ya llegó; el servidor puede tardar en responder
+            // (remux o transcode). Barra indeterminada con texto "Procesando".
+            updateTransfer({
+              transferStage: "processing",
+              transferProgress: undefined,
+              transferLoaded: undefined,
+              transferTotal: undefined,
+              transferSpeed: undefined,
+            }, true);
+          }
           if (type === "video") {
             cacheVideoBlob(url, localBlob).catch(() => {});
           }
@@ -748,24 +954,171 @@ pendingSendIdsRef.current.add(tempId);
           }
         } catch (err: any) {
           console.error("[CHAT] File upload error:", err);
-          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
+          clearTransfer({ status: "error" as const });
           toast.error(`Error al enviar archivo: ${err?.message || "Error desconocido"}`);
         }
       } catch (err: any) {
         // Fallo FUERA de las etapas cubiertas (lectura del archivo, creación del
         // preview, etc.). Mismo patrón que el resto de errores de envío.
         console.error("[CHAT] Send failed:", err);
-        if (bubbleCreated) {
-          setMessages(prev => prev.map(m => m.id === tempId ? { ...m, status: "error" as const } : m));
-        }
+        clearTransfer({ status: "error" as const });
         toast.error(`Error al enviar archivo: ${err?.message || "Error desconocido"}`);
       } finally {
         pendingSendIdsRef.current.delete(tempId);
         inFlightMessageIds.delete(tempId);
         isSendingRef.current = false;
         // Ya no queda nada pendiente de leer: el input puede salir del DOM.
-        disposeInput();
+        options.onCleanup?.();
       }
+    };
+
+    // En Android la galería se abre con el picker nativo y el video se comprime
+    // con el encoder de hardware (Media3), no con MediaRecorder en el WebView.
+    // En Web se mantiene el `<input type="file">` de siempre.
+    if (type === "video" && Capacitor.isNativePlatform() && isNativeVideoCompressionAvailable()) {
+      let compressedPath: string | undefined;
+      let pendingBubble: { tempId: string; clientId: string; timestamp: string } | undefined;
+      try {
+        const selection = await CapacitorCamera.chooseFromGallery({
+          mediaType: MediaTypeSelection.Video,
+          allowMultipleSelection: false,
+          includeMetadata: true,
+        });
+        const media = selection.results?.[0];
+        if (!media?.uri) {
+          // El usuario canceló el picker: liberar el candado.
+          isSendingRef.current = false;
+          return;
+        }
+
+        const mimeType = resolveVideoMime(media.metadata?.format, media.uri);
+        const sourceSize = media.metadata?.size ?? 0;
+        const poster = normalizeThumbnail(media.thumbnail);
+        const compressThreshold = isValidChatId(chatId)
+          ? NATIVE_VIDEO_COMPRESS_THRESHOLD
+          : NATIVE_LOCAL_VIDEO_COMPRESS_THRESHOLD;
+        // Tamaño desconocido, archivo grande o formato que la subida privada
+        // rechaza: comprimir (el plugin siempre entrega MP4 admitido).
+        const needsNativeCompression =
+          sourceSize <= 0 ||
+          sourceSize >= compressThreshold ||
+          !isSupportedPrivateVideoMime(mimeType);
+
+        // La burbuja se pinta ya, con el archivo local y la miniatura del
+        // picker, antes de comprimir. Comprimir es silencioso: el usuario no
+        // necesita saber que el video se está preparando.
+        const ext = videoExtensionForMime(mimeType);
+        pendingBubble = createPendingVideoBubble({
+          previewUrl: Capacitor.convertFileSrc(media.uri),
+          poster,
+          fileName: `video_${Date.now()}.${ext}`,
+          size: sourceSize,
+        });
+
+        // El plugin nativo recomprime SIEMPRE al bitrate pedido; si el original
+        // ya es de bitrate bajo, recalcularlo con el tamaño y la duración evita
+        // que la "compresión" produzca un archivo IGUAL o MÁS GRANDE (y que la
+        // subida tarde lo mismo o más). Se apunta a ~65% del bitrate original.
+        const sourceDuration = media.metadata?.duration ?? 0;
+        const sourceBitrate = sourceSize > 0 && sourceDuration > 0
+          ? (sourceSize * 8) / sourceDuration
+          : 0;
+        const targetBitrate = sourceBitrate > 0
+          ? Math.max(500_000, Math.min(NATIVE_VIDEO_COMPRESS_BITRATE, Math.round(sourceBitrate * 0.65)))
+          : NATIVE_VIDEO_COMPRESS_BITRATE;
+
+        let pickedFile: File | undefined;
+        if (needsNativeCompression) {
+          console.log(
+            `[VIDSEND] step=native-compress start size=${(sourceSize / 1048576).toFixed(2)}MB ` +
+            `duration=${sourceDuration.toFixed(1)}s sourceBitrate=${Math.round(sourceBitrate)} ` +
+            `targetBitrate=${targetBitrate} type=${mimeType}`
+          );
+          const compressed = await compressVideoNative({
+            uri: media.uri,
+            height: NATIVE_VIDEO_COMPRESS_HEIGHT,
+            bitrate: targetBitrate,
+          });
+          compressedPath = compressed.path;
+          pickedFile = await fetchNativeMediaAsFile(
+            compressed.uri,
+            `video_${Date.now()}.mp4`,
+            compressed.mimeType || "video/mp4",
+          );
+          console.log(
+            `[VIDSEND] step=native-compress done ${((pickedFile?.size || 0) / 1048576).toFixed(2)}MB`
+          );
+        } else {
+          pickedFile = await fetchNativeMediaAsFile(
+            media.uri,
+            `video_${Date.now()}.${ext}`,
+            mimeType,
+          );
+          console.log(
+            `[VIDSEND] step=native-compress skipped ${(pickedFile.size / 1048576).toFixed(2)}MB type=${mimeType}`
+          );
+        }
+
+        if (!pickedFile) throw new Error("No se pudo preparar el video para enviar");
+        await sendPickedFile(pickedFile, {
+          poster,
+          skipWebViewCompress: true,
+          precompressedVideo: needsNativeCompression,
+          pending: pendingBubble,
+        });
+      } catch (e: any) {
+        const code = `${e?.code || ""}`;
+        const message = `${e?.message || ""}`;
+        const cancelled = code === "OS-PLUG-CAMR-0020" || /cancel/i.test(message);
+        if (cancelled) {
+          console.log("[VIDSEND] step=native-pick cancelled");
+        } else {
+          console.error("[CHAT] Native video send failed:", e);
+          toast.error(`Error al enviar video: ${message || "Error desconocido"}`);
+        }
+        const bubbleId = pendingBubble?.tempId;
+        if (!cancelled && bubbleId) {
+          setMessages(prev => prev.map(m => m.id === bubbleId ? { ...m, status: "error" as const } : m));
+          pendingSendIdsRef.current.delete(bubbleId);
+          inFlightMessageIds.delete(bubbleId);
+        }
+      } finally {
+        if (compressedPath) await deleteNativeVideoFile(compressedPath);
+        isSendingRef.current = false;
+      }
+      return;
+    }
+
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    // Android/WebView: el `File` del picker es un stream `content://` de UN SOLO
+    // USO propiedad de este input. Con el input fuera del documento nada lo
+    // mantiene vivo: el GC puede recuperarlo mientras el handler asíncrono
+    // sigue leyendo y la lectura revienta con `NotReadableError`. Se ancla al
+    // DOM (invisible) durante toda la vida del handler y se retira al terminar.
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    input.style.top = "0";
+    input.style.width = "1px";
+    input.style.height = "1px";
+    input.style.opacity = "0";
+    input.style.pointerEvents = "none";
+    document.body.appendChild(input);
+    const disposeInput = () => {
+      try {
+        if (input.parentNode) input.parentNode.removeChild(input);
+      } catch { /* el input ya se detached */ }
+    };
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) {
+        // Usuario canceló el picker: liberar el candado o quedaría bloqueado.
+        disposeInput();
+        isSendingRef.current = false;
+        return;
+      }
+      void sendPickedFile(file, { onCleanup: disposeInput });
     };
     input.click();
   };

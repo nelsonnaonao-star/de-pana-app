@@ -21,6 +21,8 @@ const URL_PATTERN = /(https?:\/\/[^\s]+|www\.[^\s]+)/g;
 const VIDEO_MAX_W = 260;
 const VIDEO_MAX_H = 420;
 
+
+
 // Detecta si replyToText de una respuesta a estado es media (imagen/video) o texto.
 function getStoryReplyMediaKind(replyToText?: string): "image" | "video" | "text" | null {
   if (!replyToText) return null;
@@ -350,7 +352,12 @@ function VideoViewer({ src, msg, onClose, handleForwardMessage, handleAddReactio
           preload="auto"
           onCanPlay={() => setVideoReady(true)}
           onLoadedData={() => setVideoReady(true)}
-          onError={() => setVideoReady(false)}
+          // Si el archivo local falla (corrupto/inaccesible), vuelve al origen
+          // remoto en vez de dejar el visor en negro.
+          onError={() => {
+            setVideoReady(false);
+            if (videoSrc !== src) setVideoSrc(src);
+          }}
           className={`w-full h-full object-contain transition-opacity duration-200 ${videoReady ? "opacity-100" : "opacity-0"}`}
         />
       </div>
@@ -1191,13 +1198,64 @@ function VideoMessageContent({ msg, isMe, activeReactionMenu, setActiveReactionM
           </button>
         )}
 
-        {isSending && (
-          <div className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center pointer-events-none" style={{ borderRadius: 12 }}>
-            <div className="bg-white/90 rounded-full p-2">
-              <Loader2 className="w-5 h-5 text-[#0a4d52] animate-spin" />
+        {isSending && (() => {
+          const percent = msg.transferStage === "uploading" && msg.transferProgress != null
+            ? Math.max(0, Math.min(100, msg.transferProgress))
+            : null;
+          const indeterminate = percent == null;
+          const size = 58;
+          const stroke = 4;
+          const radius = (size - stroke) / 2;
+          const circumference = 2 * Math.PI * radius;
+          const offset = indeterminate
+            ? circumference * 0.72
+            : circumference * (1 - percent / 100);
+          return (
+            <div
+              className="absolute inset-0 bg-black/40 rounded-xl flex items-center justify-center pointer-events-none"
+              style={{ borderRadius: 12 }}
+            >
+              <div className="relative" style={{ width: size, height: size }}>
+                <svg
+                  width={size}
+                  height={size}
+                  className={indeterminate ? "animate-spin" : undefined}
+                >
+                  <circle
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.25)"
+                    strokeWidth={stroke}
+                  />
+                  <circle
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    fill="none"
+                    stroke="#ffffff"
+                    strokeWidth={stroke}
+                    strokeLinecap="round"
+                    strokeDasharray={circumference}
+                    strokeDashoffset={offset}
+                    transform={`rotate(-90 ${size / 2} ${size / 2})`}
+                    style={indeterminate ? undefined : { transition: "stroke-dashoffset 220ms linear" }}
+                  />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  {percent != null ? (
+                    <span className="text-[11px] font-semibold text-white tabular-nums">
+                      {Math.round(percent)}%
+                    </span>
+                  ) : (
+                    <Loader2 className="w-4 h-4 text-white animate-spin" />
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </>
   );

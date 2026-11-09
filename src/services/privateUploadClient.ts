@@ -103,10 +103,31 @@ export interface MultipartResult {
   json(): Promise<any>;
 }
 
+/** Progreso del cuerpo HTTP: bytes enviados y total del multipart. */
+export type TransferProgressHandler = (loaded: number, total: number) => void;
+
+export interface MultipartProgressOptions {
+  onProgress?: TransferProgressHandler;
+}
+
+export interface PrivateUploadOptions {
+  onProgress?: TransferProgressHandler;
+  /**
+   * El video ya viene en MP4 H.264/AAC comprimido en el dispositivo. El
+   * servidor se salta el re-encode y solo hace remux (`-c copy`), pasando de
+   * decenas de segundos a milisegundos.
+   */
+  precompressedVideo?: boolean;
+}
+
 export interface PrivateUploadDeps {
   // Realiza el POST multipart (con Bearer) y devuelve la respuesta. La URL
   // recibida es relativa (p. ej. `/api/media/upload-private?chat_id=...`).
-  postMultipart(url: string, form: FormData): Promise<MultipartResult>;
+  postMultipart(
+    url: string,
+    form: FormData,
+    options?: MultipartProgressOptions,
+  ): Promise<MultipartResult>;
   // Comprime una imagen a jpeg antes de subirla.
   compressImage(blob: Blob): Promise<Blob>;
 }
@@ -119,6 +140,7 @@ export async function performPrivateUpload(
   chatId: string,
   kind: PrivateMediaKind,
   deps: PrivateUploadDeps,
+  opts: PrivateUploadOptions = {},
 ): Promise<string> {
   if (!isValidChatId(chatId)) {
     throw new Error("chat_id inválido: se requiere el UUID del chat de destino");
@@ -136,7 +158,14 @@ export async function performPrivateUpload(
     }
     const form = new FormData();
     form.append("video", blob, privateFileName("video", mime, "mp4"));
-    const res = await deps.postMultipart(`/api/media/upload-private-video${chatQuery}`, form);
+    const videoQuery = opts.precompressedVideo
+      ? `${chatQuery}&precompressed=1`
+      : chatQuery;
+    const res = await deps.postMultipart(
+      `/api/media/upload-private-video${videoQuery}`,
+      form,
+      { onProgress: opts.onProgress },
+    );
     if (!res.ok) throw new Error(`upload-private-video ${res.status}`);
     const data = await res.json().catch(() => null);
     if (!data?.url) throw new Error("respuesta sin url");
@@ -152,7 +181,11 @@ export async function performPrivateUpload(
 
   const form = new FormData();
   form.append("file", toUpload, privateFileName("file", effectiveMime, "bin"));
-  const res = await deps.postMultipart(`/api/media/upload-private${chatQuery}`, form);
+  const res = await deps.postMultipart(
+    `/api/media/upload-private${chatQuery}`,
+    form,
+    { onProgress: opts.onProgress },
+  );
   if (!res.ok) throw new Error(`upload-private ${res.status}`);
   const data = await res.json().catch(() => null);
   if (!data?.url) throw new Error("respuesta sin url");
