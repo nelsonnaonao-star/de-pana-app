@@ -556,7 +556,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       debugLog("fetching fresh data", { timeout: TIMEOUT_MS });
       
       const [profilesResult, chatsResult, contactsResult, callsResult] = await Promise.allSettled([
-        withTimeout(supabase.from("profiles").select("id,name,email,avatar,avatar_url,bio,role,status,phone_number,username,bubble_color,partner_bubble_color,notif_config,default_story_audience,created_at,updated_at").eq("id", userId).single(), 8000),
+        withTimeout(supabase.rpc("get_my_profile"), 8000),
         withTimeout(getChats(userId), TIMEOUT_MS),
         withTimeout(getContacts(userId), TIMEOUT_MS),
         withTimeout(getCalls(userId), TIMEOUT_MS),
@@ -580,7 +580,9 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       if (hasProfileError) {
         debugLog("Profile fetch error", { message: profilesResult.value.error.message, code: profilesResult.value.error.code, details: profilesResult.value.error.details, hint: profilesResult.value.error.hint });
       }
-      const newProfile = profilesResult.status === "fulfilled" && profilesResult.value?.data ? (profilesResult.value.data as Profile) : cachedProfile;
+      const rawProfile = profilesResult.status === "fulfilled" ? profilesResult.value?.data : null;
+      const profileRow = Array.isArray(rawProfile) ? rawProfile[0] : rawProfile;
+      const newProfile = profileRow ? (profileRow as Profile) : cachedProfile;
       const newChats = chatsResult.status === "fulfilled" ? chatsResult.value || [] : cachedChats;
       let newContacts = contactsResult.status === "fulfilled" ? contactsResult.value || [] : cachedContacts;
       const newCalls = callsResult.status === "fulfilled" ? callsResult.value || [] : cachedCalls;
@@ -1082,14 +1084,11 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
   const refreshProfile = async () => {
     if (!user) return;
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id,name,email,avatar,avatar_url,bio,role,status,phone_number,username,bubble_color,partner_bubble_color,notif_config,default_story_audience,created_at,updated_at")
-      .eq("id", user.id)
-      .single();
-    if (!error && data) {
-      setProfile(data as Profile);
-      saveCache(cacheKey(user.id, "profile"), data as Profile);
+    const { data, error } = await supabase.rpc("get_my_profile");
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!error && row) {
+      setProfile(row as Profile);
+      saveCache(cacheKey(user.id, "profile"), row as Profile);
     }
   };
 

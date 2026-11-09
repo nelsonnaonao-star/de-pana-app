@@ -25,10 +25,13 @@ export type Profile = {
 };
 
 // Columnas públicas de `profiles` que el cliente puede leer vía RLS.
-// `real_email` y `pin` NO se conceden a `authenticated` (fix_hide_profile_private_columns.sql);
-// cualquier consulta al perfil debe limitarse a esta lista para que PostgREST no genere SELECT *.
+// `real_email`, `pin`, `email`, `phone_number` y `phone_digits` NO se conceden
+// a `authenticated`; el perfil propio (con email/teléfono) sale de la RPC
+// `get_my_profile()` y el ajeno de `get_public_profile()`.
+// Cualquier consulta a `profiles` debe limitarse a esta lista para que
+// PostgREST no genere SELECT *.
 export const PROFILE_PUBLIC_COLUMNS =
-  "id,name,email,avatar,avatar_url,bio,role,status,phone_number,username,bubble_color,partner_bubble_color,notif_config,default_story_audience,created_at,updated_at";
+  "id,name,avatar,avatar_url,bio,role,status,username,bubble_color,partner_bubble_color,notif_config,default_story_audience,created_at,updated_at";
 
 async function trySignIn(email: string, password: string) {
   const result = await supabase.auth.signInWithPassword({ email, password });
@@ -309,13 +312,16 @@ export async function getCurrentProfile(): Promise<Profile | null> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data } = await supabase
-    .from("profiles")
-    .select(PROFILE_PUBLIC_COLUMNS)
-    .eq("id", user.id)
-    .single();
+  // RPC SECURITY DEFINER: devuelve el perfil propio (incluye email y
+  // phone_number) sin exponer esas columnas al resto de usuarios.
+  const { data, error } = await supabase.rpc("get_my_profile");
+  if (error) {
+    logger.warn("[AUTH] get_my_profile falló", { error: error.message });
+    return null;
+  }
 
-  return data as Profile;
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row as Profile) || null;
 }
 
 export async function updateProfile(id: string, updates: Partial<Profile>) {

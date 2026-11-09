@@ -21,32 +21,37 @@ export async function searchUsers(q: string, currentUserId: string) {
   if (query.length < 2) return [];
   const digits = query.replace(/\D/g, "");
   if (digits.length >= 7) {
-    const { data: byDigits } = await supabase
-      .from("profiles")
-      .select("id, name, username, phone_number, avatar_url, bio")
-      .ilike("phone_digits", `%${digits}%`)
-      .neq("id", currentUserId)
-      .limit(10);
-    if (byDigits && byDigits.length > 0) {
-      return byDigits.map((p: any) => ({ id: p.id, name: p.name, username: p.username || "", phone: p.phone_number || "", avatar: p.avatar_url || "", bio: p.bio || "" }));
-    }
-    const { data: byPhone } = await supabase
-      .from("profiles")
-      .select("id, name, username, phone_number, avatar_url, bio")
-      .ilike("phone_number", `%${digits}%`)
-      .neq("id", currentUserId)
-      .limit(10);
-    if (byPhone && byPhone.length > 0) {
-      return byPhone.map((p: any) => ({ id: p.id, name: p.name, username: p.username || "", phone: p.phone_number || "", avatar: p.avatar_url || "", bio: p.bio || "" }));
-    }
+    // Búsqueda por teléfono vía RPC: solo campos públicos y `matched_phone`
+    // (el número buscado), nunca el teléfono almacenado de terceros.
+    const { data: byDigits } = await supabase.rpc("match_profiles_by_phones", {
+      p_phones: [digits],
+      p_limit: 10,
+    });
+    return ((byDigits || []) as any[])
+      .filter((p) => p.id !== currentUserId)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        username: p.username || "",
+        phone: p.matched_phone || "",
+        avatar: p.avatar_url || "",
+        bio: p.bio || "",
+      }));
   }
   const { data: profiles } = await supabase
     .from("profiles")
-    .select("id, name, username, phone_number, avatar_url, bio")
+    .select("id, name, username, avatar_url, bio")
     .neq("id", currentUserId)
     .or(`username.ilike.%${query}%,name.ilike.%${query}%`)
     .limit(10);
-  return (profiles || []).map((p: any) => ({ id: p.id, name: p.name, username: p.username || "", phone: p.phone_number || "", avatar: p.avatar_url || "", bio: p.bio || "" }));
+  return (profiles || []).map((p: any) => ({
+    id: p.id,
+    name: p.name,
+    username: p.username || "",
+    phone: "",
+    avatar: p.avatar_url || "",
+    bio: p.bio || "",
+  }));
 }
 
 export async function getContacts(userId: string): Promise<Contact[]> {

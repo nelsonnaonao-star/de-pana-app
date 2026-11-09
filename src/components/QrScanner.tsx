@@ -169,13 +169,13 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
         return;
       }
 
-      // Lookup profile directamente desde Supabase
+      // Lookup del perfil público vía RPC (sin teléfono/email ajenos)
       stopCamera();
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("id, name, username, phone_number, avatar_url, bio")
-        .eq("id", userId)
-        .single();
+      const { data, error: profileError } = await supabase.rpc(
+        "get_public_profile",
+        { p_id: userId }
+      );
+      const profile = Array.isArray(data) ? data[0] : data;
 
       if (profileError || !profile) {
         setErrorMsg("Usuario no encontrado");
@@ -184,7 +184,14 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
         return;
       }
 
-      setFoundProfile(profile);
+      setFoundProfile({
+        id: profile.id,
+        name: profile.name,
+        username: profile.username,
+        avatar_url: profile.avatar_url,
+        bio: profile.bio,
+        phone_number: "",
+      });
       setStatus("found");
     } catch (e) {
       console.error("QR handle error:", e);

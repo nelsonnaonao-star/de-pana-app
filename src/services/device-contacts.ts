@@ -79,56 +79,45 @@ export async function matchContactsWithSupabase(
   contacts: DeviceContact[]
 ): Promise<MatchedProfile[]> {
   if (contacts.length === 0) return [];
-
   const uniqueNumbers = [...new Set(contacts.map((c) => c.cleanedPhone))];
   const BATCH_SIZE = 100;
+
   const matched: MatchedProfile[] = [];
+  const seen = new Set<string>();
 
   for (let i = 0; i < uniqueNumbers.length; i += BATCH_SIZE) {
     const batch = uniqueNumbers.slice(i, i + BATCH_SIZE);
 
-    // Country-code-agnostic suffixes (deduplicated) so a contact stored as
-    // "3001234567" (10 digits, no +57) still matches a profile whose
-    // phone_digits is "573001234567" (or the reverse).
-    const suffixVariants = new Set<string>();
-    for (const n of batch) {
-      suffixVariants.add(n);
-      if (n.length >= 11) {
-        for (let k = 1; k <= 3; k++) {
-          const sliced = n.slice(k);
-          if (sliced.length >= 7) suffixVariants.add(sliced);
-        }
-      }
-      suffixVariants.add(lastDigits(n, 10));
-      suffixVariants.add(lastDigits(n, 7));
-    }
-
-    const orFilters = [...suffixVariants]
-      .map((s) => `phone_digits.like.%${s}`)
-      .join(",");
-
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, username, name, phone_number, avatar_url")
-      .or(orFilters)
-      .limit(500);
+    // La RPC normaliza y compara del lado servidor (país-agnóstico) y devuelve
+    // solo campos públicos + `matched_phone` (el número de la agenda que hizo
+    // match). Nunca expone el teléfono almacenado de terceros.
+    const { data, error } = await supabase.rpc("match_profiles_by_phones", {
+      p_phones: batch,
+      p_limit: 500,
+    });
 
     if (error) {
-      console.error("[DEVICE-CONTACTS] Supabase query error:", error);
+      console.error("[DEVICE-CONTACTS] Supabase RPC error:", error);
       continue;
     }
 
-    const seen = new Set<string>();
-    for (const profile of data || []) {
+    for (const profile of (data || []) as any[]) {
       if (seen.has(profile.id)) continue;
       seen.add(profile.id);
-      const profileDigits = digitsOnly(profile.phone_number);
+
+      const matchedPhone = profile.matched_phone || "";
+      const profileDigits = digitsOnly(matchedPhone);
       const deviceContact = contacts.find(
         (c) => lastDigits(digitsOnly(c.cleanedPhone), 10) === lastDigits(profileDigits, 10)
       );
+
       matched.push({
-        ...profile,
-        contactName: deviceContact?.name || profile.name,
+        id: profile.id,
+        username: profile.username || "",
+        name: profile.name || "",
+        phone_number: matchedPhone,
+        avatar_url: profile.avatar_url || undefined,
+        contactName: deviceContact?.name || profile.name || "",
       });
     }
   }
@@ -146,18 +135,25 @@ export async function searchByPhone(
   query: string
 ): Promise<MatchedProfile[]> {
   const cleaned = cleanPhone(query);
-  if (cleaned.length < 4) return [];
+  // La RPC exige al menos 7 dígitos para evitar coincidencias masivas.
+  if (cleaned.length < 7) return [];
 
-    const { data, error } = await supabase
-      .from("profiles")
-      .select("id, username, name, phone_number, avatar_url")
-      .ilike("phone_digits", `%${cleaned}%`)
-      .limit(20);
+  const { data, error } = await supabase.rpc("match_profiles_by_phones", {
+    p_phones: [cleaned],
+    p_limit: 20,
+  });
 
   if (error) {
     console.error("[DEVICE-CONTACTS] Search error:", error);
     return [];
   }
 
-  return (data || []).map((p) => ({ ...p, contactName: p.name }));
+  return ((data || []) as any[]).map((p) => ({
+    id: p.id,
+    username: p.username || "",
+    name: p.name || "",
+    phone_number: p.matched_phone || "",
+    avatar_url: p.avatar_url || undefined,
+    contactName: p.name || "",
+  }));
 }

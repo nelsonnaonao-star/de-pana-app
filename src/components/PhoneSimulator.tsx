@@ -3584,26 +3584,24 @@ const lastSentAtRef = useRef<Record<string, number>>({});
     if (!activeChat?.partnerUserId || !user?.id) return;
     try {
       const [profileRes, contactRes] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select("id, name, username, phone_number, avatar_url, bio")
-          .eq("id", activeChat.partnerUserId)
-          .single(),
+        supabase.rpc("get_public_profile", { p_id: activeChat.partnerUserId }),
         supabase
           .from("contacts")
-          .select("id, name")
+          .select("id, name, phone")
           .eq("user_id", user.id)
           .eq("contact_user_id", activeChat.partnerUserId)
           .limit(1),
       ]);
-      const data = profileRes.data;
+      const data = Array.isArray(profileRes.data) ? profileRes.data[0] : profileRes.data;
       const contactRow = contactRes.data && contactRes.data.length > 0 ? contactRes.data[0] : null;
       if (data) {
         setContactProfile({
           id: data.id,
           // Prioridad: contacts.name → profiles.name (mismo criterio que getChats)
           name: contactRow?.name || data.name,
-          phone: data.phone_number || "",
+          // El teléfono ya no es público en `profiles`; se usa el que el usuario
+          // guardó en su propia agenda (contacts.phone).
+          phone: contactRow?.phone || "",
           avatar: data.avatar_url || "",
           bio: data.bio || "",
           username: data.username || "",

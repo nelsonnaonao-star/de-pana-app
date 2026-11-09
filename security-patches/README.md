@@ -1,12 +1,12 @@
 # Parches de seguridad — DE PANA
 
-Estos parches están preparados para revisión y aplicación manual. El **02 y el 05
-ya están aplicados**; los demás siguen sin aplicar.
+Estos parches están preparados para revisión y aplicación manual.
 
-> **Estado actual — plan cero riesgo (2026-11-02):** el `02` está aplicado y
-> verificado (trigger `guard_sensitive_chat_fields` activo y `BEFORE UPDATE`).
-> El `05_link_preview` está aplicado en el commit `96f0fcd`; solo queda verificar
-> el deploy. Todo lo demás queda **congelado** hasta cerrar esa verificación.
+> **Estado actual — 2026-11-09:** aplicados y verificados en producción `02`,
+> `05`, `10a`, `11`, `12` y `13`. El cliente ya fue migrado a las RPCs de
+> perfiles (`get_my_profile`, `match_profiles_by_phones`, `get_public_profile`)
+> y el typecheck pasa. **`10b` NO se aplica hasta desplegar ese cliente.**
+> La migración de media (`01`) sigue pendiente de ejecución (dry-run hecho).
 
 ## Contenido
 
@@ -19,6 +19,11 @@ ya están aplicados**; los demás siguen sin aplicar.
 | 05 | SSRF en `/api/link-preview` | `patches/05_link_preview.patch` | Aplicado (`96f0fcd`) — verificar deploy |
 | 06 | Hardening `NODE_ENV` | `patches/06_node_env.patch` | Congelado |
 | 07 | Políticas amplias de `chat-images` | `sql/07_chat_images_policies.sql` | Futuro (solo SELECT) |
+| 10a | RPCs seguras de perfiles | `sql/10a_profiles_public_rpcs.sql` | Aplicado y verificado (2026-11-09) |
+| 10b | Revocar PII (`email`/teléfono) de `profiles` | `sql/10b_profiles_pii_revoke.sql` | **Pendiente de deploy del cliente** |
+| 11 | Cerrar tablas legacy y `anon` en `contacts` | `sql/11_close_legacy_tables.sql` | Aplicado y verificado (2026-11-09) |
+| 12 | `search_path` + EXECUTE de anon | `sql/12_function_hardening.sql` | Aplicado y verificado (2026-11-09) |
+| 13 | Revocar RPC legacy `search_users` (email/pin) | `sql/13_revoke_search_users.sql` | Aplicado y verificado (2026-11-09) |
 
 ## Aplicados
 
@@ -29,6 +34,21 @@ ya están aplicados**; los demás siguen sin aplicar.
 2. **`patches/05_link_preview.patch`** — añade auth, DNS y límite de tamaño a
    `/api/link-preview`. **Ya aplicado** en el commit `96f0fcd`; no reaplicar.
    Falta desplegar el servidor y verificar.
+3. **`sql/10a_profiles_public_rpcs.sql`** — aplicado 2026-11-09. Crea
+   `get_my_profile()` y `match_profiles_by_phones(text[], int)`; solo
+   `authenticated`/`service_role`. Verificado con simulación de rol.
+4. **`sql/11_close_legacy_tables.sql`** — aplicado 2026-11-09. 0 policies en
+   tablas legacy, 0 privilegios de `anon` en `contacts`, 0 acceso de cliente a
+   `call_signals`.
+5. **`sql/12_function_hardening.sql`** — aplicado 2026-11-09. 0 funciones sin
+   `search_path`; funciones de trigger/utilidad no ejecutables por `anon`.
+6. **`sql/13_revoke_search_users.sql`** — aplicado 2026-11-09. `search_users`
+   (enumeraba email/pin) sin EXECUTE para `anon`/`authenticated`.
+7. **Cliente de perfiles** — migrado a RPCs: `SupabaseContext.tsx`,
+   `auth.ts`, `device-contacts.ts`, `contacts.ts`, `QrScanner.tsx` y
+   `PhoneSimulator.tsx`. `tsc --noEmit` pasa. **Falta desplegar.**
+8. **`sql/10b_profiles_pii_revoke.sql`** — **NO aplicado**. Ejecutar solo
+   después de desplegar el cliente del punto 7.
 
 ## Congelado (no aplicar todavía)
 
@@ -39,9 +59,11 @@ ya están aplicados**; los demás siguen sin aplicar.
 - **04:** integridad de encuestas; no es urgente.
 - **06:** producción ya está protegida (verificado: `/api/auth/auto-confirm`
   responde `403`). Es hardening.
-- **Migración de las 382 fotos:** la media nueva ya se guarda en `chat-media`
-  vía `/upload-private`. Las fotos viejas siguen públicas por URL; solo migrar
-  si son sensibles.
+- **Migración de media (`01`):** script corregido (4 columnas: `image_url`,
+  `video_url`, `audio_url`, `file_url`; stickers/GIFs quedan públicos).
+  Dry-run 2026-11-09: **382 mensajes, 381 objetos, 28 chats**
+  (image 52, video 42, audio 284, file 4). **No se ha migrado nada.** Antes de
+  `--apply`, desplegar el cliente que firma URLs y coordinar versiones antiguas.
 - **SQL 07 completo:** no aplicarlo. Ver abajo.
 
 ## SQL 07 — versión segura (futuro, solo SELECT)
