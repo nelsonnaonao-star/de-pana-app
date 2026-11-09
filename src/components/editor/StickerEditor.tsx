@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Canvas, FabricImage, IText, Shadow } from "fabric";
-import { removeBackground as removeBgFromImage, preload as preloadBgModel } from "@imgly/background-removal";
+import { removeBackground as removeBgFromImage } from "@imgly/background-removal";
 import { ImageIcon, Loader2, Scissors, Type, Save, X } from "lucide-react";
 
 export interface StickerExport {
@@ -20,8 +20,13 @@ interface StickerEditorProps {
 const CANVAS_SIZE = 512;
 
 function getBgPublicPath() {
-  const origin = window.location.origin;
-  return new URL("/background-removal/", `${origin}/`).toString();
+  const configured = import.meta.env.VITE_BG_REMOVAL_PUBLIC_PATH;
+  if (configured) return configured.endsWith("/") ? configured : `${configured}/`;
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
+  if (supabaseUrl) {
+    return `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/app-assets/background-removal/`;
+  }
+  return new URL("/background-removal/", `${window.location.origin}/`).toString();
 }
 
 const BG_MODEL_CONFIG = {
@@ -191,9 +196,6 @@ export default function StickerEditor({ isOpen, onClose, onExport, initialImage 
         .catch(() => setNotice("No se pudo cargar la imagen inicial"));
     }
 
-    preloadBgModel(BG_MODEL_CONFIG).catch((err) => {
-      console.error("[StickerEditor] Modelo de fondo no pudo precargarse:", err);
-    });
     console.log("[StickerEditor][diag] crossOriginIsolated:", self.crossOriginIsolated);
     console.log("[StickerEditor][diag] hardwareConcurrency:", navigator.hardwareConcurrency);
     console.log("[StickerEditor][diag] userAgent:", navigator.userAgent);
