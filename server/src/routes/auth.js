@@ -3,6 +3,7 @@ import { randomInt, randomUUID } from 'crypto';
 import { supabaseAdmin } from '../db.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { sendResetEmail } from '../emailService.js';
+import { assertPasswordNotLeaked } from '../lib/hibp.js';
 
 const router = Router();
 
@@ -415,6 +416,18 @@ router.post('/update-password', verifyLimiter, async (req, res) => {
       const elapsed = Date.now() - startedAt;
       if (elapsed < 300) await new Promise(r => setTimeout(r, 300 - elapsed));
       return genericInvalid();
+    }
+
+    // Contraseña filtrada: rechazar ANTES de consumir el código para que el
+    // usuario pueda reintentar con otra sin quemarlo. Fail-open si HIBP no
+    // responde (un fallo externo no debe impedir la recuperación).
+    try {
+      await assertPasswordNotLeaked(newPassword);
+    } catch (leakError) {
+      if (leakError && leakError.code === 'PASSWORD_LEAKED') {
+        return res.status(400).json({ error: leakError.message });
+      }
+      console.error('[EMAIL-RECOVERY] HIBP check error:', leakError);
     }
 
     // Código correcto: se consume de forma atómica ANTES de cambiar la

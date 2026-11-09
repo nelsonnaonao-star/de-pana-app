@@ -14,6 +14,7 @@ import { contactRepo } from "../services/database/repositories/ContactRepository
 import { db } from "../services/database/DatabaseService";
 import toast from "react-hot-toast";
 import { logger } from "../lib/logger";
+import { assertPasswordNotLeaked } from "../services/passwordSecurity";
 
 const CACHE_PREFIX = "redon_cache_";
 const cacheKey = (uid: string, name: string) => `${CACHE_PREFIX}${name}_${uid}`;
@@ -1150,6 +1151,8 @@ const refreshChats = async () => {
 
   const completePasswordReset = async (newPassword: string) => {
     const uid = user?.id;
+    // Rechaza contraseñas filtradas antes de enviarlas a Supabase.
+    await assertPasswordNotLeaked(newPassword);
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) throw error;
     setPasswordRecovery(false);

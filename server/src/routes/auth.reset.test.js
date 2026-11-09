@@ -14,6 +14,8 @@ import assert from 'node:assert/strict';
 const SUPA = 'https://akgsylutbpgolurkcavh.supabase.co';
 process.env.SUPABASE_SERVICE_KEY = 'dummy-key-auth-reset-tests';
 process.env.VITE_SUPABASE_URL = SUPA;
+// Sin red: el chequeo HIBP se salta salvo que el test inyecte fetch.
+process.env.NODE_ENV = 'test';
 
 const db = await import('../db.js');
 

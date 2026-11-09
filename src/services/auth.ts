@@ -2,6 +2,7 @@ import { supabase } from "../lib/supabase";
 import { apiUrl, authFetch } from "../lib/api";
 import toast from "react-hot-toast";
 import { logger } from "../lib/logger";
+import { assertPasswordNotLeaked } from "./passwordSecurity";
 
 export type Profile = {
   id: string;
@@ -167,6 +168,9 @@ export async function register(
   }
 
   if (duplicate) throw new Error("El usuario o teléfono ya está registrado");
+
+  // Rechaza contraseñas presentes en filtraciones (k-anonymity, gratis).
+  await assertPasswordNotLeaked(password);
 
   const { data, error } = await supabase.auth.signUp({
     email: `${cleanUsername}@redon.app`,
