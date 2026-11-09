@@ -1,7 +1,7 @@
 -- ============================================================
 -- PARCHE 07 (versión segura) - Cerrar SOLO el SELECT de chat-images
 --
--- ESTADO: guardado para el futuro. NO ejecutar hoy.
+-- ESTADO: APLICADO 2026-11-09 (solo SELECT). El INSERT se conserva.
 --
 -- Qué hace:
 --   Elimina únicamente "Allow authenticated downloads" (SELECT).

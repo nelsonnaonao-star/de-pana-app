@@ -119,19 +119,18 @@ migrar lo viejo y cortar las rutas que aún escriben/leen `chat-images`.
 
 ### Fase 4 — Cerrar/migrar `chat-images`
 1. Mover avatares/stickers/flyers restantes a sus buckets.
-2. Verificar 0 referencias a `chat-images` en las 6 columnas.
-3. Quitar SELECT/INSERT amplios de `chat-images`
-   (`security-patches/sql/07_chat_images_policies.sql` ya quita el SELECT;
-   ampliar para quitar el INSERT y poner el bucket en `public = false`).
+2. Verificar 0 referencias a `chat-images` en las 4 columnas de media.
+3. El SELECT ya está retirado (`07`, 2026-11-09). Pendiente: quitar el INSERT y
+   poner el bucket en `public = false` cuando la media esté migrada.
 4. Opcional: borrar el bucket `chat-images` cuando esté vacío.
 
 Policies objetivo (stretch):
 ```sql
 -- chat-media: privado; sin policies para anon/authenticated.
 -- (acceso solo vía service_role/signed URLs)
-DROP POLICY IF EXISTS "Allow authenticated uploads"   ON storage.objects;
-DROP POLICY IF EXISTS "Allow authenticated downloads" ON storage.objects;
--- chat-images: si se mantiene, cerrar todo y poner public=false desde el Dashboard.
+-- chat-images: SELECT ya retirado (07, 2026-11-09).
+DROP POLICY IF EXISTS "Allow authenticated uploads" ON storage.objects;
+-- y poner el bucket public=false desde el Dashboard cuando esté vacío.
 ```
 > Nota: `public = true` en un bucket hace que la ruta
 > `/storage/v1/object/public/...` ignore RLS. Para que una foto de chat deje de
