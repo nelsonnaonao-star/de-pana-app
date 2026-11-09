@@ -24,10 +24,12 @@ import { startEphemeralPurgeJob, stopEphemeralPurgeJob } from './jobs/ephemeralP
 
 process.on('uncaughtException', (err) => {
   console.error('[FATAL] Uncaught exception:', err);
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled rejection:', reason);
+  process.exit(1);
 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,35 +42,36 @@ async function main() {
 
   app.set('trust proxy', 1);
 
-  const staticOrigins = [
+  const normalizeOrigin = (value) =>
+    (value || '').trim().replace(/([^:/])\/+$/, '$1');
+
+  const staticOrigins = new Set([
     'http://localhost:5173',
     'http://localhost:5199',
     'http://localhost:5000',
     'http://localhost:3000',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5199',
+    'http://127.0.0.1:5000',
+    'http://127.0.0.1:3000',
     'https://localhost',
     'capacitor://localhost',
     'ionic://localhost',
     'file://',
     'https://de-pana-app-kucq.onrender.com',
-    process.env.CORS_ORIGIN || '',
-  ].filter(Boolean);
-
-  const clientOrigin = process.env.CLIENT_ORIGIN || '';
-  if (clientOrigin && !staticOrigins.includes(clientOrigin)) {
-    staticOrigins.push(clientOrigin);
-  }
+    ...(process.env.CORS_ORIGIN || '').split(','),
+    ...(process.env.CLIENT_ORIGIN || '').split(','),
+  ].map(normalizeOrigin).filter(Boolean));
 
   const isProduction = process.env.NODE_ENV === 'production';
 
   app.use(cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (staticOrigins.includes(origin)) return callback(null, true);
-      if (clientOrigin && origin.endsWith(new URL(clientOrigin).hostname)) return callback(null, true);
-      if (isProduction) {
-        return callback(new Error('Origen no autorizado'));
-      }
-      callback(null, true);
+      if (staticOrigins.has(normalizeOrigin(origin))) return callback(null, true);
+      if (!isProduction) return callback(null, true);
+      console.warn('[CORS] Origen no autorizado:', origin);
+      callback(null, false);
     },
     credentials: true,
   }));
