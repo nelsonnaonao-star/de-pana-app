@@ -8,6 +8,8 @@
 --     - public.match_profiles_by_phones()  (contactos por teléfono)
 --     - public.get_public_profile(uuid)    (perfil ajeno: sin PII)
 --   Ejecutar 10a primero (RPCs). Desplegar el cliente. Luego esto.
+--   Runbook de ventana: security-patches/runbooks/10b_window.md
+--   (forzar 1.12, verificaciones, Realtime y rollback).
 --
 -- Qué hace:
 --   Quita SELECT de email, phone_number y phone_digits a anon/authenticated.
@@ -95,4 +97,6 @@ COMMIT;
 -- ============================================================
 -- GRANT SELECT (email, phone_number, phone_digits)
 --   ON TABLE public.profiles TO authenticated;
+-- GRANT SELECT (email, phone_number, phone_digits)
+--   ON TABLE public.profiles TO anon;
 -- ============================================================

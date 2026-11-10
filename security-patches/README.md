@@ -70,6 +70,20 @@ Estos parches están preparados para revisión y aplicación manual.
 - **SQL 07 (cierre total):** no aplicar aún. El SELECT ya está cerrado; falta
   retirar INSERT y migrar la media. Ver abajo.
 
+## Preparado (no aplicado)
+
+- **`sql/14_rotate_fcm_webhook_secret.sql`** — plantilla para unificar y rotar
+  el secreto del webhook FCM. Hallazgo: hoy hay **dos** secretos en los triggers
+  (`calls`/`chat_participants` usan uno débil; `messages` usa otro aleatorio) y
+  el servidor solo acepta uno, así que al menos una ruta ya recibe `401`.
+  Confirmado el 2026-11-09: `messages` daba `401`; se alineó temporalmente al
+  secreto aceptado para restaurar los push. Los tres siguen con el secreto
+  débil hasta ejecutar esta rotación. Requiere actualizar `FCM_WEBHOOK_SECRET`
+  en Render **antes** de ejecutarlo.
+- **`runbooks/10b_window.md`** — ventana completa de `10b`: forzar 1.12
+  (`min_supported_code = 12`), backup, verificaciones SQL, pruebas de app y
+  Realtime, monitoreo y rollback (incluye `anon`).
+
 ## SQL 07 — aplicado (solo SELECT, 2026-11-09)
 
 El SQL 07 original eliminaba INSERT, SELECT y DELETE. Eso **rompe** las subidas
