@@ -1503,7 +1503,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
 
       {showAttachments && (
         <AttachmentTray
-          onPickFile={(accept, type) => { setShowAttachments(false); actions.triggerFilePick(accept, type); }}
+          onPickFile={(accept, type, source) => { setShowAttachments(false); actions.triggerFilePick(accept, type, source); }}
           onOpenGifPicker={() => { setShowGifPicker(true); setShowAttachments(false); }}
           onOpenPollForm={() => { setShowAttachments(false); setShowPollForm(true); }}
           onSendLocation={() => { setShowAttachments(false); actions.handleSendLocation(); }}

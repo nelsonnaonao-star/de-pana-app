@@ -26,7 +26,7 @@ interface ChatInputBarProps {
   setShowGifPicker: (v: boolean) => void;
   onSendText: () => void;
   onFinishVoiceNote: () => void;
-  triggerFilePick: (accept: string, type: Message["type"]) => void;
+  triggerFilePick: (accept: string, type: Message["type"], source?: "camera" | "gallery") => void;
   emitTyping: (isTyping: boolean) => void;
   chatName: string;
   videoPreviewRef: React.RefObject<HTMLVideoElement | null>;

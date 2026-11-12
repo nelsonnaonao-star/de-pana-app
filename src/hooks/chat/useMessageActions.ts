@@ -1,7 +1,8 @@
 import { MutableRefObject, FormEvent, useRef } from "react";
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
-import { Camera as CapacitorCamera, CameraResultType, CameraSource, MediaTypeSelection } from '@capacitor/camera';
+import { Camera as CapacitorCamera, CameraResultType, CameraSource, MediaType, MediaTypeSelection } from '@capacitor/camera';
+import type { MediaResult } from '@capacitor/camera';
 import { Chat, Message } from "../../types";
 import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editMessage as apiEditMessage, addReaction, votePoll } from "../../services/messages";
 import { uploadChatMedia, uploadPrivateChatMedia, isValidChatId, planConversationUpload, isSupportedPrivateVideoMime } from "../../services/storage";
@@ -155,7 +156,7 @@ export interface UseMessageActionsReturn {
   handleSendLocation: () => Promise<void>;
   handleSendText: (textOverride?: string) => Promise<void>;
   handleSendSticker: (value: string, type: "gif" | "sticker" | "emoji") => Promise<void>;
-  triggerFilePick: (accept: string, type: Message["type"]) => Promise<void>;
+  triggerFilePick: (accept: string, type: Message["type"], source?: "camera" | "gallery") => Promise<void>;
   handleCreatePoll: (e: FormEvent) => Promise<void>;
   handleVote: (messageId: string, optionId: string) => void;
   handleAddReaction: (messageId: string, emoji: string) => Promise<void>;
@@ -465,12 +466,12 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
       }
     };
 
-   const triggerFilePick = async (accept: string, type: Message["type"]) => {
+   const triggerFilePick = async (accept: string, type: Message["type"], source?: "camera" | "gallery") => {
      if (isSendingRef.current) { console.warn('[CHAT] send blocked — already sending'); return; }
      isSendingRef.current = true;
      if (type === "image") {
        const isCapacitor = !!(window as any).Capacitor;
-       if (isCapacitor) {
+       if (isCapacitor && source !== "gallery") {
         const tempId = "msg_" + Date.now();
         const clientIdCamera = newClientId();
         const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
@@ -478,7 +479,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
         try {
           const photo = await CapacitorCamera.getPhoto({
             quality: 30,
-            source: CameraSource.Prompt,
+            source: source === "camera" ? CameraSource.Camera : CameraSource.Prompt,
             resultType: CameraResultType.DataUrl,
           });
           if (!photo.dataUrl) { isSendingRef.current = false; return; }
@@ -589,10 +590,12 @@ pendingSendIdsRef.current.add(tempId);
         poster?: string;
         skipWebViewCompress?: boolean;
         precompressedVideo?: boolean;
+        messageType?: Message["type"];
         pending?: { tempId: string; clientId: string; timestamp: string };
         onCleanup?: () => void;
       } = {},
     ) => {
+      const msgType = options.messageType ?? type;
       const pending = options.pending;
       const tempId = pending?.tempId ?? "msg_" + Date.now();
       let bubbleCreated = !!pending;
@@ -671,7 +674,7 @@ pendingSendIdsRef.current.add(tempId);
         const resolvedType =
           declaredType && declaredType !== "application/octet-stream"
             ? declaredType
-            : videoMimeByExt[extName] || (type === "video" ? "video/mp4" : declaredType || "application/octet-stream");
+            : videoMimeByExt[extName] || (msgType === "video" ? "video/mp4" : declaredType || "application/octet-stream");
         console.log(
           `[VIDSEND] step=read-start name=${file.name || "(sin nombre)"} size=${((file.size || 0) / 1048576).toFixed(2)}MB declaredType=${declaredType || "(vacio)"} ext=${extName || "(sin ext)"} resolvedType=${resolvedType}` +
           ` | lastModified=${file.lastModified || 0} isFile=${file instanceof File} hasArrayBuffer=${typeof (file as any).arrayBuffer === "function"} hasSlice=${typeof (file as any).slice === "function"} hasStream=${typeof (file as any).stream === "function"}`
@@ -776,13 +779,13 @@ pendingSendIdsRef.current.add(tempId);
           isSupportedPrivateVideoMime(localBlob.type);
         const shouldCompress =
           !skipWebViewCompress &&
-          type === "video" &&
+          msgType === "video" &&
           localBlob.size > 5 * 1024 * 1024 &&
           !canSkipClientCompress;
         // Tope duro para videos: el WebView no puede recomprimirlos si falla la
         // decodificación, y subir crudos muy grandes suele abortar. Mejor fallar
         // temprano con un mensaje claro que colgarse o romper en silencio.
-        if (type === "video" && localBlob.size > 500 * 1024 * 1024) {
+        if (msgType === "video" && localBlob.size > 500 * 1024 * 1024) {
           console.log(`[VIDSEND] step=too-large ${(localBlob.size / 1048576).toFixed(1)}MB > 500MB`);
           throw new Error(`El video pesa ${(localBlob.size / 1048576).toFixed(0)}MB y el máximo para enviar es 500MB`);
         }
@@ -793,7 +796,7 @@ pendingSendIdsRef.current.add(tempId);
         // y, si no, se cae al generador de siempre.
         const nativePoster = options.poster;
         const posterPromise: Promise<string | undefined> =
-          type === "video"
+          msgType === "video"
             ? (nativePoster
                 ? Promise.resolve<string | undefined>(nativePoster)
                 : generateVideoThumbnail(localFile)
@@ -817,7 +820,7 @@ pendingSendIdsRef.current.add(tempId);
 
         const blobUrl = URL.createObjectURL(localBlob);
         const sendingMsg: Message = {
-          id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type,
+          id: tempId, sender: "me", timestamp, rawCreatedAt: new Date().toISOString(), type: msgType,
           mediaUrl: blobUrl,
           posterUrl: options.poster,
           fileName: localFile.name,
@@ -872,8 +875,8 @@ pendingSendIdsRef.current.add(tempId);
           // `uploadChatMedia` ya recibe un `Blob`: envolverlo otra vez en un
           // `Blob`/`File` sólo costaba una copia extra en memoria.
           const blob = fileToUpload;
-          const mediaKind = type === "video" ? "video" : type === "image" ? "image" : type === "audio" ? "audio" : "file";
-          const folder = type === "video" ? "video" : "files";
+          const mediaKind = msgType === "video" ? "video" : msgType === "image" ? "image" : msgType === "audio" ? "audio" : "file";
+          const folder = msgType === "video" ? "video" : "files";
           // Enrutado de adjuntos de conversación: un chat remoto (UUID) NUNCA
           // cae al bucket público `chat-images`; si el MIME no está admitido por
           // la subida privada, se RECHAZA con un mensaje claro y visible.
@@ -913,7 +916,7 @@ pendingSendIdsRef.current.add(tempId);
               transferSpeed: undefined,
             }, true);
           }
-          if (type === "video") {
+          if (msgType === "video") {
             cacheVideoBlob(url, localBlob).catch(() => {});
           }
           // La miniatura venía corriendo en paralelo desde antes de la
@@ -928,10 +931,10 @@ pendingSendIdsRef.current.add(tempId);
           });
           const isLocalChat = !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatId);
           if (!isLocalChat) {
-            const payload: any = { chat_id: chatId, sender_id: uid, type, text: file.name, client_id: clientIdFile, temp_id: tempId };
-            if (type === "image") { payload.image_url = url; payload.text = "Imagen"; }
-            else if (type === "video") { payload.video_url = url; payload.text = "Video"; }
-            else if (type === "audio") { payload.audio_url = url; payload.text = "Audio"; }
+            const payload: any = { chat_id: chatId, sender_id: uid, type: msgType, text: file.name, client_id: clientIdFile, temp_id: tempId };
+            if (msgType === "image") { payload.image_url = url; payload.text = "Imagen"; }
+            else if (msgType === "video") { payload.video_url = url; payload.text = "Video"; }
+            else if (msgType === "audio") { payload.audio_url = url; payload.text = "Audio"; }
             else {
               payload.file_url = url;
               payload.document_name = file.name;
@@ -975,16 +978,10 @@ pendingSendIdsRef.current.add(tempId);
     // En Android la galería se abre con el picker nativo y el video se comprime
     // con el encoder de hardware (Media3), no con MediaRecorder en el WebView.
     // En Web se mantiene el `<input type="file">` de siempre.
-    if (type === "video" && Capacitor.isNativePlatform() && isNativeVideoCompressionAvailable()) {
+    const sendNativeVideoMedia = async (media: MediaResult) => {
       let compressedPath: string | undefined;
       let pendingBubble: { tempId: string; clientId: string; timestamp: string } | undefined;
       try {
-        const selection = await CapacitorCamera.chooseFromGallery({
-          mediaType: MediaTypeSelection.Video,
-          allowMultipleSelection: false,
-          includeMetadata: true,
-        });
-        const media = selection.results?.[0];
         if (!media?.uri) {
           // El usuario canceló el picker: liberar el candado.
           isSendingRef.current = false;
@@ -1064,6 +1061,7 @@ pendingSendIdsRef.current.add(tempId);
           poster,
           skipWebViewCompress: true,
           precompressedVideo: needsNativeCompression,
+          messageType: "video",
           pending: pendingBubble,
         });
       } catch (e: any) {
@@ -1086,12 +1084,83 @@ pendingSendIdsRef.current.add(tempId);
         if (compressedPath) await deleteNativeVideoFile(compressedPath);
         isSendingRef.current = false;
       }
+    };
+
+    // Botón "Foto y video": un único picker nativo que admite ambos tipos.
+    if (source === "gallery" && type === "image" && Capacitor.isNativePlatform()) {
+      try {
+        const selection = await CapacitorCamera.chooseFromGallery({
+          mediaType: MediaTypeSelection.All,
+          allowMultipleSelection: false,
+          includeMetadata: true,
+        });
+        const media = selection.results?.[0];
+        if (!media) {
+          isSendingRef.current = false;
+          return;
+        }
+        if (media.type === MediaType.Video) {
+          await sendNativeVideoMedia(media);
+          return;
+        }
+        if (!media.uri) {
+          isSendingRef.current = false;
+          return;
+        }
+        const format = (media.metadata?.format || "jpeg").toLowerCase();
+        const imageMime =
+          format === "png" ? "image/png" :
+          format === "webp" ? "image/webp" :
+          format === "gif" ? "image/gif" : "image/jpeg";
+        const imageFile = await fetchNativeMediaAsFile(
+          media.uri,
+          `foto_${Date.now()}.${format === "jpg" ? "jpeg" : format}`,
+          imageMime,
+        );
+        await sendPickedFile(imageFile, { messageType: "image" });
+      } catch (e: any) {
+        const code = `${e?.code || ""}`;
+        const message = `${e?.message || ""}`;
+        const cancelled = code === "OS-PLUG-CAMR-0020" || /cancel/i.test(message);
+        if (!cancelled) {
+          console.error("[CHAT] Native media send failed:", e);
+          toast.error(`Error al enviar archivo: ${message || "Error desconocido"}`);
+        }
+        isSendingRef.current = false;
+      }
+      return;
+    }
+
+    if (type === "video" && Capacitor.isNativePlatform() && isNativeVideoCompressionAvailable()) {
+      try {
+        const selection = await CapacitorCamera.chooseFromGallery({
+          mediaType: MediaTypeSelection.Video,
+          allowMultipleSelection: false,
+          includeMetadata: true,
+        });
+        const media = selection.results?.[0];
+        if (!media) {
+          isSendingRef.current = false;
+          return;
+        }
+        await sendNativeVideoMedia(media);
+      } catch (e: any) {
+        const code = `${e?.code || ""}`;
+        const message = `${e?.message || ""}`;
+        const cancelled = code === "OS-PLUG-CAMR-0020" || /cancel/i.test(message);
+        if (!cancelled) {
+          console.error("[CHAT] Native video send failed:", e);
+          toast.error(`Error al enviar video: ${message || "Error desconocido"}`);
+        }
+        isSendingRef.current = false;
+      }
       return;
     }
 
     const input = document.createElement("input");
     input.type = "file";
     input.accept = accept;
+    if (source === "camera") input.setAttribute("capture", "environment");
     // Android/WebView: el `File` del picker es un stream `content://` de UN SOLO
     // USO propiedad de este input. Con el input fuera del documento nada lo
     // mantiene vivo: el GC puede recuperarlo mientras el handler asíncrono
@@ -1118,7 +1187,13 @@ pendingSendIdsRef.current.add(tempId);
         isSendingRef.current = false;
         return;
       }
-      void sendPickedFile(file, { onCleanup: disposeInput });
+      const pickedIsVideo =
+        type === "image" &&
+        (file.type.startsWith("video/") || /\.(mp4|m4v|mov|webm|mkv|3gp|avi)$/i.test(file.name || ""));
+      void sendPickedFile(file, {
+        onCleanup: disposeInput,
+        messageType: pickedIsVideo ? "video" : undefined,
+      });
     };
     input.click();
   };
