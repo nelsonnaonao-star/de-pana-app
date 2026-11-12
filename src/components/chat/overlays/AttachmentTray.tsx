@@ -1,5 +1,5 @@
 import React from "react";
-import { Image, VideoIcon, File, Film, Music, BarChart2, Camera as CameraIcon, MapPin } from "lucide-react";
+import { Image, File, Film, Music, BarChart2, Camera as CameraIcon, MapPin } from "lucide-react";
 import { Message } from "../../../types";
 
 interface AttachmentTrayProps {
@@ -20,16 +20,6 @@ export default function AttachmentTray({ onPickFile, onOpenGifPicker, onOpenPoll
           <Image className="w-5 h-5" />
         </div>
         <span className="text-[9px] font-semibold text-slate-600">Fotos</span>
-      </button>
-
-      <button
-        onClick={() => onPickFile("video/*", "video")}
-        className="flex flex-col items-center gap-1.5 p-2 rounded-xl hover:bg-slate-50 active:scale-95 transition-all duration-150 cursor-pointer group"
-      >
-        <div className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center text-rose-600 group-hover:scale-110 transition-transform shadow-sm">
-          <VideoIcon className="w-5 h-5" />
-        </div>
-        <span className="text-[9px] font-semibold text-slate-600">Video</span>
       </button>
 
       <button

@@ -478,7 +478,7 @@ const savedRow: Message = { ...newMsg, id: saved.id, status: "sent" as const, sy
         try {
           const photo = await CapacitorCamera.getPhoto({
             quality: 30,
-            source: CameraSource.Camera,
+            source: CameraSource.Prompt,
             resultType: CameraResultType.DataUrl,
           });
           if (!photo.dataUrl) { isSendingRef.current = false; return; }
