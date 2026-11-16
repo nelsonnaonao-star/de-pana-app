@@ -1,6 +1,7 @@
 param(
   [switch]$Write,
   [switch]$RateLimit,
+  [switch]$Attack,
   [string]$ApkPath = "",
   [string]$ChatId = "",
   [string]$UserId = "",
@@ -19,6 +20,17 @@ if ($RateLimit) { $auditArgs += "--rate-limit" }
 Write-Host "Ejecutando auditoria API/RLS..."
 & node @auditArgs
 $auditExit = $LASTEXITCODE
+$exploitExit = 0
+
+if ($Attack) {
+  Write-Host ""
+  Write-Host "Ejecutando prueba ofensiva controlada..."
+  $exploitArgs = @("security-tests/exploit-probe.mjs")
+  if ($Write) { $exploitArgs += "--write" }
+  if ($RateLimit) { $exploitArgs += "--rate-limit" }
+  & node @exploitArgs
+  $exploitExit = $LASTEXITCODE
+}
 
 if ($ApkPath) {
   Write-Host ""
@@ -42,4 +54,7 @@ if ($ExecuteAndroid) {
 
 if ($auditExit -ne 0) {
   exit $auditExit
+}
+if ($exploitExit -ne 0) {
+  exit $exploitExit
 }

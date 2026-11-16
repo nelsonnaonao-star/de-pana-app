@@ -15,6 +15,8 @@
     "security:init": "powershell -NoProfile -ExecutionPolicy Bypass -File security-tests/init-env.ps1",
     "security:audit": "node security-tests/security-audit.mjs",
     "security:audit:write": "node security-tests/security-audit.mjs --write",
+    "security:exploit": "node security-tests/exploit-probe.mjs",
+    "security:exploit:write": "node security-tests/exploit-probe.mjs --write",
     "security:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File security-tests/apk-audit.ps1",
     "security:android": "powershell -NoProfile -ExecutionPolicy Bypass -File security-tests/android-intents.ps1",
     "security:all": "powershell -NoProfile -ExecutionPolicy Bypass -File security-tests/run-all.ps1"
