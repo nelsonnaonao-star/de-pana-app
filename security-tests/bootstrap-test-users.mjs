@@ -126,14 +126,19 @@ async function request(path, options = {}) {
   }
 }
 
-async function createUser(email, pass, name) {
+async function createUser(email, pass, name, phone, username) {
   const data = await request("/auth/v1/admin/users", {
     method: "POST",
     body: {
       email,
       password: pass,
       email_confirm: true,
-      user_metadata: { name },
+      user_metadata: {
+        name,
+        username,
+        phone: phone ? `+${phone}` : "",
+        real_email: email,
+      },
     },
   });
   const user = data?.user || data;
@@ -236,8 +241,8 @@ async function createMessage(chat, sender, receiver, text) {
 
 async function main() {
   console.log(`Creando usuarios de prueba en ${url}`);
-  const userA = await createUser(emailA, passA, nameA);
-  const userB = await createUser(emailB, passB, nameB);
+  const userA = await createUser(emailA, passA, nameA, phoneA, usernameA);
+  const userB = await createUser(emailB, passB, nameB, phoneB, usernameB);
 
   const profileA = await createProfile(userA, nameA, usernameA, phoneA);
   const profileB = await createProfile(userB, nameB, usernameB, phoneB);

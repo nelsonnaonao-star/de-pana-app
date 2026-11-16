@@ -583,7 +583,7 @@ router.post('/upsert-profile', profileLimiter, authMiddleware, async (req, res) 
     }
 
     // Sanitize allowed fields only
-    const allowedFields = ['id', 'name', 'username', 'phone_number', 'avatar', 'avatar_url', 'bio', 'status', 'notif_config', 'auto_reply_config'];
+    const allowedFields = ['id', 'name', 'username', 'phone_number', 'real_email', 'avatar', 'avatar_url', 'bio', 'status', 'notif_config', 'auto_reply_config'];
     const sanitized = {};
     for (const key of allowedFields) {
       if (profile[key] !== undefined) {
@@ -593,7 +593,7 @@ router.post('/upsert-profile', profileLimiter, authMiddleware, async (req, res) 
 
     const { data, error } = await supabaseAdmin
       .from('profiles')
-      .upsert(sanitized)
+      .upsert(sanitized, { onConflict: 'id' })
       .select()
       .maybeSingle();
 

@@ -139,6 +139,9 @@ export async function register(
     throw new Error("El usuario solo puede contener letras, números, guiones bajos (_), puntos (.) y guiones (-). Sin espacios ni @.");
   }
   if (cleanUsername.length < 2) throw new Error("El usuario debe tener al menos 2 caracteres");
+  if (cleanDigits.length < 7 || cleanDigits.length > 15) {
+    throw new Error("Ingresa un número de teléfono válido (7 a 15 dígitos).");
+  }
 
   let duplicate = false;
   try {
@@ -175,10 +178,21 @@ export async function register(
   const { data, error } = await supabase.auth.signUp({
     email: `${cleanUsername}@redon.app`,
     password,
+    options: {
+      data: {
+        name,
+        username: cleanUsername,
+        phone: cleanPhone,
+        real_email: cleanEmail,
+      },
+    },
   });
 
   if (error) {
     logger.error("[REGISTER] signUp error", { error });
+    if (/phone_required|database error saving new user/i.test(error.message || "")) {
+      throw new Error("No se pudo crear la cuenta: el número de teléfono es obligatorio. Actualiza WEPA e intenta de nuevo.");
+    }
     throw new Error(error.message);
   }
   if (!data.user) throw new Error("Error al crear usuario");
@@ -207,23 +221,74 @@ export async function register(
     session = signInRes.data.session;
   }
 
-  const { error: upsertError } = await supabase.from("profiles").upsert({
-    id: data.user.id,
+  const profileFields = {
     name,
     username: cleanUsername,
     phone_number: cleanPhone,
     avatar_url: "",
     bio: "Disponible en Wepa",
-    ...(cleanEmail ? { real_email: cleanEmail } : {}),
-  });
+  };
+  const profilePayload = { id: data.user.id, ...profileFields };
 
-  if (upsertError && !upsertError.message?.includes("duplicate key")) {
-    logger.error("[REGISTER] Upsert error", { error: upsertError });
-    throw new Error(upsertError.message || "Error al crear perfil");
+  let profileSaved = false;
+  try {
+    const res = await authFetch(apiUrl("/api/auth/upsert-profile"), {
+      method: "POST",
+      body: JSON.stringify(profilePayload),
+    });
+    profileSaved = res.ok;
+    if (!res.ok) {
+      logger.warn("[REGISTER] upsert-profile respondió", { status: res.status });
+    }
+  } catch (e) {
+    logger.warn("[REGISTER] upsert-profile falló", { error: e });
   }
 
-  const { data: persistedProfile, error: persistedError } = await supabase.rpc("get_my_profile");
-  const persistedRow = Array.isArray(persistedProfile) ? persistedProfile[0] : persistedProfile;
+  if (!profileSaved) {
+    const { error: upsertError } = await supabase
+      .from("profiles")
+      .upsert(profilePayload, { onConflict: "id" });
+
+    if (upsertError && /duplicate key/i.test(upsertError.message || "")) {
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update(profileFields)
+        .eq("id", data.user.id);
+      if (updateError) {
+        logger.error("[REGISTER] Update error", { error: updateError });
+        throw new Error(updateError.message || "Error al crear perfil");
+      }
+    } else if (upsertError) {
+      logger.error("[REGISTER] Upsert error", { error: upsertError });
+      throw new Error(upsertError.message || "Error al crear perfil");
+    }
+  }
+
+  if (cleanEmail) {
+    const { error: emailError } = await supabase
+      .from("profiles")
+      .update({ real_email: cleanEmail })
+      .eq("id", data.user.id);
+    if (emailError) {
+      logger.warn("[REGISTER] real_email update falló", { error: emailError });
+    }
+  }
+
+  let { data: persistedProfile, error: persistedError } = await supabase.rpc("get_my_profile");
+  let persistedRow = Array.isArray(persistedProfile) ? persistedProfile[0] : persistedProfile;
+
+  if (persistedError || !persistedRow?.phone_number) {
+    try {
+      await updateMyPhone(cleanPhone);
+      const retry = await supabase.rpc("get_my_profile");
+      persistedProfile = retry.data;
+      persistedError = retry.error;
+      persistedRow = Array.isArray(persistedProfile) ? persistedProfile[0] : persistedProfile;
+    } catch (recoverError) {
+      logger.warn("[REGISTER] No se pudo reparar el teléfono", { error: recoverError });
+    }
+  }
+
   if (persistedError || !persistedRow?.phone_number) {
     logger.error("[REGISTER] Perfil sin teléfono tras upsert", { error: persistedError });
     throw new Error("No se pudo guardar tu número de teléfono. Actualiza WEPA e intenta de nuevo.");
