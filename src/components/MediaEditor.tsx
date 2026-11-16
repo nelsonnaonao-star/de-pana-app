@@ -590,7 +590,7 @@ export default function MediaEditor({
       } else {
         setCodeFeedback({
           status: "error",
-          message: "Código incorrecto o vencido. Contacta al soporte de Red On para adquirir tu membresía mensual."
+          message: "Código incorrecto o vencido. Contacta al soporte de WEPA para adquirir tu membresía mensual."
         });
       }
     } catch (err) {
@@ -926,14 +926,14 @@ export default function MediaEditor({
         }
 
         await saveMediaToGalleryDirect(videoUrl, `wepa-video-${Date.now()}.mp4`);
-        setSaveMessage("Video guardado en tu galería (álbum RED ON) ✅");
+        setSaveMessage("Video guardado en tu galería (álbum WEPA) ✅");
         return;
       }
 
       const baked = await bakeEditedImage();
       const fileName = `redon-flyer-${Date.now()}.png`;
       await saveMediaToGalleryDirect(baked || currentImageSource, fileName);
-      setSaveMessage("Guardada en tu galería (álbum RED ON) ✅");
+      setSaveMessage("Guardada en tu galería (álbum WEPA) ✅");
     } catch (err) {
       console.error("[MediaEditor] Error al guardar en galería:", err);
       setSaveMessage(

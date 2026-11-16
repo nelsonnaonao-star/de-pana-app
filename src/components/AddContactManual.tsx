@@ -213,7 +213,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
             <div className="bg-white rounded-2xl shadow-md p-5 space-y-3 animate-fade-in border border-emerald-200">
               <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full w-fit">
                 <Shield className="w-3 h-3" />
-                Usa RED ON
+                Usa WEPA
               </div>
               <div className="flex items-center gap-4">
                 <div className="w-14 h-14 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shrink-0 shadow-md flex items-center justify-center">
@@ -232,7 +232,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
               </div>
               <div className="bg-emerald-50 rounded-xl p-3 flex items-center gap-2 text-[11px] text-slate-600 border border-emerald-100">
                 <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                Este número pertenece a un usuario de RED ON. Se agregará automáticamente a tus contactos.
+                Este número pertenece a un usuario de WEPA. Se agregará automáticamente a tus contactos.
               </div>
             </div>
           )}
@@ -243,14 +243,14 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
                 <Smartphone className="w-6 h-6 text-slate-400" />
               </div>
               <div>
-                <p className="text-sm font-bold text-slate-700">Este número no usa RED ON aún</p>
+                <p className="text-sm font-bold text-slate-700">Este número no usa WEPA aún</p>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Se guardará como contacto externo. Cuando se una a RED ON, se vinculará automáticamente.
+                  Se guardará como contacto externo. Cuando se una a WEPA, se vinculará automáticamente.
                 </p>
               </div>
               <button
                 onClick={() => {
-                  const encoded = encodeURIComponent("¡Únete a RED ON! Descarga la app y chatea conmigo.");
+                  const encoded = encodeURIComponent("¡Únete a WEPA! Descarga la app y chatea conmigo.");
                   window.open(`https://wa.me/${cleanDigits}?text=${encoded}`, "_blank");
                 }}
                 className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[11px] font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
@@ -267,7 +267,7 @@ export default function AddContactManual({ currentUserId, currentUserPhone, onBa
                 <UserPlus className="w-5 h-5 text-teal-500" />
               </div>
               <p className="text-[11px] text-slate-500 leading-relaxed">
-                Ingresa el número de teléfono y el nombre de la persona que quieres agregar. Si usa RED ON, lo verás reflejado aquí.
+                Ingresa el número de teléfono y el nombre de la persona que quieres agregar. Si usa WEPA, lo verás reflejado aquí.
               </p>
             </div>
           )}

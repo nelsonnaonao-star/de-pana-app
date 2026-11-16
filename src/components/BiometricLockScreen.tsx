@@ -44,7 +44,7 @@ export default function BiometricLockScreen({ isLocked, onUnlock }: BiometricLoc
     setError(null);
 
     // allowDeviceCredential: true → Android offers PIN/pattern as fallback
-    const res = await authenticateWithBiometric("Desbloquear RED ON", { allowDeviceCredential: true });
+    const res = await authenticateWithBiometric("Desbloquear WEPA", { allowDeviceCredential: true });
 
     if (res.success) {
       setIsAuthenticating(false);
@@ -101,7 +101,7 @@ export default function BiometricLockScreen({ isLocked, onUnlock }: BiometricLoc
       </button>
 
       {/* Title & hint */}
-      <h2 className="mt-8 text-xl font-black text-white tracking-wide">RED ON bloqueado</h2>
+      <h2 className="mt-8 text-xl font-black text-white tracking-wide">WEPA bloqueado</h2>
       <p className="mt-2 text-[13px] text-slate-400 text-center max-w-[16rem] leading-relaxed">
         {isAuthenticating ? (
           "Esperando autenticación..."

@@ -7,7 +7,7 @@ import { FileOpener } from "@capawesome-team/capacitor-file-opener";
 import { mimeTypeFor } from "./mime";
 import { isSignableStorageUrl, isStorageSignedUrl, resolveMediaUrl } from "./mediaResolution";
 
-const ALBUM_NAME = "RED ON";
+const ALBUM_NAME = "WEPA";
 
 let cachedAlbumId: string | null = null;
 

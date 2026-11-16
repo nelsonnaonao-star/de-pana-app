@@ -62,7 +62,7 @@ export default function MyQrCode({ userId, name, phone, avatar, onBack }: MyQrCo
           </div>
 
           <p className="text-[8px] text-slate-400 leading-relaxed">
-            Escanea este código con RED ON para agregarme como contacto
+            Escanea este código con WEPA para agregarme como contacto
           </p>
 
           <div className="flex gap-2">

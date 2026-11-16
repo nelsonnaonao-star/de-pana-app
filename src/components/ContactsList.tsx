@@ -47,7 +47,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
   const handleInvite = async () => {
     if (!inviteContact) return;
     const clean = (inviteContact.phone || "").replace(/\D/g, "");
-    const text = encodeURIComponent(`¡Únete a RED ON! Descarga la app y chatea conmigo de forma segura. Mi código: ${currentUserId.slice(0, 8)}`);
+    const text = encodeURIComponent(`¡Únete a WEPA! Descarga la app y chatea conmigo de forma segura. Mi código: ${currentUserId.slice(0, 8)}`);
     if (!clean) return;
     const whatsappUrl = `whatsapp://send?phone=${clean}&text=${text}`;
     try {
@@ -125,7 +125,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
             <p className="text-[11px] text-slate-500 leading-relaxed max-w-xs mx-auto">
               {searchQuery
                 ? "Prueba con otro nombre o número"
-                : "Agrega contactos para empezar a chatear con ellos en Red On."}
+                : "Agrega contactos para empezar a chatear con ellos en WEPA."}
             </p>
           </div>
         )}
@@ -151,7 +151,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
         {others.length > 0 && (
           <div>
             {favorites.length > 0 && (
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">En Red On</h4>
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">En WEPA</h4>
             )}
             <div className="space-y-0.5">
               {others.map((contact) => (
@@ -170,7 +170,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
 
         {nonRedOn.length > 0 && (
           <div>
-            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">Contactos sin Red On</h4>
+            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-2">Contactos sin WEPA</h4>
             <div className="space-y-0.5">
               {nonRedOn.map((contact) => (
                 <ContactRow
@@ -240,7 +240,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-bold text-slate-800 truncate">Opciones de {menuContact.name}</p>
-                <p className="text-[10px] text-slate-400 font-mono">{menuContact.phone || "Contacto Red On"}</p>
+                <p className="text-[10px] text-slate-400 font-mono">{menuContact.phone || "Contacto WEPA"}</p>
               </div>
             </div>
             <div className="space-y-2">
@@ -288,7 +288,7 @@ export default function ContactsList({ contacts, onSelectContact, onAddContact, 
               <MessageCircle className="w-6 h-6 text-amber-500" />
             </div>
             <div>
-              <p className="text-sm font-bold text-slate-800">Este contacto no usa Red On</p>
+              <p className="text-sm font-bold text-slate-800">Este contacto no usa WEPA</p>
               <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
                 Envíale un mensaje de texto e invítalo a descargar la aplicación o a usarla para poder chatear con él aquí.
               </p>
@@ -352,7 +352,7 @@ function ContactRow({
       <div className="flex-1 min-w-0">
         <p className="text-sm font-bold text-slate-800 truncate">{contact.name}</p>
         <p className="text-[10px] text-slate-500 font-mono">
-          {contact.phone || (contact.contact_user_id ? "En Red On" : "Sin teléfono")}
+          {contact.phone || (contact.contact_user_id ? "En WEPA" : "Sin teléfono")}
         </p>
       </div>
       <ChevronRight className="w-4 h-4 text-slate-300 shrink-0" />

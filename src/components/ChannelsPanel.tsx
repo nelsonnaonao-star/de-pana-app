@@ -256,7 +256,7 @@ export default function ChannelsPanel() {
                   <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" /> Crea Tu Propio Canal
                 </h4>
                 <p className="text-[8.5px] text-teal-100/90 leading-relaxed font-medium">
-                  Difunde las novedades de tu marca con miles de seguidores en Red On de forma ilimitada.
+                  Difunde las novedades de tu marca con miles de seguidores en WEPA de forma ilimitada.
                 </p>
               </div>
               <button
@@ -389,7 +389,7 @@ export default function ChannelsPanel() {
                   "{activeChannel.description}"
                 </p>
                 <div className="text-[7px] text-slate-400 font-mono">
-                  Creado: {activeChannel.isCreatedByMe ? "Por Ti (Emprendedor)" : "Oficial Red On"}
+                  Creado: {activeChannel.isCreatedByMe ? "Por Ti (Emprendedor)" : "Oficial WEPA"}
                 </div>
               </div>
 

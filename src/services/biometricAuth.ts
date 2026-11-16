@@ -100,7 +100,7 @@ export function isBiometricAuthInFlight(): boolean {
 }
 
 export async function authenticateWithBiometric(
-  reason: string = "Desbloquear RED ON",
+  reason: string = "Desbloquear WEPA",
   opts?: { allowDeviceCredential?: boolean }
 ): Promise<BiometricAuthResult> {
   authInFlight = true;

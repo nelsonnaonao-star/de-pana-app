@@ -590,7 +590,7 @@ export default function BusinessPanel({
                             <span className="flex items-center gap-1">
                               <MapPin className="w-3 h-3 text-red-400" /> {flyer.location}
                             </span>
-                            <span className="font-mono text-cyan-300">Generado en Red On</span>
+                            <span className="font-mono text-cyan-300">Generado en WEPA</span>
                           </div>
                         </div>
                       ) : (
@@ -806,7 +806,7 @@ export default function BusinessPanel({
                       onChange={(e) => setUpPhone(e.target.value)}
                       className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                     />
-                    <p className="text-[8px] text-slate-400">Con este número los clientes se comunicarán contigo en RED ON.</p>
+                    <p className="text-[8px] text-slate-400">Con este número los clientes se comunicarán contigo en WEPA.</p>
                   </div>
 
                   {/* Upload Flyer Image */}
@@ -899,7 +899,7 @@ export default function BusinessPanel({
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Publicando...
                     </>
                   ) : (
-                    <><Compass className="w-4 h-4 animate-pulse" /> Publicar Flyer en Red On</>
+                    <><Compass className="w-4 h-4 animate-pulse" /> Publicar Flyer en WEPA</>
                   )}
                 </button>
               </form>
@@ -1045,7 +1045,7 @@ export default function BusinessPanel({
                         onChange={(e) => setGenPhone(e.target.value)}
                         className="w-full bg-slate-50 border text-[10px] px-3 py-2.5 rounded-xl outline-none focus:border-teal-400 focus:bg-white"
                       />
-                      <p className="text-[8px] text-slate-400">Con este número los clientes se comunicarán contigo en RED ON.</p>
+                      <p className="text-[8px] text-slate-400">Con este número los clientes se comunicarán contigo en WEPA.</p>
                     </div>
 
                     {/* Select Flyer Background Music */}
@@ -1300,7 +1300,7 @@ export default function BusinessPanel({
                   <span className="flex items-center gap-1.5">
                     <MapPin className="w-4 h-4 text-red-400" /> {viewingFlyer.location}
                   </span>
-                  <span className="font-mono text-cyan-300">Generado en Red On</span>
+                  <span className="font-mono text-cyan-300">Generado en WEPA</span>
                 </div>
               </div>
             ) : (

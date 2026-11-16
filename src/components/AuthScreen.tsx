@@ -444,7 +444,7 @@ export default function AuthScreen() {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                        <AtSign className="w-3 h-3 text-teal-400" /> Usuario RED ON
+                        <AtSign className="w-3 h-3 text-teal-400" /> Usuario WEPA
                       </label>
                       <input
                         type="text"

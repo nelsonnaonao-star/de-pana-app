@@ -73,7 +73,7 @@ export default function EmprendedorAccessModal({ open, onClose, onActivated }: E
           </div>
 
           <h3 className="text-lg font-black text-white leading-tight">
-            Publica tu negocio <br className="sm:hidden" />y véndele a todo Red On
+            Publica tu negocio <br className="sm:hidden" />y véndele a todo WEPA
           </h3>
           <p className="text-[10px] text-teal-100/90 mt-1 leading-relaxed">
             Activa una membresía para publicar tus flyers en el feed y que miles de usuarios vean tu emprendimiento.

@@ -66,7 +66,7 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
           const req = await Camera.requestPermissions({ permissions: ["camera"] });
           if (req.camera !== "granted") {
             setCameraError(true);
-            setErrorMsg("Permiso de cámara denegado. Actívalo en Configuración > Apps > Red On > Permisos");
+            setErrorMsg("Permiso de cámara denegado. Actívalo en Configuración > Apps > WEPA > Permisos");
             return;
           }
         }

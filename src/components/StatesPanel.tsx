@@ -171,7 +171,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen, onRegisterBackHa
             <div className="bg-teal-50/50 rounded-xl p-3 border border-teal-100 flex gap-2 items-start">
               <Info className="w-4 h-4 text-[#10646a] shrink-0 mt-0.5" />
               <p className="text-[10.5px] text-slate-500 leading-relaxed">
-                Los estados de Red On desaparecen automáticamente cada 24 horas. ¡El diseño es dinámico y soporta respuestas directas al chat privado del publicador!
+                Los estados de WEPA desaparecen automáticamente cada 24 horas. ¡El diseño es dinámico y soporta respuestas directas al chat privado del publicador!
               </p>
             </div>
 
@@ -193,7 +193,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen, onRegisterBackHa
             <div className={`aspect-[9/16] max-h-[300px] w-full rounded-2xl bg-gradient-to-br ${GRADIENTS[selectedGradientIdx]} flex flex-col justify-between p-5 text-white shadow-lg relative overflow-hidden`}>
               <div className="flex justify-between items-center z-10">
                 <span className="text-[8px] font-bold tracking-widest uppercase bg-white/20 border border-white/10 px-2 py-0.5 rounded-full">
-                  Editor Texto Red On
+                  Editor Texto WEPA
                 </span>
                 <button
                   onClick={() => setSelectedGradientIdx((prev) => (prev + 1) % GRADIENTS.length)}

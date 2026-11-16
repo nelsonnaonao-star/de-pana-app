@@ -95,7 +95,7 @@ export async function activateEmprendedorCode(
       const rawMsg: string = (error as unknown as { message?: string })?.message || "";
       const status: number | undefined = (error as unknown as { status?: number })?.status;
       if (status === 401 || status === 403 || rawMsg.toLowerCase().includes("jwt")) {
-        return { ok: false, message: "Tu sesión no está activa. Inicia sesión en Red On e intenta de nuevo." };
+        return { ok: false, message: "Tu sesión no está activa. Inicia sesión en WEPA e intenta de nuevo." };
       }
       if (status === 404 || rawMsg.includes("Could not find the function")) {
         return { ok: false, message: "La función de membresía no está instalada aún en el servidor." };
@@ -134,7 +134,7 @@ export function daysRemaining(expiresOn: string | null): number {
 /** Link de WhatsApp para contactar al administrador con mensaje prellenado. */
 export function buildAdminWhatsAppUrl(plan?: EmprendedorPlan): string {
   const msg = plan
-    ? `¡Hola! Soy emprendedor en Red On y quiero activar el plan ${plan.name} ($${plan.price}) para publicar mi negocio. ¿Cómo realizo el pago?`
-    : "¡Hola! Quiero información sobre los planes de Red On Negocios para publicar mi negocio.";
+    ? `¡Hola! Soy emprendedor en WEPA y quiero activar el plan ${plan.name} ($${plan.price}) para publicar mi negocio. ¿Cómo realizo el pago?`
+    : "¡Hola! Quiero información sobre los planes de WEPA Negocios para publicar mi negocio.";
   return `https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${encodeURIComponent(msg)}`;
 }
