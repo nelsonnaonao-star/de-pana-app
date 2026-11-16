@@ -97,6 +97,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
   const [storyReplyText, setStoryReplyText] = useState("");
   const [isStoryPaused, setIsStoryPaused] = useState(false);
   const isStoryPausedRef = useRef(false);
+  const pausedBeforeViewersRef = useRef(false);
   const storyProgressRef = useRef(0);
   const [replyFeedback, setReplyFeedback] = useState<string | null>(null);
 
@@ -216,6 +217,20 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     return () => clearTimeout(t);
   }, [replyFeedback]);
 
+  // Mientras se ven las visualizaciones, la historia queda en pausa. Al cerrar
+  // la hoja vuelve a correr (también reanuda el video en StoryViewer).
+  useEffect(() => {
+    if (!activeUserStates) return;
+    if (showViewersSheet) {
+      pausedBeforeViewersRef.current = isStoryPausedRef.current;
+      isStoryPausedRef.current = true;
+      setIsStoryPaused(true);
+    } else if (!pausedBeforeViewersRef.current) {
+      isStoryPausedRef.current = false;
+      setIsStoryPaused(false);
+    }
+  }, [showViewersSheet]);
+
   useEffect(() => {
     if (!activeUserStates) return;
 
@@ -314,6 +329,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
   const handleCloseStoryViewer = () => {
     setStoryPaused(false);
     setActiveUserStates(null);
+    setShowViewersSheet(false);
     setStoryReplyText("");
     pinStoryVideo(null);
   };

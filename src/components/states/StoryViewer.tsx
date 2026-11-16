@@ -39,6 +39,7 @@ export default function StoryViewer({
   const longPressRef = useRef(false);
   const longPressReleaseRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const wasPlayingBeforePauseRef = useRef(false);
   const [videoReady, setVideoReady] = useState(false);
   const [videoMuted, setVideoMuted] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
@@ -77,6 +78,7 @@ export default function StoryViewer({
     setVideoTime(0);
     setVideoDuration(0);
     setVideoPlaying(false);
+    wasPlayingBeforePauseRef.current = false;
     clearControlsTimer();
     setControlsVisible(true);
     return clearControlsTimer;
@@ -92,6 +94,21 @@ export default function StoryViewer({
       v.load();
     };
   }, []);
+
+  // La pausa global (visualizaciones, long-press, responder) también detiene el
+  // video; al reanudar solo vuelve a reproducir si estaba corriendo antes.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || currentStory?.type !== "video") return;
+
+    if (isPaused) {
+      wasPlayingBeforePauseRef.current = !v.paused;
+      if (!v.paused) v.pause();
+    } else if (wasPlayingBeforePauseRef.current) {
+      wasPlayingBeforePauseRef.current = false;
+      v.play().catch(() => {});
+    }
+  }, [isPaused, currentStory?.id, currentStory?.type]);
 
   // Los controles se ocultan solos al reproducir; al pausar permanecen visibles.
   useEffect(() => {
@@ -119,9 +136,11 @@ export default function StoryViewer({
     }
     onSetPaused(false);
     if (longPressRef.current) {
+      // Mantener presionada la historia solo la pausa: al soltar se reanuda,
+      // no debe avanzar ni cerrar el visor. La bandera solo evita que el
+      // click posterior de la zona táctil se interprete como un tap.
       longPressReleaseRef.current = true;
       longPressRef.current = false;
-      onTap("next");
     }
   };
 
