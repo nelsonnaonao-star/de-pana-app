@@ -60,6 +60,7 @@ export default function FabMenu({ showActionMenu, setShowActionMenu, setCurrentS
     <>
       {/* FAB Button */}
       <button
+        data-tour="fab"
         onClick={() => setShowActionMenu(!showActionMenu)}
         className="absolute right-4 bottom-16 z-30 w-16 h-16 bg-[#0a4d52] hover:bg-[#10646a] text-white rounded-[62%_38%_55%_45%/45%_55%_40%_60%] flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all cursor-pointer"
         title="Agregar contacto"

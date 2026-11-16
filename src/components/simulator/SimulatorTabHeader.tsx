@@ -23,6 +23,7 @@ export default function SimulatorTabHeader({
     <>
       {(currentScreen === "chats" || keepChatsVisible) && (
         <div
+          data-tour="header"
           className="absolute top-0 left-0 right-0 text-white px-5 pt-6 pb-12 overflow-hidden z-20 h-[170px] pointer-events-none"
           style={{ paddingTop: "calc(1.5rem + env(safe-area-inset-top))" }}
         >

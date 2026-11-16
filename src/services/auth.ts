@@ -222,6 +222,13 @@ export async function register(
     throw new Error(upsertError.message || "Error al crear perfil");
   }
 
+  const { data: persistedProfile, error: persistedError } = await supabase.rpc("get_my_profile");
+  const persistedRow = Array.isArray(persistedProfile) ? persistedProfile[0] : persistedProfile;
+  if (persistedError || !persistedRow?.phone_number) {
+    logger.error("[REGISTER] Perfil sin teléfono tras upsert", { error: persistedError });
+    throw new Error("No se pudo guardar tu número de teléfono. Actualiza WEPA e intenta de nuevo.");
+  }
+
   const token = session?.access_token || "";
 
   toast.success("Cuenta creada exitosamente");
@@ -347,6 +354,40 @@ export async function updateProfile(id: string, updates: Partial<Profile>) {
     .update(safeUpdates)
     .eq("id", id);
   if (error) throw error;
+}
+
+export async function updateMyPhone(phone: string) {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 15) {
+    throw new Error("Ingresa un número de teléfono válido.");
+  }
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Tu sesión no está activa.");
+
+  const normalized = `+${digits}`;
+
+  const { data, error } = await supabase.rpc("set_my_phone", { p_phone: digits });
+  if (!error) return (data as string) || normalized;
+
+  const missingFunction =
+    error.code === "PGRST202" ||
+    /could not find the function|does not exist/i.test(error.message || "");
+
+  if (!missingFunction) {
+    if (/phone_already_registered/i.test(error.message || "")) {
+      throw new Error("Ese número ya está registrado en otra cuenta.");
+    }
+    throw new Error(error.message || "No se pudo guardar el número.");
+  }
+
+  const { error: updateError } = await supabase
+    .from("profiles")
+    .update({ phone_number: normalized })
+    .eq("id", user.id);
+
+  if (updateError) throw new Error(updateError.message || "No se pudo guardar el número.");
+  return normalized;
 }
 
 export function onAuthChange(callback: (user: any) => void) {

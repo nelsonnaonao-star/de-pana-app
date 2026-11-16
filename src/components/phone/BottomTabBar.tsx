@@ -23,6 +23,7 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
 
   return (
     <div
+      data-tour="tabbar"
       className="border-t border-slate-100 bg-white py-2.5 shrink-0 z-20"
       style={{ paddingBottom: "calc(0.625rem + env(safe-area-inset-bottom))" }}
     >
@@ -35,6 +36,7 @@ export default function BottomTabBar({ currentScreen, setCurrentScreen, isEditin
           return (
             <button
               key={tab.id}
+              data-tour={`tab-${tab.id}`}
               onClick={() => setCurrentScreen(tab.id)}
               className={`flex flex-col items-center justify-center gap-1 relative group cursor-pointer active:opacity-70 transition-opacity duration-100 ${
                 isActive ? "text-[#10606a]" : "text-slate-700 hover:text-slate-900"

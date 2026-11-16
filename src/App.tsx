@@ -15,6 +15,7 @@ import { syncSoundPrefsFromNative } from "./services/soundService";
 import ChatListSkeleton from "./components/ChatListSkeleton";
 import FullSplash from "./components/FullSplash";
 import UpdateModal from "./components/UpdateModal";
+import OnboardingTour from "./components/OnboardingTour";
 
 function AppContent() {
   const { user, loading, passwordRecovery } = useSupabase();
@@ -257,6 +258,13 @@ function AppContent() {
     };
   }, []);
 
+  const onboardingTourEnabled =
+    !fullSplashVisible &&
+    !notificationBoot &&
+    !loading &&
+    !!user &&
+    initialDestinationReady;
+
   return (
     <>
       {fullSplashVisible && <FullSplash onHidden={hideFullSplash} maxDurationMs={10000} />}
@@ -290,6 +298,7 @@ function AppContent() {
             }}
           />
           <UpdateModal enabled={!fullSplashVisible} />
+          <OnboardingTour enabled={onboardingTourEnabled} />
           {loading ? (
             <div className="w-screen h-screen bg-white flex flex-col">
               <div className="h-[170px] bg-[#0a4d52] relative shrink-0">

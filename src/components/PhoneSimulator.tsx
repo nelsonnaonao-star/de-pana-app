@@ -59,6 +59,11 @@ import { SOUND_LIBRARY } from "../data/sounds";
 import { uploadAvatar, uploadChatMedia, uploadPrivateChatMedia, planConversationUpload, type PrivateMediaKind } from "../services/storage";
 import { isStorageSignedUrl, parseStorageRef, PRIVATE_BUCKET, resolveMediaUrl as resolveSignedMediaUrl } from "../services/mediaResolution";
 import { updateProfile } from "../services/auth";
+import {
+  isOnboardingTourOpen,
+  requestOnboardingTour,
+  requestOnboardingTourClose,
+} from "../services/onboardingTour";
 import { db } from "../services/database/DatabaseService";
 import CallRatingModal from "./CallRatingModal";
 import SimulatorTabHeader from "./simulator/SimulatorTabHeader";
@@ -68,6 +73,7 @@ import { useSharedImages } from "../hooks/useSharedImages";
 import { sendSharedImagesToChat } from "../services/shareSend";
 import ContactProfile, { type ContactProfileData } from "./chat/overlays/ContactProfile";
 import ImageLightbox from "./chat/overlays/ImageLightbox";
+import CompletePhoneModal from "./CompletePhoneModal";
 import ChatPatternBackground from "./chat/ChatPatternBackground";
 import { readChatBackdropPrefs, resolveChatBackdrop, warmChatBackdrop, invalidateChatBackdropPreload } from "./chat/chatBackdrop";
 
@@ -314,6 +320,11 @@ export default function PhoneSimulator({
     };
 
     bp(() => {
+      if (isOnboardingTourOpen()) {
+        logger.info("[BACK] Tour open — closing tutorial");
+        requestOnboardingTourClose();
+        return true;
+      }
       if (activeCallRef.current) {
         logger.info("[BACK] Active call — ending call");
         cleanupCallRef.current?.();
@@ -773,6 +784,7 @@ export default function PhoneSimulator({
 
   // Profile editing
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [phonePromptDismissed, setPhonePromptDismissed] = useState(false);
   const [editName, setEditName] = useState("");
   const [editBio, setEditBio] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -4138,7 +4150,7 @@ try {
               <div className="overflow-y-auto flex-1">
                 {addMemberContacts.length === 0 ? (
                   <p className="text-center text-[11px] text-slate-400 py-10">
-                    No tienes contactos de RED ON para invitar
+                    No tienes contactos de WEPA para invitar
                   </p>
                 ) : (
                   addMemberContacts.map((c) => (
@@ -4217,7 +4229,7 @@ try {
                 )}
               </div>
               <p className="text-sm font-bold text-slate-800 mt-2 truncate">{contactActions.name}</p>
-              <p className="text-[10px] text-teal-600 font-bold">En Red On</p>
+              <p className="text-[10px] text-teal-600 font-bold">En WEPA</p>
             </div>
             <div className="px-4 pb-4 space-y-2">
               <button
@@ -4527,7 +4539,7 @@ try {
               } ${currentScreen === "states" ? "hidden" : ""}`}>
                 
                 {/* CHATS LIST */}
-                <div className={`flex-1 flex flex-col min-h-0 ${chatsLayerPainted ? "" : "hidden"}`}>
+                <div data-tour="chat-list" className={`flex-1 flex flex-col min-h-0 ${chatsLayerPainted ? "" : "hidden"}`}>
                     {/* Recent Section Header */}
                     <div className="px-4 pt-3.5 pb-[14px]">
                       <div className="flex justify-between items-center px-1 mb-1">
@@ -5287,6 +5299,27 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                           <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
                         </button>
 
+                        {/* 7b. TUTORIAL DE LA APP */}
+                        <button
+                          onClick={() => {
+                            setActiveSettingsModal(null);
+                            setCurrentScreen("chats");
+                            setTimeout(() => requestOnboardingTour(), 350);
+                          }}
+                          className="w-full text-left bg-white p-3 rounded-2xl border border-slate-100 shadow-sm hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between group cursor-pointer"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-cyan-500/10 flex items-center justify-center text-cyan-600">
+                              <Play className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <div className="text-[13.5px] font-black text-slate-800">Tutorial de WEPA</div>
+                              <div className="text-[11px] text-slate-400">Repasa cómo usar la app en 1 minuto</div>
+                            </div>
+                          </div>
+                          <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                        </button>
+
                         {/* 8. LEGAL */}
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden p-3.5 space-y-3 text-left">
                           <div className="flex items-center gap-3">
@@ -5343,7 +5376,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                               {activeSettingsModal === "seguridad" && "Privacidad y Seguridad"}
                               {activeSettingsModal === "notificaciones" && "Notificaciones"}
                               {activeSettingsModal === "datos" && "Datos y Almacenamiento"}
-                              {activeSettingsModal === "fuentes" && "Tipografías de RED ON"}
+                              {activeSettingsModal === "fuentes" && "Tipografías de WEPA"}
                               {activeSettingsModal === "ayuda" && "Ayuda & FAQ"}
                               {activeSettingsModal === "legal" && "Acuerdos Legales"}
                             </h4>
@@ -5377,7 +5410,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                 </button>
                               </div>
                               <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Cambiar ID de RED ON</label>
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Cambiar ID de WEPA</label>
                                 <div className="flex gap-2">
                                   <input
                                     type="text"
@@ -5403,7 +5436,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                     Guardar
                                   </button>
                                 </div>
-                                <p className="text-[10.5px] text-slate-400 leading-normal">Este ID te identifica de forma única dentro de la red móvil de RED ON sin necesidad de exponer tu número de teléfono real.</p>
+                                <p className="text-[10.5px] text-slate-400 leading-normal">Este ID te identifica de forma única dentro de la red móvil de WEPA sin necesidad de exponer tu número de teléfono real.</p>
                               </div>
 
                               <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
@@ -5508,7 +5541,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
 
                                 {twoStepVerification && (
                                   <div className="space-y-1.5 bg-slate-50 p-2.5 rounded-xl border border-slate-100 animate-fade-in">
-                                    <label className="text-[10px] font-bold text-slate-500">PIN de Seguridad de RED ON (6 dígitos)</label>
+                                    <label className="text-[10px] font-bold text-slate-500">PIN de Seguridad de WEPA (6 dígitos)</label>
                                     <div className="flex gap-1.5">
                                       <input
                                         type="password"
@@ -6100,6 +6133,13 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
           )}
 
         </div>
+      )}
+
+      {user && profile && !loading && !profile.phone_number && !phonePromptDismissed && (
+        <CompletePhoneModal
+          onClose={() => setPhonePromptDismissed(true)}
+          onSaved={refreshProfile}
+        />
       )}
 
     </div>
