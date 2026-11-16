@@ -208,6 +208,53 @@ export async function addContact(
   throw new Error("No se pudo guardar el contacto en el servidor");
 }
 
+export type LinkableProfile = {
+  id: string;
+  name?: string;
+  avatar_url?: string;
+  phone_number?: string;
+};
+
+// Vincula una fila externa ya guardada (misma agenda, mismo teléfono) con su
+// perfil de WEPA, sin crear otra fila. Solo toca filas propias y todavía
+// externas, así que es seguro repetirlo tras un escaneo.
+export async function linkContactToProfile(
+  userId: string,
+  contact: Contact,
+  profile: LinkableProfile
+): Promise<Contact> {
+  const updates: Record<string, unknown> = { contact_user_id: profile.id };
+  const phoneDigits = digitsOnly(profile.phone_number || contact.phone || "");
+
+  if (!contact.phone && phoneDigits) updates.phone = phoneDigits;
+  if (!contact.avatar && profile.avatar_url) updates.avatar = profile.avatar_url;
+  if (!(contact.name || "").trim() && profile.name) updates.name = profile.name.trim();
+  if (contact.bio?.startsWith("Contacto externo:")) updates.bio = "";
+
+  const { data, error } = await supabase
+    .from("contacts")
+    .update(updates)
+    .eq("id", contact.id)
+    .eq("user_id", userId)
+    .is("contact_user_id", null)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Contact;
+}
+
+export async function deleteContactsByIds(userId: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await supabase
+    .from("contacts")
+    .delete()
+    .eq("user_id", userId)
+    .in("id", ids)
+    .is("contact_user_id", null);
+  if (error) throw error;
+}
+
 export async function updateContactName(
   userId: string,
   contactUserId: string | null,
@@ -269,10 +316,16 @@ export async function deleteContact(contactId: string) {
   if (error) throw error;
 }
 
-export async function toggleFavorite(contactId: string, isFavorite: boolean) {
-  const { error } = await supabase
+export async function toggleFavorite(
+  contactId: string,
+  isFavorite: boolean,
+  userId?: string
+) {
+  let query = supabase
     .from("contacts")
     .update({ is_favorite: isFavorite })
     .eq("id", contactId);
+  if (userId) query = query.eq("user_id", userId);
+  const { error } = await query;
   if (error) throw error;
 }

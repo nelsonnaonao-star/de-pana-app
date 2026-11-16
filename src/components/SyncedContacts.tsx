@@ -1,11 +1,26 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   ArrowLeft, Users, RefreshCw, Smartphone, UserPlus,
   ChevronRight, Loader2, Search, X
 } from "lucide-react";
-import { readDeviceContacts, matchContactsWithSupabase, searchByPhone, MatchedProfile } from "../services/device-contacts";
+import {
+  readDeviceContacts,
+  matchContactsWithSupabase,
+  searchByPhone,
+  hasContactPermission,
+  lastDigits,
+  DeviceContactsError,
+  MatchedProfile,
+} from "../services/device-contacts";
 import CachedImage from "./CachedImage";
-import { getContacts, addContact } from "../services/contacts";
+import {
+  getContacts,
+  addContact,
+  linkContactToProfile,
+  deleteContactsByIds,
+  toggleFavorite,
+  type Contact,
+} from "../services/contacts";
 import { digitsOnly } from "../utils/phone";
 import { useSupabase } from "../contexts/SupabaseContext";
 
@@ -20,21 +35,33 @@ function getInitials(name: string): string {
   return name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2);
 }
 
+function normalizeName(name?: string): string {
+  return (name || "").trim().toLowerCase();
+}
+
+function phoneKey(phone?: string): string {
+  const digits = digitsOnly(phone || "");
+  return digits ? lastDigits(digits, 10) : "";
+}
+
 export default function SyncedContacts({ currentUserId, onBack, onStartChat, onContactsChanged }: SyncedContactsProps) {
   const { contacts: savedContacts } = useSupabase();
   const [contacts, setContacts] = useState<MatchedProfile[]>([]);
   const [loading, setLoading] = useState(false);
   const [synced, setSynced] = useState(false);
   const [addedCount, setAddedCount] = useState(0);
+  const [linkedCount, setLinkedCount] = useState(0);
   const [syncError, setSyncError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<MatchedProfile[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const autoSyncStarted = useRef(false);
 
-  // Hidrata la pantalla con los contactos Red On ya guardados (vienen del
+  // Hidrata la pantalla con los contactos WEPA ya guardados (vienen del
   // contexto, que a su vez se hidrata de SQLite al arrancar), para no arrancar
-  // vacía ni obligar a re-escanear. El escaneo manual sigue siendo el único
-  // camino para descubrir contactos nuevos.
+  // vacía ni obligar a re-escanear. Si el permiso ya está concedido, el
+  // escaneo se hace solo al abrir.
   useEffect(() => {
     if (synced) return;
     const seen = new Set<string>();
@@ -59,45 +86,120 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
   useEffect(() => {
     if (searchQuery.length >= 4) {
       setSearching(true);
+      setSearchError("");
       const timer = setTimeout(async () => {
-        const results = await searchByPhone(searchQuery);
-        setSearchResults(results);
-        setSearching(false);
+        try {
+          const results = await searchByPhone(searchQuery);
+          setSearchResults(results);
+        } catch (e) {
+          console.warn("[SYNC-CONTACTS] search error", { error: e });
+          setSearchResults([]);
+          setSearchError(e instanceof Error ? e.message : "No se pudo buscar ese número.");
+        } finally {
+          setSearching(false);
+        }
       }, 400);
       return () => clearTimeout(timer);
-    } else {
-      setSearchResults([]);
     }
+
+    setSearchResults([]);
+    setSearchError("");
+    setSearching(false);
   }, [searchQuery]);
 
-  async function handleSync() {
+  const handleSync = useCallback(async () => {
     setLoading(true);
     setSyncError("");
     setAddedCount(0);
+    setLinkedCount(0);
     try {
       const deviceList = await readDeviceContacts();
       const matched = await matchContactsWithSupabase(deviceList);
       setContacts(matched);
       setSynced(true);
 
-      // Agrega a la lista de contactos los que ya usan Red On (persistido
-      // server-side para que sobrevivan a la reinstalación). Los que ya existen
-      // no se duplican.
+      // Guarda en la lista los contactos que ya usan WEPA y vincula las filas
+      // externas que ya existían con ese mismo teléfono, sin duplicarlas.
       try {
         const existing = await getContacts(currentUserId);
         const existingIds = new Set<string>();
-        const existingPhones = new Set<string>();
+        const unlinkedByPhone = new Map<string, Contact[]>();
+
         for (const c of existing) {
-          if (c.contact_user_id) existingIds.add(c.contact_user_id);
-          if (c.phone) existingPhones.add(digitsOnly(c.phone));
+          if (c.contact_user_id) {
+            existingIds.add(c.contact_user_id);
+            continue;
+          }
+          const key = phoneKey(c.phone);
+          if (!key) continue;
+          const rows = unlinkedByPhone.get(key) || [];
+          rows.push(c);
+          unlinkedByPhone.set(key, rows);
         }
 
         let added = 0;
+        let linked = 0;
+        let failed = 0;
+
         for (const profile of matched) {
           if (profile.id === currentUserId) continue;
           if (existingIds.has(profile.id)) continue;
-          const phoneDigits = digitsOnly(profile.phone_number);
-          if (existingPhones.has(phoneDigits)) continue;
+
+          const key = phoneKey(profile.phone_number);
+          const candidates = key ? unlinkedByPhone.get(key) || [] : [];
+
+          if (candidates.length > 0) {
+            const profileName = normalizeName(profile.contactName || profile.name);
+            const primary =
+              candidates.find((c) => normalizeName(c.name) === profileName) || candidates[0];
+
+            try {
+              await linkContactToProfile(currentUserId, primary, {
+                id: profile.id,
+                name: profile.name,
+                avatar_url: profile.avatar_url,
+                phone_number: profile.phone_number,
+              });
+
+              // Si el favorito estaba en otra fila duplicada, lo conservamos.
+              if (candidates.some((c) => c.is_favorite) && !primary.is_favorite) {
+                try {
+                  await toggleFavorite(primary.id, true, currentUserId);
+                } catch (e) {
+                  console.warn("[SYNC-CONTACTS] favorite merge failed", { error: e });
+                }
+              }
+
+              linked++;
+              existingIds.add(profile.id);
+              unlinkedByPhone.delete(key);
+
+              // Limpia solo duplicados con el mismo nombre; si el usuario tiene
+              // dos etiquetas distintas para el mismo número, no se toca nada.
+              const duplicateIds = candidates
+                .filter(
+                  (c) =>
+                    c.id !== primary.id &&
+                    normalizeName(c.name) === normalizeName(primary.name)
+                )
+                .map((c) => c.id);
+              if (duplicateIds.length > 0) {
+                try {
+                  await deleteContactsByIds(currentUserId, duplicateIds);
+                } catch (e) {
+                  console.warn("[SYNC-CONTACTS] duplicate cleanup failed", { error: e });
+                }
+              }
+            } catch (e) {
+              failed++;
+              console.warn("[SYNC-CONTACTS] linkContactToProfile failed", {
+                error: e,
+                id: profile.id,
+              });
+            }
+            continue;
+          }
+
           try {
             await addContact(
               currentUserId,
@@ -108,25 +210,46 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
             );
             added++;
             existingIds.add(profile.id);
-            existingPhones.add(phoneDigits);
           } catch (e) {
+            failed++;
             console.warn("[SYNC-CONTACTS] addContact failed", { error: e, id: profile.id });
           }
         }
 
         setAddedCount(added);
-        if (added > 0) onContactsChanged?.();
+        setLinkedCount(linked);
+        if (failed > 0) {
+          setSyncError("Algunos contactos no se pudieron guardar. Intenta de nuevo.");
+        }
+        if (added + linked > 0) onContactsChanged?.();
       } catch (e) {
-        console.warn("[SYNC-CONTACTS] auto-add error", { error: e });
-        setSyncError("No se pudieron agregar los contactos a tu lista");
+        console.warn("[SYNC-CONTACTS] contact persistence error", { error: e });
+        setSyncError("No se pudieron guardar los contactos en tu lista");
       }
     } catch (e) {
       console.warn("[SYNC-CONTACTS] sync error", { error: e });
-      setSyncError("No se pudo sincronizar la agenda");
+      setSyncError(
+        e instanceof DeviceContactsError ? e.message : "No se pudo sincronizar la agenda"
+      );
     } finally {
       setLoading(false);
     }
-  }
+  }, [currentUserId, onContactsChanged]);
+
+  const handleSyncRef = useRef(handleSync);
+  useEffect(() => {
+    handleSyncRef.current = handleSync;
+  }, [handleSync]);
+
+  // Sincroniza sola al abrir la pantalla, pero solo si el permiso ya estaba
+  // concedido. Si no, se muestra el botón para pedirlo explícitamente.
+  useEffect(() => {
+    if (autoSyncStarted.current) return;
+    autoSyncStarted.current = true;
+    hasContactPermission().then((granted) => {
+      if (granted) void handleSyncRef.current();
+    });
+  }, []);
 
   const displayList = searchQuery.length >= 4 ? searchResults : contacts;
 
@@ -136,7 +259,7 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
         <button onClick={onBack} className="p-1 text-teal-300 hover:text-white transition-all cursor-pointer">
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <h3 className="text-sm font-black tracking-tight">Contactos Red On</h3>
+        <h3 className="text-sm font-black tracking-tight">Contactos WEPA</h3>
       </div>
 
       <div className="px-4 pt-3 pb-2 shrink-0">
@@ -155,6 +278,11 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
             </button>
           )}
         </div>
+        {searchError && (
+          <div className="mt-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-[12px] text-red-700 font-semibold">
+            {searchError}
+          </div>
+        )}
       </div>
 
       <div className="px-4 pb-2 shrink-0">
@@ -175,7 +303,7 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
           <div className="flex items-center justify-between bg-teal-50 border border-teal-200 rounded-xl px-4 py-2.5">
             <div className="flex items-center gap-2 text-[12px] text-teal-800 font-semibold">
               <Smartphone className="w-4 h-4" />
-              {contacts.length} contacto{contacts.length !== 1 ? "s" : ""} en Red On
+              {contacts.length} contacto{contacts.length !== 1 ? "s" : ""} en WEPA
             </div>
             <button
               onClick={handleSync}
@@ -192,6 +320,13 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
             {addedCount === 1 ? "1 contacto" : `${addedCount} contactos`} agregado{addedCount !== 1 ? "s" : ""} a tu lista
           </div>
         )}
+        {linkedCount > 0 && (
+          <div className="mt-2 bg-teal-50 border border-teal-200 rounded-xl px-4 py-2.5 text-[12px] text-teal-800 font-semibold">
+            {linkedCount === 1
+              ? "1 contacto de tu agenda ahora está vinculado a WEPA"
+              : `${linkedCount} contactos de tu agenda ahora están vinculados a WEPA`}
+          </div>
+        )}
         {syncError && (
           <div className="mt-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5 text-[12px] text-red-700 font-semibold">
             {syncError}
@@ -205,21 +340,31 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
             <div className="w-16 h-16 rounded-full bg-teal-50 flex items-center justify-center mx-auto">
               <Users className="w-7 h-7 text-teal-500" />
             </div>
-            <p className="text-sm font-bold text-slate-700">Descubre quiénes están en Red On</p>
+            <p className="text-sm font-bold text-slate-700">Descubre quiénes están en WEPA</p>
             <p className="text-[11px] text-slate-500 leading-relaxed max-w-xs mx-auto">
               Sincroniza tu agenda para ver qué contactos ya usan la aplicación y empieza a chatear al instante.
             </p>
           </div>
         )}
 
-        {synced && displayList.length === 0 && (
+        {synced && !searching && !searchError && displayList.length === 0 && (
           <div className="bg-white rounded-2xl shadow-sm p-8 text-center space-y-3 mt-4">
             <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mx-auto">
-              <Smartphone className="w-6 h-6 text-slate-400" />
+              {searchQuery.length >= 4 ? (
+                <Search className="w-6 h-6 text-slate-400" />
+              ) : (
+                <Smartphone className="w-6 h-6 text-slate-400" />
+              )}
             </div>
-            <p className="text-sm font-bold text-slate-600">Ningún contacto usa Red On aún</p>
+            <p className="text-sm font-bold text-slate-600">
+              {searchQuery.length >= 4
+                ? "No encontramos ese número en WEPA"
+                : "Ningún contacto usa WEPA aún"}
+            </p>
             <p className="text-[11px] text-slate-500">
-              Invita a tus amigos a descargar la app para empezar a chatear.
+              {searchQuery.length >= 4
+                ? "Verifica que el número tenga al menos 7 dígitos o invita a esa persona a WEPA."
+                : "Invita a tus amigos a descargar la app para empezar a chatear."}
             </p>
           </div>
         )}

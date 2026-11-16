@@ -17,6 +17,18 @@ export interface MatchedProfile {
   contactName?: string;
 }
 
+export type DeviceContactsErrorCode = "permission" | "read" | "match";
+
+export class DeviceContactsError extends Error {
+  code: DeviceContactsErrorCode;
+
+  constructor(code: DeviceContactsErrorCode, message: string) {
+    super(message);
+    this.name = "DeviceContactsError";
+    this.code = code;
+  }
+}
+
 function cleanPhone(phone: string): string {
   return digitsOnly(phone).replace(/^00/, "");
 }
@@ -28,7 +40,18 @@ export function lastDigits(n: string, count: number): string {
   return n.length > count ? n.slice(-count) : n;
 }
 
+export async function hasContactPermission(): Promise<boolean> {
+  try {
+    const permission = await Contacts.checkPermissions();
+    return permission?.contacts === "granted";
+  } catch (e) {
+    console.warn("[DEVICE-CONTACTS] Permission check error:", e);
+    return false;
+  }
+}
+
 export async function requestContactPermission(): Promise<boolean> {
+  if (await hasContactPermission()) return true;
   try {
     const permission = await Contacts.requestPermissions();
     return permission?.contacts === "granted";
@@ -41,8 +64,10 @@ export async function requestContactPermission(): Promise<boolean> {
 export async function readDeviceContacts(): Promise<DeviceContact[]> {
   const granted = await requestContactPermission();
   if (!granted) {
-    console.warn("[DEVICE-CONTACTS] Permission denied");
-    return [];
+    throw new DeviceContactsError(
+      "permission",
+      "Permiso de contactos denegado. Actívalo en Configuración > Aplicaciones > WEPA > Permisos."
+    );
   }
 
   try {
@@ -71,7 +96,10 @@ export async function readDeviceContacts(): Promise<DeviceContact[]> {
     return contacts;
   } catch (e) {
     console.error("[DEVICE-CONTACTS] Read error:", e);
-    return [];
+    throw new DeviceContactsError(
+      "read",
+      "No se pudo leer la agenda del teléfono. Intenta de nuevo."
+    );
   }
 }
 
@@ -98,7 +126,10 @@ export async function matchContactsWithSupabase(
 
     if (error) {
       console.error("[DEVICE-CONTACTS] Supabase RPC error:", error);
-      continue;
+      throw new DeviceContactsError(
+        "match",
+        "No se pudo buscar en WEPA. Revisa tu conexión e intenta de nuevo."
+      );
     }
 
     for (const profile of (data || []) as any[]) {
@@ -145,7 +176,10 @@ export async function searchByPhone(
 
   if (error) {
     console.error("[DEVICE-CONTACTS] Search error:", error);
-    return [];
+    throw new DeviceContactsError(
+      "match",
+      "No se pudo buscar ese número. Revisa tu conexión e intenta de nuevo."
+    );
   }
 
   return ((data || []) as any[]).map((p) => ({
