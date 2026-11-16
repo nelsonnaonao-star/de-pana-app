@@ -2,9 +2,10 @@
 -- PARCHE 14 - Rotar el secreto del webhook FCM
 -- Fecha: 2026-11-09
 --
--- ESTADO: PLANTILLA. NO EJECUTAR TAL CUAL.
---   Reemplaza REEMPLAZA_CON_SECRETO_NUEVO en la linea `v_secret text := ...`.
---   Si el placeholder sigue ahi, el bloque aborta con excepcion.
+-- ESTADO: APLICADO 2026-11-10 (host kucq, 3 triggers, secretos viejos fuera).
+--   Sigue sirviendo de plantilla para futuras rotaciones: reemplaza
+--   REEMPLAZA_CON_SECRETO_NUEVO en la linea `v_secret text := ...`; si el
+--   placeholder sigue ahi, el bloque aborta con excepcion.
 --
 -- Contexto (verificado en pg_trigger):
 --   - calls ................ un secreto debil y predecible (secreto viejo)
@@ -18,6 +19,11 @@
 -- tres triggers siguen usando el secreto debil; esta rotacion los pasa al
 -- secreto nuevo y elimina el debil.
 --
+-- ESTADO ACTUAL (2026-11-10): el servidor activo es
+-- `de-pana-app-kucq.onrender.com` (tiene el secreto nuevo). `de-pana-app` y
+-- `redon-server` son despliegues viejos; esta rotacion apunta los triggers al
+-- host activo.
+--
 -- PASO 0 - Guarda las definiciones actuales (por si hay que revertir):
 --   SELECT c.relname, t.tgname, pg_get_triggerdef(t.oid)
 --   FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
@@ -26,8 +32,8 @@
 --
 -- Orden obligatorio:
 --   1) Generar secreto: openssl rand -hex 32  (64 chars hex).
---   2) Render -> red-on -> Environment -> FCM_WEBHOOK_SECRET = <nuevo>.
---      Esperar a que termine el redeploy.
+--   2) Render -> servicio con URL de-pana-app-kucq.onrender.com -> Environment
+--      -> FCM_WEBHOOK_SECRET = <nuevo>. Esperar a que termine el redeploy.
 --   3) Editar v_secret aqui y ejecutar:
 --        supabase db query -f security-patches/sql/14_rotate_fcm_webhook_secret.sql --linked
 --      (o pegar en el SQL Editor de Supabase).
@@ -43,7 +49,7 @@ BEGIN;
 DO $$
 DECLARE
   v_secret  text := 'REEMPLAZA_CON_SECRETO_NUEVO';
-  v_url     text := 'https://de-pana-app.onrender.com/api/fcm/webhook';
+  v_url     text := 'https://de-pana-app-kucq.onrender.com/api/fcm/webhook';
   v_headers text;
 BEGIN
   IF v_secret = 'REEMPLAZA_CON_SECRETO_NUEVO' OR length(v_secret) < 32 THEN
@@ -86,7 +92,7 @@ COMMIT;
 --
 -- Prueba HTTP (sin secreto => 401; con secreto nuevo => 200):
 --   Invoke-WebRequest -Method POST `
---     -Uri https://de-pana-app.onrender.com/api/fcm/webhook `
+--     -Uri https://de-pana-app-kucq.onrender.com/api/fcm/webhook `
 --     -Headers @{ "x-fcm-secret" = "<nuevo>"; "Content-Type" = "application/json" } `
 --     -Body '{"type":"INSERT","table":"messages","record":{"id":"00000000-0000-0000-0000-000000000000"}}'
 --
@@ -99,10 +105,10 @@ COMMIT;
 --
 -- DROP TRIGGER IF EXISTS "Call FCM Push" ON public.calls;
 -- CREATE TRIGGER "Call FCM Push" AFTER INSERT OR UPDATE ON public.calls FOR EACH ROW
---   EXECUTE FUNCTION supabase_functions.http_request('https://de-pana-app.onrender.com/api/fcm/webhook', 'POST', '{"Content-type":"application/json","x-fcm-secret":"SECRETO_VIEJO_CALLS"}', '{}', '5000');
+--   EXECUTE FUNCTION supabase_functions.http_request('https://de-pana-app-kucq.onrender.com/api/fcm/webhook', 'POST', '{"Content-type":"application/json","x-fcm-secret":"SECRETO_VIEJO_CALLS"}', '{}', '5000');
 -- DROP TRIGGER IF EXISTS send_group_added_notification ON public.chat_participants;
 -- CREATE TRIGGER send_group_added_notification AFTER INSERT ON public.chat_participants FOR EACH ROW
---   EXECUTE FUNCTION supabase_functions.http_request('https://de-pana-app.onrender.com/api/fcm/webhook', 'POST', '{"Content-type":"application/json","x-fcm-secret":"SECRETO_VIEJO_CALLS"}', '{}', '5000');
+--   EXECUTE FUNCTION supabase_functions.http_request('https://de-pana-app-kucq.onrender.com/api/fcm/webhook', 'POST', '{"Content-type":"application/json","x-fcm-secret":"SECRETO_VIEJO_CALLS"}', '{}', '5000');
 -- DROP TRIGGER IF EXISTS send_fcm_notification ON public.messages;
 -- CREATE TRIGGER send_fcm_notification AFTER INSERT ON public.messages FOR EACH ROW
---   EXECUTE FUNCTION supabase_functions.http_request('https://de-pana-app.onrender.com/api/fcm/webhook', 'POST', '{"Content-type":"application/json","x-fcm-secret":"SECRETO_VIEJO_MESSAGES"}', '{}', '5000');
+--   EXECUTE FUNCTION supabase_functions.http_request('https://de-pana-app-kucq.onrender.com/api/fcm/webhook', 'POST', '{"Content-type":"application/json","x-fcm-secret":"SECRETO_VIEJO_MESSAGES"}', '{}', '5000');

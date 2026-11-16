@@ -72,14 +72,12 @@ Estos parches están preparados para revisión y aplicación manual.
 
 ## Preparado (no aplicado)
 
-- **`sql/14_rotate_fcm_webhook_secret.sql`** — plantilla para unificar y rotar
-  el secreto del webhook FCM. Hallazgo: hoy hay **dos** secretos en los triggers
-  (`calls`/`chat_participants` usan uno débil; `messages` usa otro aleatorio) y
-  el servidor solo acepta uno, así que al menos una ruta ya recibe `401`.
-  Confirmado el 2026-11-09: `messages` daba `401`; se alineó temporalmente al
-  secreto aceptado para restaurar los push. Los tres siguen con el secreto
-  débil hasta ejecutar esta rotación. Requiere actualizar `FCM_WEBHOOK_SECRET`
-  en Render **antes** de ejecutarlo.
+- **`sql/14_rotate_fcm_webhook_secret.sql`** — **aplicado 2026-11-10**. Los 3
+  triggers usan ahora el secreto nuevo y apuntan a
+  `de-pana-app-kucq.onrender.com`; el secreto viejo y el host viejo dan `401`.
+  El archivo queda como plantilla para futuras rotaciones.
+- **Hosts viejos pendientes:** `de-pana-app.onrender.com` (secreto viejo) y
+  `redon-server.onrender.com` (webhook sin auth) deben suspenderse/retirarse.
 - **`runbooks/10b_window.md`** — ventana completa de `10b`: forzar 1.12
   (`min_supported_code = 12`), backup, verificaciones SQL, pruebas de app y
   Realtime, monitoreo y rollback (incluye `anon`).
