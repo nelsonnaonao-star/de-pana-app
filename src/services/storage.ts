@@ -75,10 +75,14 @@ async function loadImageElement(blob: Blob): Promise<HTMLImageElement> {
 async function compressToTarget(blob: Blob): Promise<Blob> {
   let w: number;
   let h: number;
+  let bitmap: ImageBitmap | null = null;
   let drawImage: (ctx: CanvasRenderingContext2D, dw: number, dh: number) => Promise<void>;
 
   try {
-    const bitmap = await createImageBitmap(blob);
+    // Una sola decodificación: antes se decodificaba dos veces el mismo blob y
+    // en fotos de cámara grandes (12-48MP) eso duplicaba la memoria y el tiempo
+    // hasta provocar "compressImage timed out". Con un único bitmap basta.
+    bitmap = await createImageBitmap(blob);
     w = bitmap.width;
     h = bitmap.height;
     if (w > MAX_W || h > MAX_H) {
@@ -86,12 +90,10 @@ async function compressToTarget(blob: Blob): Promise<Blob> {
       w = Math.round(w * ratio);
       h = Math.round(h * ratio);
     }
-    const bitmapRef = await createImageBitmap(blob);
+    const src = bitmap;
     drawImage = async (ctx, dw, dh) => {
-      ctx.drawImage(bitmapRef, 0, 0, dw, dh);
-      bitmapRef.close();
+      ctx.drawImage(src, 0, 0, dw, dh);
     };
-    bitmap.close();
   } catch {
     const img = await loadImageElement(blob);
     w = img.naturalWidth;
@@ -111,7 +113,11 @@ async function compressToTarget(blob: Blob): Promise<Blob> {
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
 
-  await drawImage(ctx, w, h);
+  try {
+    await drawImage(ctx, w, h);
+  } finally {
+    bitmap?.close();
+  }
 
   for (let quality = 0.7; quality >= 0.2; quality -= 0.15) {
     const out = await new Promise<Blob>((resolve, reject) => {

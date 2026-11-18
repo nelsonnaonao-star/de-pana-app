@@ -1098,7 +1098,15 @@ export default function PhoneSimulator({
 
       if (targetId) {
         const replyToId = `story_${storyReply.storyId}`;
-        const replyToText = storyReply.storyType !== "text" ? storyReply.mediaUrl : storyReply.storyText;
+        // Nunca guardar la URL/contenido completo del estado en reply_to_text:
+        // las fotos antiguas eran data URLs de varios MB y el envío fallaba
+        // (413 en el API / fila demasiado grande). Un texto corto basta porque
+        // las respuestas a estados no muestran la cita.
+        const replyToText = storyReply.storyType === "text"
+          ? (storyReply.storyText || "").slice(0, 280)
+          : storyReply.storyType === "video"
+            ? "🎥 Video"
+            : "📷 Foto";
         const replyToSender = name;
 
         const tempId = `temp_${Date.now()}_txt`;
@@ -1150,17 +1158,35 @@ export default function PhoneSimulator({
         }
 
         try {
-          const saved = await apiSendMessage({
-            chat_id: finalChatId,
-            client_id: clientId,
-            temp_id: tempId,
-            text: initialText,
-            type: "text",
-            sender_id: user.id,
-            reply_to_id: replyToId,
-            reply_to_text: replyToText,
-            reply_to_sender: replyToSender,
-          });
+          let saved: Awaited<ReturnType<typeof apiSendMessage>>;
+          try {
+            saved = await apiSendMessage({
+              chat_id: finalChatId,
+              client_id: clientId,
+              temp_id: tempId,
+              text: initialText,
+              type: "text",
+              sender_id: user.id,
+              reply_to_id: replyToId,
+              reply_to_text: replyToText,
+              reply_to_sender: replyToSender,
+            });
+          } catch (refErr) {
+            // Compatibilidad mientras messages.reply_to_id siga siendo uuid en
+            // Supabase (migración 021): el id "story_*" no es uuid y el insert
+            // falla. Reintenta sin la referencia para que la respuesta llegue.
+            logger.warn("[STATE-REPLY] reintento sin reply_to_id", { error: refErr });
+            saved = await apiSendMessage({
+              chat_id: finalChatId,
+              client_id: clientId,
+              temp_id: tempId,
+              text: initialText,
+              type: "text",
+              sender_id: user.id,
+              reply_to_text: replyToText,
+              reply_to_sender: replyToSender,
+            });
+          }
           const savedRow = { ...newMsg, id: saved.id, status: "sent" as const, synced: true, rawCreatedAt: saved.created_at };
           recordReconciledId(finalChatId, tempId, saved.id);
           setChats(prev => prev.map(c => c.id === finalChatId
@@ -1171,8 +1197,19 @@ export default function PhoneSimulator({
           );
         } catch (e) {
           logger.error("[STATE-REPLY] apiSendMessage failed, queueing in SyncService", { error: e });
+          setChats(prev => prev.map(c => c.id === finalChatId
+            ? { ...c, messages: (c.messages || []).map(m => m.id === tempId ? { ...m, status: "error" as const } : m) }
+            : c));
+          // El ChatRoom abierto pinta desde SQLite: persistir el error evita que
+          // el reloj de "enviando" quede congelado al reabrir el chat.
+          messageRepo.upsertMessage(finalChatId, { ...newMsg, status: "error" as const }, user.id).catch((err) =>
+            logger.warn("[STATE-REPLY] marcar error local falló", { error: err })
+          );
+          showToast("No se pudo enviar la respuesta al estado");
           try {
-            await syncService.queueMessage(finalChatId, { ...newMsg, clientId, sender_id: user.id }, user.id);
+            // En la cola no se conserva replyToId "story_*": si el reintento
+            // automático corre antes de la migración 021, fallaría siempre.
+            await syncService.queueMessage(finalChatId, { ...newMsg, replyToId: undefined, clientId, sender_id: user.id }, user.id);
           } catch (qErr) {
             logger.error("[STATE-REPLY] SyncService queue failed", { error: qErr });
           }
@@ -4950,9 +4987,9 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
 
                 {/* PROFILE TAB */}
                 {currentScreen === "profile" && registeredUser && (
-                  <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 h-full relative">
+                  <div className="flex-1 overflow-y-auto bg-slate-50 h-full relative scrollbar-thin">
                     {/* Top User Profile Header */}
-                    <div className="relative overflow-hidden bg-gradient-to-br from-[#041b1e] via-[#0a4d52] to-[#11806f] text-white p-5 text-center shrink-0 shadow-lg">
+                    <div className="relative overflow-hidden bg-gradient-to-br from-[#041b1e] via-[#0a4d52] to-[#11806f] text-white px-4 pt-3 pb-3 text-center shadow-lg">
                       <div className="pointer-events-none absolute inset-0">
                         <div className="absolute -top-20 -right-14 w-72 h-72 rounded-full bg-white/5 blur-2xl"></div>
                         <div className="absolute -bottom-24 -left-16 w-80 h-80 rounded-full bg-teal-300/10 blur-3xl"></div>
@@ -4963,20 +5000,20 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                         <div className="absolute bottom-14 left-10 w-1.5 h-1.5 rounded-full bg-teal-200/30"></div>
                         <div className="absolute top-6 left-1/3 w-1 h-1 rounded-full bg-white/25"></div>
                       </div>
-                      <div className="absolute top-4 right-4 z-10 bg-white/10 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] font-bold tracking-widest text-teal-200">
+                      <div className="absolute top-3 right-3 z-10 bg-white/10 backdrop-blur-md px-2 py-0.5 rounded-full text-[8px] font-bold tracking-widest text-teal-200">
                         VERSIÓN PRO
                       </div>
-                      <div className="relative inline-block mt-2 group z-10">
+                      <div className="relative inline-block mt-1 group z-10">
                         {registeredUser.avatar ? (
                           <CachedImage
                             src={registeredUser.avatar}
                             alt="Profile"
                             onClick={() => !isUploadingAvatar && setShowMyAvatarLightbox(true)}
-                            className={`w-32 h-32 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
+                            className={`w-24 h-24 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
                           />
                         ) : (
-                          <div className="w-32 h-32 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/25 shadow-xl ring-4 ring-white/10 flex items-center justify-center">
-                            <User className="w-14 h-14 text-white" />
+                          <div className="w-24 h-24 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] mx-auto bg-gradient-to-br from-teal-400 to-emerald-600 border-4 border-white/25 shadow-xl ring-4 ring-white/10 flex items-center justify-center">
+                            <User className="w-10 h-10 text-white" />
                           </div>
                         )}
                         {isUploadingAvatar && (
@@ -4984,7 +5021,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                             <div className="w-8 h-8 border-[3px] border-white border-t-transparent rounded-full animate-spin"></div>
                           </div>
                         )}
-                        <span className="absolute bottom-1 right-1 w-6 h-6 bg-emerald-500 border-[3px] border-white rounded-full shadow-md"></span>
+                        <span className="absolute bottom-1 right-1 w-5 h-5 bg-emerald-500 border-[3px] border-white rounded-full shadow-md"></span>
                         <input
                           ref={fileInputRef}
                           type="file"
@@ -5013,7 +5050,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                       </div>
                       <button
                         onClick={() => !isUploadingAvatar && fileInputRef.current?.click()}
-                        className={`mt-3 mx-auto flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white text-[10px] font-semibold px-3.5 py-1.5 rounded-full backdrop-blur-md border border-white/20 shadow-md transition-all active:scale-95 ${isUploadingAvatar ? "cursor-wait opacity-60" : "cursor-pointer"}`}
+                        className={`mt-2 mx-auto flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white text-[10px] font-semibold px-3.5 py-1.5 rounded-full backdrop-blur-md border border-white/20 shadow-md transition-all active:scale-95 ${isUploadingAvatar ? "cursor-wait opacity-60" : "cursor-pointer"}`}
                       >
                         <Camera className="w-3 h-3" />
                         {isUploadingAvatar ? "Subiendo..." : "Cambiar foto"}
@@ -5063,7 +5100,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                         </div>
                         ) : (
                         <>
-                          <h4 className="text-base font-black mt-2 tracking-tight">{registeredUser.name}</h4>
+                          <h4 className="text-[15px] font-black mt-1.5 tracking-tight">{registeredUser.name}</h4>
                           <button
                             onClick={() => {
                               if (registeredUser?.phone) {
@@ -5095,13 +5132,13 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                           </div>
                         </>
                       )}
-                      <div className="bg-black/15 py-0.5 px-3 rounded-full inline-block mt-2 text-[10px] font-bold text-teal-100">
+                      <div className="bg-black/15 py-0.5 px-3 rounded-full inline-block mt-1.5 text-[10px] font-bold text-teal-100">
                         {userId}
                       </div>
                     </div>
 
-                    {/* Scrollable Settings Panel */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3.5 pb-20 scrollbar-thin">
+                    {/* Settings Panel (misma pantalla de scroll que el header) */}
+                    <div className="p-4 space-y-3.5 pb-20">
                       
                       <div className="text-[11px] font-black text-slate-400 tracking-wider uppercase px-1">
                         Ajustes de Wepa
@@ -5353,8 +5390,8 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                         {/* 9. LOGOUT */}
                         <button
                           onClick={() => {
-                            setRegisteredUser(null);
-                            setCurrentScreen("welcome");
+                            // Sin navegar a la welcome: al limpiar `user`, App
+                            // conmuta directo a AuthScreen (login).
                             logout();
                           }}
                           className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[13px] font-black rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-rose-100 cursor-pointer mt-4"

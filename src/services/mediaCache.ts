@@ -88,6 +88,33 @@ export function getCachedMediaSync(url: string): string | null {
   return blobUrlMap.get(cacheKey(url)) ?? null;
 }
 
+// Precarga un blob que YA está en el dispositivo bajo su URL canónica. Se usa
+// tras subir un audio/vídeo propio: la burbuja cambia de blob local a URL de
+// Storage y, al reconciliarse (temp → id real) el componente se remonta y pierde
+// la referencia al blob. Sembrar la caché con la clave canónica garantiza que
+// el media recién enviado se reproduzca al instante y sin depender de firmar.
+export function primeCachedMedia(url: string, blob: Blob): void {
+  if (!url || !blob || blob.size === 0) return;
+  if (url.startsWith("blob:") || url.startsWith("data:")) return;
+  const key = cacheKey(url);
+  if (blobUrlMap.has(key)) return;
+  try {
+    blobUrlMap.set(key, URL.createObjectURL(blob));
+  } catch {
+    return;
+  }
+  // Persistencia best-effort (Cache API puede no existir): no bloquea el envío.
+  void (async () => {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(key, new Response(blob));
+      await ensureCacheSize();
+    } catch {
+      // Sin Cache API queda sólo el blob en memoria de esta sesión.
+    }
+  })();
+}
+
 export function revokeCachedMedia(url: string): void {
   const key = cacheKey(url);
   const blobUrl = blobUrlMap.get(key);

@@ -8,7 +8,7 @@ import { sendMessage as apiSendMessage, deleteMessage as apiDeleteMessage, editM
 import { uploadChatMedia, uploadPrivateChatMedia, isValidChatId, planConversationUpload, isSupportedPrivateVideoMime } from "../../services/storage";
 import { compressVideo } from "../../services/videoCompression";
 import { cacheVideoBlob } from "../../services/videoCache";
-import { revokeCachedMedia } from "../../services/mediaCache";
+import { revokeCachedMedia, primeCachedMedia } from "../../services/mediaCache";
 import { recordReconciledId, getReconciledSavedId } from "../../lib/reconciledIds";
 import { inFlightMessageIds, syncService } from "../../services/sync/SyncService";
 import { generateVideoThumbnail } from "../../utils/videoThumbnail";
@@ -918,6 +918,8 @@ pendingSendIdsRef.current.add(tempId);
           }
           if (msgType === "video") {
             cacheVideoBlob(url, localBlob).catch(() => {});
+          } else if (msgType === "audio") {
+            primeCachedMedia(url, blob);
           }
           // La miniatura venía corriendo en paralelo desde antes de la
           // compresión; a estas alturas ya está resuelta o se resuelve al
@@ -1499,6 +1501,7 @@ pendingSendIdsRef.current.add(tempId);
       const url = await Promise.race([uploadPromise, uploadTimeout]);
       console.log("[VOICE] upload OK", { private: isValidChatId(chatId) });
       uploadedUrl = url;
+      primeCachedMedia(url, blob);
       const mediaUpdated = { ...newMsg, mediaUrl: url };
       await messageRepo.upsertMessage(chatId, { ...mediaUpdated, clientId, sender_id: uid }, uid).catch(() => {});
       setMessages(prev => {

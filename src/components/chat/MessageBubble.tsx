@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { Mic, Play, Pause, BarChart2, Forward, MapPin, Loader2, X, Download, Share2, Clock } from "lucide-react";
+import { Mic, Play, Pause, BarChart2, Forward, MapPin, Loader2, X, Download, Share2, Clock, RotateCw } from "lucide-react";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { Message } from "../../types";
 import { BUBBLE_PRESETS_ME, BUBBLE_PRESETS_THEM } from "./chatConstants";
@@ -106,6 +106,7 @@ interface MessageBubbleProps {
   onEdit?: (msg: Message) => void;
   onUpdatePrice?: (msgId: string, price: string) => void;
   onVideoPosterReady?: (msgId: string, posterDataUrl: string) => void;
+  onRetryMedia?: () => void;
 }
 
 function useSaveMedia() {
@@ -517,7 +518,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
 
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
-  handleVote, currentUserId, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice, onVideoPosterReady,
+  handleVote, currentUserId, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice, onVideoPosterReady, onRetryMedia,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
   const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
@@ -859,6 +860,19 @@ export default React.memo(function MessageBubble({
               <p className={`text-[10px] font-semibold truncate ${isGlass ? "text-gray-800" : "text-slate-100"}`}>{msg.fileName || "Audio"}</p>
               <span className={`text-[9px] opacity-70 block font-mono ${isGlass ? "text-gray-500" : ""}`}>Audio no disponible</span>
             </div>
+            {msg.mediaResolved === "failed" && onRetryMedia && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetryMedia();
+                }}
+                className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${isGlass ? "bg-gray-800/10 text-gray-800 hover:bg-gray-800/20" : "bg-white/20 text-white hover:bg-white/30"} transition-colors`}
+                title="Reintentar"
+                aria-label="Reintentar audio"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         )}
 
@@ -906,6 +920,19 @@ export default React.memo(function MessageBubble({
           <div className="flex items-center gap-2 w-44">
             <Mic className={`w-4 h-4 shrink-0 ${isGlass ? "text-gray-500 opacity-60" : "opacity-50"}`} />
             <span className={`text-[10px] ${isGlass ? "text-gray-500" : "opacity-50"}`}>Audio no disponible</span>
+            {msg.mediaResolved === "failed" && onRetryMedia && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetryMedia();
+                }}
+                className={`p-1 rounded-full border-0 bg-transparent cursor-pointer ${isGlass ? "text-gray-600 hover:text-gray-800" : "text-white/60 hover:text-white"} transition-colors`}
+                title="Reintentar"
+                aria-label="Reintentar audio"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         )}
 

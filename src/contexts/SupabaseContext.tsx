@@ -1171,6 +1171,15 @@ const refreshChats = async () => {
   const logout = async () => {
     // Manual logout: clear the remembered user so SIGNED_OUT goes to login screen
     clearLastUser();
+    const uid = user?.id;
+    // Salida INMEDIATA a la pantalla de login: no esperar a la limpieza de red,
+    // push ni cachés (eso dejaba visible la pantalla anterior / la welcome).
+    loadedUserId.current = null;
+    setUser(null);
+    setProfile(null);
+    setChats([]);
+    setContacts([]);
+    setCalls([]);
     // Clean up heartbeat, discovery poll, channels, presence channel, event listeners
     if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     if (discoveryPollRef.current) { clearInterval(discoveryPollRef.current); discoveryPollRef.current = null; }
@@ -1183,25 +1192,19 @@ const refreshChats = async () => {
     presenceChannelConnectedRef.current = false;
     cleanupListenersRef.current?.();
     cleanupListenersRef.current = null;
-    if (user) {
-      flushPresence(user.id);
+    if (uid) {
+      flushPresence(uid);
     }
     await unregisterPushNotifications();
     await unregisterCapacitorPush();
     await authSignOut();
-    if (user) {
-      clearUserCache(user.id);
+    if (uid) {
+      clearUserCache(uid);
       await Promise.all([
-        chatRepo.clearChats(user.id),
-        contactRepo.clearContacts(user.id),
+        chatRepo.clearChats(uid),
+        contactRepo.clearContacts(uid),
       ]);
     }
-    loadedUserId.current = null;
-    setUser(null);
-    setProfile(null);
-    setChats([]);
-    setContacts([]);
-    setCalls([]);
   };
 
   const contextValue = useMemo(() => ({

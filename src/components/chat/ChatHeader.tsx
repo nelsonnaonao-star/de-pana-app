@@ -82,7 +82,7 @@ export default function ChatHeader({
             className="flex items-center gap-2 cursor-pointer min-w-0"
             onClick={() => { if (!isGroup && onOpenProfile) onOpenProfile(); }}
           >
-            <div className="relative">
+            <div className="relative shrink-0">
               {chat.avatar ? (
                 <CachedImage src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border border-white/20" />
               ) : isGroup ? (

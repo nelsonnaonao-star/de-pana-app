@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, FormEvent, ChangeEvent, MouseEvent } from "react";
+import toast from "react-hot-toast";
 import { getAllStories, createStory, deleteStory, registerStoryView, getStoryViewers, toggleStoryReaction } from "../services/contentService";
 import { updateProfile } from "../services/auth";
 import { uploadChatMedia } from "../services/storage";
-import { ensureVideoMime, isVideoFileLike } from "../services/mime";
+import { ensureVideoMime, isVideoFileLike, mimeTypeFor } from "../services/mime";
 import { pinStoryVideo, preloadStoryVideos, releaseStoryPreloads } from "../services/storyPreload";
 import { storyRepo } from "../services/database/repositories/StoryRepository";
 
@@ -55,6 +56,50 @@ export interface StoryReplyPayload {
   storyType: "text" | "image" | "video";
   mediaUrl?: string;
   storyText?: string;
+}
+
+// Las fotos de estados se suben a Storage (bucket público chat-images) para no
+// guardar data URLs gigantes en la BD: un data URL de una foto de cámara supera
+// el límite de 10 MB del API y fallaba en equipos con fotos de alta resolución.
+export async function storyImageToBlob(url: string): Promise<Blob> {
+  if (url.startsWith("data:")) {
+    // Decodificación directa del base64: más fiable en el WebView que fetch()
+    // sobre data URLs (algunas versiones lo bloquean o se quedan colgadas).
+    const comma = url.indexOf(",");
+    const meta = url.slice(0, comma);
+    const mime = /data:([^;]+)/.exec(meta)?.[1] || "image/jpeg";
+    const binary = atob(url.slice(comma + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("No se pudo leer la imagen del estado");
+  return await res.blob();
+}
+
+// Sube la foto del estado comprimida (≤800px) y, si el equipo no puede
+// decodificarla para recomprimirla (fotos de cámara muy grandes, formatos que
+// el WebView no soporta o timeout de compresión), reintenta la subida del
+// archivo original. Así publicar nunca queda bloqueado por la compresión.
+async function uploadStoryImage(blob: Blob, name?: string): Promise<string> {
+  try {
+    return await uploadChatMedia(blob, "uploads/stories");
+  } catch (err) {
+    console.warn("[StatesPanel] compresión/upload de foto falló, reintentando sin comprimir:", err);
+    const mime = (blob.type || "").startsWith("image/")
+      ? blob.type
+      : (mimeTypeFor(name || "") || "image/jpeg");
+    const raw = blob.type === mime ? blob : new Blob([blob], { type: mime });
+    return await uploadChatMedia(raw, "stories");
+  }
+}
+
+function publishErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? "");
+  const clean = raw.trim();
+  if (!clean) return "Intenta de nuevo";
+  return clean.length > 120 ? clean.slice(0, 117) + "…" : clean;
 }
 
 export const GRADIENTS = [
@@ -399,19 +444,44 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
     setSubView("list");
   };
 
-  const handlePublishImage = () => {
-    const newStory: Story = {
-      id: "my_img_" + Date.now(),
-      type: "image",
-      content: selectedImageUrl,
-      caption: newImageCaption,
-      time: "Ahora mismo"
-    };
-
-    setMyStories(prev => [newStory, ...prev]);
-    saveStoryToApi(newStory);
-    setNewImageCaption("");
-    setSubView("list");
+  const handlePublishImage = async () => {
+    if (!selectedImageUrl || !userId || publishingRef.current) return;
+    publishingRef.current = true;
+    setIsPublishing(true);
+    setPublishStatus("publishing");
+    try {
+      const blob = uploadedMedia?.file || await storyImageToBlob(selectedImageUrl);
+      const content = await uploadStoryImage(blob, uploadedMedia?.name);
+      const newStory: Story = {
+        id: "my_img_" + Date.now(),
+        type: "image",
+        content,
+        caption: newImageCaption,
+        time: "Ahora mismo"
+      };
+      await createStory({
+        user_id: userId,
+        type: newStory.type,
+        content: newStory.content,
+        caption: newStory.caption,
+        audience: audienceToJson(audience),
+      });
+      setMyStories(prev => [newStory, ...prev]);
+      setNewImageCaption("");
+      setSelectedImageUrl("");
+      setUploadedMedia(null);
+      setShowPublishDecisionModal(false);
+      setPublishStatus("success");
+      setSubView("list");
+      window.setTimeout(() => setPublishStatus("idle"), 1200);
+    } catch (err) {
+      console.error("[StatesPanel] publish legacy image failed:", err);
+      toast.error(`No se pudo publicar: ${publishErrorMessage(err)}`);
+      setPublishStatus("error");
+    } finally {
+      publishingRef.current = false;
+      setIsPublishing(false);
+    }
   };
 
   const handleFileUploaded = (e: ChangeEvent<HTMLInputElement>) => {
@@ -447,7 +517,8 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
         setUploadedMedia({
           url: event.target.result as string,
           type: fileType,
-          name: file.name
+          name: file.name,
+          file,
         });
         setShowPublishDecisionModal(true);
       }
@@ -499,6 +570,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
         }, 1200);
       } catch (err) {
         console.error("[StatesPanel] publish video failed:", err);
+        toast.error(`No se pudo publicar: ${publishErrorMessage(err)}`);
         setPublishStatus("error");
       } finally {
         publishingRef.current = false;
@@ -507,21 +579,49 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
       return;
     }
 
-    const newStory: Story = {
-      id: "my_upload_" + Date.now(),
-      type: uploadedMedia.type,
-      content: uploadedMedia.url,
-      caption: publishComment.trim(),
-      time: "Ahora mismo"
-    };
-
-    setMyStories(prev => [newStory, ...prev]);
-    saveStoryToApi(newStory);
-    setUploadedMedia(null);
-    setShowPublishDecisionModal(false);
-    setPublishStep("choice");
-    setPublishComment("");
-    setSubView("list");
+    if (!userId) {
+      setPublishStatus("error");
+      return;
+    }
+    publishingRef.current = true;
+    setIsPublishing(true);
+    setPublishStatus("publishing");
+    try {
+      const blob = uploadedMedia.file || await storyImageToBlob(uploadedMedia.url);
+      const content = await uploadStoryImage(blob, uploadedMedia.name);
+      const newStory: Story = {
+        id: "my_upload_" + Date.now(),
+        type: uploadedMedia.type,
+        content,
+        caption: publishComment.trim(),
+        time: "Ahora mismo"
+      };
+      await createStory({
+        user_id: userId,
+        type: newStory.type,
+        content: newStory.content,
+        caption: newStory.caption,
+        audience: audienceToJson(audience),
+      });
+      setMyStories(prev => [newStory, ...prev]);
+      setPublishStatus("success");
+      window.setTimeout(() => {
+        setUploadedMedia(null);
+        setShowPublishDecisionModal(false);
+        setPublishStep("choice");
+        setPublishComment("");
+        setSelectedImageUrl("");
+        setSubView("list");
+        setPublishStatus("idle");
+      }, 1200);
+    } catch (err) {
+      console.error("[StatesPanel] publish image failed:", err);
+      toast.error(`No se pudo publicar: ${publishErrorMessage(err)}`);
+      setPublishStatus("error");
+    } finally {
+      publishingRef.current = false;
+      setIsPublishing(false);
+    }
   };
 
   const handleGoToProEditor = () => {
@@ -565,6 +665,7 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
         }, 1200);
       } catch (err) {
         console.error("[StatesPanel] publish pro video failed:", err);
+        toast.error(`No se pudo publicar: ${publishErrorMessage(err)}`);
         setPublishStatus("error");
       } finally {
         publishingRef.current = false;
@@ -573,19 +674,46 @@ export function useStatesManagement({ userId, profileName, profileAvatar, defaul
       return;
     }
 
-    const newStory: Story = {
-      id: "my_pro_" + Date.now(),
-      type: mediaType,
-      content: editedUrl,
-      caption: caption || undefined,
-      time: "Ahora mismo"
-    };
-
-    setMyStories(prev => [newStory, ...prev]);
-    saveStoryToApi(newStory);
-    setIsEditingProState(false);
-    setUploadedMedia(null);
-    setSubView("list");
+    if (!userId) {
+      setPublishStatus("error");
+      return;
+    }
+    if (publishingRef.current) return;
+    publishingRef.current = true;
+    setIsPublishing(true);
+    setPublishStatus("publishing");
+    try {
+      const blob = await storyImageToBlob(editedUrl);
+      const content = await uploadStoryImage(blob, uploadedMedia?.name || editedUrl);
+      const newStory: Story = {
+        id: "my_pro_" + Date.now(),
+        type: mediaType,
+        content,
+        caption: caption || undefined,
+        time: "Ahora mismo"
+      };
+      await createStory({
+        user_id: userId,
+        type: newStory.type,
+        content: newStory.content,
+        caption: newStory.caption,
+        audience: audienceToJson(audience),
+      });
+      setMyStories(prev => [newStory, ...prev]);
+      setPublishStatus("success");
+      setIsEditingProState(false);
+      setUploadedMedia(null);
+      setSelectedImageUrl("");
+      setSubView("list");
+      window.setTimeout(() => setPublishStatus("idle"), 1200);
+    } catch (err) {
+      console.error("[StatesPanel] publish pro image failed:", err);
+      toast.error(`No se pudo publicar: ${publishErrorMessage(err)}`);
+      setPublishStatus("error");
+    } finally {
+      publishingRef.current = false;
+      setIsPublishing(false);
+    }
   };
 
   const handleDeleteMyStory = (storyId: string, e: MouseEvent) => {

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Mic, Loader2 } from "lucide-react";
+import { Mic, Loader2, RotateCw } from "lucide-react";
 import BrandOrb from "../BrandOrb";
 
 const PLAY_EVENT = "audio-message-play";
@@ -41,11 +41,24 @@ export default function AudioMessagePlayer({
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
+    // Nueva fuente (o reintento manual): el estado de error/loader debe partir
+    // de cero. Antes quedaba pegado y un fallo transitorio dejaba el audio
+    // muerto para siempre.
+    setHasError(false);
+    setIsLoading(true);
+    setCurrentTime(0);
+    setIsPlaying(false);
+
+    if (!audioUrl) {
+      setIsLoading(false);
+      return;
+    }
+
     const audio = new Audio();
     audio.preload = "metadata";
-    audio.crossOrigin = "anonymous";
     audio.src = audioUrl;
     audioRef.current = audio;
 
@@ -93,7 +106,7 @@ export default function AudioMessagePlayer({
       audio.src = "";
       audioRef.current = null;
     };
-  }, [audioUrl]);
+  }, [audioUrl, retryNonce]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -120,7 +133,17 @@ export default function AudioMessagePlayer({
       audio.pause();
       setIsPlaying(false);
     } else {
-      audio.play().then(() => setIsPlaying(true)).catch((err) => console.warn("[AudioPlayer] play() rejected:", err));
+      audio
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch((err) => {
+          console.warn("[AudioPlayer] play() rejected:", err);
+          // Formato/códec no soportado o fuente corrupta: ofrecer reintento en
+          // vez de dejar el botón muerto sin explicación.
+          if (err instanceof DOMException && err.name === "NotSupportedError") {
+            setHasError(true);
+          }
+        });
     }
   }, [isPlaying, msgId, hasError]);
 
@@ -174,6 +197,18 @@ export default function AudioMessagePlayer({
       <div className="flex items-center gap-2 p-1 min-w-[180px]">
         <Mic className={`w-4 h-4 shrink-0 opacity-40 ${isGlass ? "text-gray-400" : ""}`} />
         <span className={`text-[10px] opacity-50 ${isGlass ? "text-gray-500" : ""}`}>Audio no disponible</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setRetryNonce((n) => n + 1);
+          }}
+          className="ml-auto p-1 rounded-full border-0 bg-transparent cursor-pointer opacity-60 hover:opacity-100 transition-opacity"
+          style={{ color: textColor }}
+          title="Reintentar"
+          aria-label="Reintentar audio"
+        >
+          <RotateCw className="w-3.5 h-3.5" />
+        </button>
       </div>
     );
   }

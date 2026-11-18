@@ -1,8 +1,13 @@
-import { useRef, useEffect, useState, memo } from "react";
+import { useRef, useEffect, useState, useCallback, memo } from "react";
 import { Message } from "../../types";
 import MessageBubble from "./MessageBubble";
 import { getCachedMediaSync } from "../../services/mediaCache";
-import { isSignableStorageUrl, resolveMediaUrl, getResolvedMediaUrlSync } from "../../services/mediaResolution";
+import {
+  isSignableStorageUrl,
+  resolveMediaUrl,
+  getResolvedMediaUrlSync,
+  clearResolvedMediaUrl,
+} from "../../services/mediaResolution";
 
 interface MessageBubbleWithCacheProps {
   msg: Message;
@@ -38,7 +43,7 @@ interface MediaResolutionResult {
 //   "pending" mientras llega y "failed" si la firma falla (nunca fallback a
 //   la URL sin firmar). El estado se expone vía msg.mediaResolved sin sentinels
 //   de URL: la identidad del recurso permanece separada de su estado.
-function useMediaResolution(url?: string, messageId?: string): MediaResolutionResult {
+function useMediaResolution(url?: string, messageId?: string, retryNonce = 0): MediaResolutionResult {
   const [state, setState] = useState<MediaResolutionResult>(() => {
     if (!url) return { kind: "passthrough" };
     const cached = getResolvedMediaUrlSync(url);
@@ -71,7 +76,7 @@ function useMediaResolution(url?: string, messageId?: string): MediaResolutionRe
         if (!cancelled) setState((prev) => (prev.kind === "failed" ? prev : { kind: "failed" }));
       });
     return () => { cancelled = true; };
-  }, [url, messageId]);
+  }, [url, messageId, retryNonce]);
 
   return state;
 }
@@ -115,9 +120,18 @@ function MessageBubbleWithCache(props: MessageBubbleWithCacheProps) {
   // Con blob local ya disponible no hace falta firmar: se reproduce local.
   const needsSigned =
     isChatMedia && !(isMediaCacheable && !!syncMediaUrl && syncMediaUrl !== rawMediaUrl);
+  // Reintento manual de media: invalida la firma cacheada (pudo expirar o fallar
+  // por red) y vuelve a resolver. Sólo se ofrece cuando el estado es "failed".
+  const [retryNonce, setRetryNonce] = useState(0);
+  const retryMedia = useCallback(() => {
+    if (rawMediaUrl) clearResolvedMediaUrl(rawMediaUrl);
+    setRetryNonce((n) => n + 1);
+  }, [rawMediaUrl]);
+
   const resolution = useMediaResolution(
     needsSigned ? rawMediaUrl! : undefined,
     needsSigned ? msg.id : undefined,
+    retryNonce,
   );
 
   let mediaUrl: string | undefined;
@@ -143,7 +157,13 @@ function MessageBubbleWithCache(props: MessageBubbleWithCacheProps) {
       ? msg
       : { ...msg, mediaUrl, posterUrl, mediaResolved };
 
-  return <MessageBubble {...props} msg={renderMsg} />;
+  return (
+    <MessageBubble
+      {...props}
+      msg={renderMsg}
+      onRetryMedia={resolution.kind === "failed" ? retryMedia : undefined}
+    />
+  );
 }
 
 function arePropsEqual(prev: MessageBubbleWithCacheProps, next: MessageBubbleWithCacheProps): boolean {
