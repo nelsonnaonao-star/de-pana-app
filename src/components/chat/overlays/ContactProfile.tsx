@@ -107,7 +107,7 @@ export default function ContactProfile({ isOpen, profile, onClose, currentUserId
               <div className="w-20 h-20 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 shadow-lg border-2 border-white/30 flex items-center justify-center mb-3 relative group">
                 {profile.avatar ? (
                   <>
-                    <CachedImage src={profile.avatar} alt={profile.name} className="w-full h-full object-cover" />
+                    <CachedImage src={profile.avatar} alt={profile.name} avatar className="w-full h-full object-cover" />
                     <button
                       onClick={() => setShowPhoto(true)}
                       title="Ver foto en pantalla completa"

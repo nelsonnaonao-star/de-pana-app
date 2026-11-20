@@ -1239,6 +1239,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                 <CachedImage
                 src={chat.avatar}
                 alt={chat.name || "contacto"}
+                avatar
                 className="w-9 h-9 rounded-full object-cover bg-slate-100 border border-teal-100"
               />
               <div className="flex-1 min-w-0">

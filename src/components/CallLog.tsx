@@ -150,7 +150,7 @@ export default function CallLog({ userId, onBack, onStartChat }: CallLogProps) {
                 >
                   <div className="w-10 h-10 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-teal-600 shrink-0 flex items-center justify-center text-white text-sm font-bold shadow-sm">
                     {call.caller_avatar ? (
-                      <CachedImage src={call.caller_avatar} alt="" className="w-full h-full object-cover" loading="lazy" />
+                      <CachedImage src={call.caller_avatar} alt={call.caller_name} avatar className="w-full h-full object-cover" loading="lazy" />
                     ) : (
                       call.caller_name.charAt(0).toUpperCase()
                     )}

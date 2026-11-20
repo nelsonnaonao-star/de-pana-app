@@ -114,7 +114,7 @@ export default function ShareTargetModal({
                   className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 active:bg-slate-100 transition-colors text-left"
                 >
                   {chat.avatar ? (
-                    <CachedImage src={chat.avatar} alt={chat.name} className="w-10 h-10 rounded-full object-cover" />
+                    <CachedImage src={chat.avatar} alt={chat.name} avatar className="w-10 h-10 rounded-full object-cover" />
                   ) : (
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                       {chat.isGroup ? (
@@ -143,7 +143,7 @@ export default function ShareTargetModal({
                   className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-50 active:bg-slate-100 transition-colors text-left"
                 >
                   {contact.avatar ? (
-                    <CachedImage src={contact.avatar} alt={contact.name} className="w-10 h-10 rounded-full object-cover" />
+                    <CachedImage src={contact.avatar} alt={contact.name} avatar className="w-10 h-10 rounded-full object-cover" />
                   ) : (
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                       <span className="text-white font-bold text-[11px]">{initials(contact.name)}</span>

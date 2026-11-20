@@ -286,6 +286,7 @@ export default function ChannelsPanel() {
                     <CachedImage
                       src={chan.avatar}
                       alt={chan.name}
+                      avatar
                       className="w-10 h-10 rounded-2xl object-cover border border-slate-100 shrink-0"
                     />
 
@@ -338,6 +339,7 @@ export default function ChannelsPanel() {
                 <CachedImage
                   src={activeChannel.avatar}
                   alt={activeChannel.name}
+                  avatar
                   className="w-8 h-8 rounded-xl object-cover border border-slate-100"
                 />
 
@@ -549,7 +551,7 @@ export default function ChannelsPanel() {
                         selectedAvatarIdx === idx ? "border-teal-400" : "border-transparent opacity-75"
                       }`}
                     >
-                      <CachedImage src={avatarUrl} alt="Option" className="w-full h-full object-cover" />
+                      <CachedImage src={avatarUrl} alt="Option" avatar className="w-full h-full object-cover" />
                     </button>
                   ))}
                 </div>

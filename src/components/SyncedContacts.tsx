@@ -379,7 +379,7 @@ export default function SyncedContacts({ currentUserId, onBack, onStartChat, onC
               <div style={{ borderRadius: '62% 38% 55% 45% / 45% 55% 40% 60%', background: 'conic-gradient(from 0deg, #5EB7FF, #C65EFF, #4ADE80, #5EB7FF)', padding: 2 }}>
                 <div className="rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden" style={{ width: 40, height: 40 }}>
                   {profile.avatar_url ? (
-                    <CachedImage src={profile.avatar_url} alt={profile.contactName || profile.name} className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover" loading="lazy" />
+                    <CachedImage src={profile.avatar_url} alt={profile.contactName || profile.name} avatar className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover" loading="lazy" />
                   ) : (
                     <div className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                       <span className="text-white font-black text-sm">

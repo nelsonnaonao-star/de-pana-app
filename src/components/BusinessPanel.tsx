@@ -532,6 +532,7 @@ export default function BusinessPanel({
                         <CachedImage
                           src={flyer.ownerAvatar}
                           alt={flyer.ownerName}
+                          avatar
                           className="w-7 h-7 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border border-slate-100"
                         />
                         <div>
@@ -1319,6 +1320,7 @@ export default function BusinessPanel({
               <CachedImage
                 src={viewingFlyer.ownerAvatar}
                 alt={viewingFlyer.ownerName}
+                avatar
                 className="w-10 h-10 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border-2 border-teal-400"
               />
               <div className="flex-1">

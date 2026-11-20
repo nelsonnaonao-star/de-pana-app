@@ -91,7 +91,7 @@ export default function SimulatorCreateGroup({
                 {isSelected && <Check className="w-4 h-4 text-white" />}
               </div>
               {contact.avatar ? (
-                <CachedImage src={contact.avatar} alt={contact.name} className="w-11 h-11 rounded-full object-cover" loading="lazy" />
+                    <CachedImage src={contact.avatar} alt={contact.name} avatar className="w-11 h-11 rounded-full object-cover" loading="lazy" />
               ) : (
                 <div className="w-11 h-11 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                   <span className="text-white font-bold text-sm">

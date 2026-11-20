@@ -344,7 +344,7 @@ function ContactRow({
     >
       <div className={`w-11 h-11 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden bg-gradient-to-br ${avatarColors[colorIndex]} shrink-0 shadow-sm flex items-center justify-center`}>
         {contact.avatar ? (
-          <CachedImage src={contact.avatar} alt="" className="w-full h-full object-cover" loading="lazy" />
+          <CachedImage src={contact.avatar} alt={contact.name} avatar className="w-full h-full object-cover" loading="lazy" />
         ) : (
           <span className="text-white font-black text-sm">{getInitials(contact.name)}</span>
         )}

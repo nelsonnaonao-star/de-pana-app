@@ -84,7 +84,7 @@ export default function ChatHeader({
           >
             <div className="relative shrink-0">
               {chat.avatar ? (
-                <CachedImage src={chat.avatar} alt={chat.name} className="w-11 h-11 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border border-white/20" />
+                <CachedImage src={chat.avatar} alt={chat.name} avatar className="w-11 h-11 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border border-white/20" />
               ) : isGroup ? (
                 <div className="w-11 h-11 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center border border-white/20">
                   <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -166,7 +166,7 @@ export default function ChatHeader({
                   <div className="bg-gradient-to-r from-[#0a4d52] to-[#05292c] px-4 pt-3 pb-3 flex items-center gap-3">
                     <div className="relative shrink-0">
                       {chat.avatar ? (
-                        <CachedImage src={chat.avatar} alt={chat.name} className="w-10 h-10 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border border-white/25" />
+                        <CachedImage src={chat.avatar} alt={chat.name} avatar className="w-10 h-10 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover border border-white/25" />
                       ) : isGroup ? (
                         <div className="w-10 h-10 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center border border-white/25">
                           <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

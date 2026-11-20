@@ -87,7 +87,7 @@ export default function StoryAudiencePicker({ audience, onChange, contacts }: St
                   >
                     <div className="w-5 h-5 rounded-full bg-slate-200 overflow-hidden shrink-0">
                       {c.avatar ? (
-                        <CachedImage src={c.avatar} alt="" className="w-full h-full object-cover" />
+                        <CachedImage src={c.avatar} alt={c.name} avatar className="w-full h-full object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-[7px] font-bold text-slate-500">
                           {(c.name || "?").slice(0, 1).toUpperCase()}

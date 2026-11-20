@@ -101,7 +101,7 @@ export default function GroupInfoPanel({
             <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
             <div className="w-16 h-16 rounded-full overflow-hidden bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
               {groupAvatar ? (
-                <CachedImage src={groupAvatar} alt={localGroupName} className="w-full h-full object-cover" />
+                        <CachedImage src={groupAvatar} alt={localGroupName} avatar className="w-full h-full object-cover" />
               ) : (
                 <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -230,7 +230,7 @@ export default function GroupInfoPanel({
                       className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-teal-50 rounded-lg cursor-pointer disabled:opacity-50"
                     >
                       {r.avatar ? (
-                        <CachedImage src={r.avatar} className="w-6 h-6 rounded-full object-cover" alt="" />
+                        <CachedImage src={r.avatar} className="w-6 h-6 rounded-full object-cover" alt={r.name} avatar />
                       ) : (
                         <div className="w-6 h-6 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                           <span className="text-white font-bold text-[8px]">
@@ -254,7 +254,7 @@ export default function GroupInfoPanel({
             {groupMembers.map(m => (
               <div key={m.profile_id} className="flex items-center gap-3 py-1.5 px-1 rounded-lg hover:bg-slate-50 group">
                 {m.avatar ? (
-                  <CachedImage src={m.avatar} className="w-8 h-8 rounded-full object-cover" alt="" loading="lazy" />
+                  <CachedImage src={m.avatar} className="w-8 h-8 rounded-full object-cover" alt={m.name} avatar loading="lazy" />
                 ) : (
                   <div className="w-8 h-8 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center shrink-0">
                     <span className="text-white font-bold text-[10px]">

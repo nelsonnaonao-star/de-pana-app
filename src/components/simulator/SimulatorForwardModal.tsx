@@ -61,7 +61,7 @@ export default function SimulatorForwardModal({
               className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-50 transition-colors text-left"
             >
               {chat.avatar ? (
-                <CachedImage src={chat.avatar} alt={chat.name} className="w-9 h-9 rounded-full object-cover" />
+                    <CachedImage src={chat.avatar} alt={chat.name} avatar className="w-9 h-9 rounded-full object-cover" />
               ) : (
                 <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center">
                   <span className="text-white font-bold text-[10px]">

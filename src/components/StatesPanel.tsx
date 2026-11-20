@@ -120,6 +120,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen, onRegisterBackHa
                       <CachedImage
                         src={myUserStateRepresentation.userAvatar}
                         alt="Mi momento"
+                        avatar
                         className="w-full h-full object-cover"
                       />
                     ) : (
@@ -144,6 +145,7 @@ export default function StatesPanel({ onStartChat, onHasUnseen, onRegisterBackHa
                     <CachedImage
                       src={userState.userAvatar}
                       alt={userState.userName}
+                      avatar
                       className={`w-[68px] h-[68px] rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover ${
                         userState.hasUnseen
                           ? "ring-2 ring-emerald-500 ring-offset-1 ring-offset-slate-50"

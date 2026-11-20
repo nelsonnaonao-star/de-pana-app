@@ -4203,6 +4203,7 @@ try {
                       <CachedImage
                         src={c.avatar}
                         alt={c.name}
+                        avatar
                         className="w-10 h-10 rounded-full object-cover bg-slate-100"
                       />
                       <span className="flex-1 text-[13px] font-semibold text-slate-700 truncate">{c.name}</span>
@@ -4263,7 +4264,7 @@ try {
             <div className="px-5 pt-5 pb-3 text-center">
               <div className="w-14 h-14 rounded-full overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 mx-auto flex items-center justify-center shadow-sm">
                 {contactActions.avatar ? (
-                  <CachedImage src={contactActions.avatar} alt="" className="w-full h-full object-cover" />
+                  <CachedImage src={contactActions.avatar} alt={contactActions.name} avatar className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-white font-black text-sm">{contactActions.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)}</span>
                 )}
@@ -4711,7 +4712,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                               <div style={{ borderRadius: '62% 38% 55% 45% / 45% 55% 40% 60%', background: 'conic-gradient(from 0deg, #5EB7FF, #C65EFF, #4ADE80, #5EB7FF)', padding: 2 }}>
                                 <div className={`rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden ${chat.isGroup ? "border-2 border-purple-500" : ""}`} style={{ width: 56, height: 56 }}>
                                   {displayAvatar ? (
-                                    <CachedImage src={displayAvatar} alt={chat.name} className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover" loading="lazy" />
+                                    <CachedImage src={displayAvatar} alt={chat.name} avatar className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] object-cover" loading="lazy" />
                                   ) : chat.isGroup ? (
                                     <div className="w-full h-full rounded-[62%_38%_55%_45%/45%_55%_40%_60%] overflow-hidden bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
                                       <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -5011,6 +5012,7 @@ const shouldAnimate = !animatedChatIdsRef.current.has(chat.id);
                           <CachedImage
                             src={registeredUser.avatar}
                             alt="Profile"
+                            avatar
                             onClick={() => !isUploadingAvatar && setShowMyAvatarLightbox(true)}
                             className={`w-24 h-24 rounded-[62%_38%_55%_45%/45%_55%_40%_60%] mx-auto object-cover border-4 border-white/25 shadow-xl ring-4 ring-white/10 transition-opacity cursor-pointer ${isUploadingAvatar ? "opacity-50" : ""}`}
                           />
@@ -5538,7 +5540,7 @@ refreshProfile().catch(err => logger.error("[PhoneSimulator] refreshProfile fail
                                       <div key={u.id} className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-lg px-2 py-1.5">
                                         <div className="flex items-center gap-2 min-w-0">
                                           {u.avatar ? (
-                                            <CachedImage src={u.avatar} className="w-6 h-6 rounded-full object-cover" alt={u.name} />
+                                            <CachedImage src={u.avatar} className="w-6 h-6 rounded-full object-cover" alt={u.name} avatar />
                                           ) : (
                                             <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-600">
                                               {u.name.charAt(0).toUpperCase()}

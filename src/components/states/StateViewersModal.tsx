@@ -37,6 +37,7 @@ export default function StateViewersModal({ viewersData, onClose }: StateViewers
                   <CachedImage
                     src={v.avatar || ""}
                     alt={v.name}
+                    avatar
                     className="w-7 h-7 rounded-full object-cover border border-slate-700"
                   />
                   <div className="flex-1 min-w-0">

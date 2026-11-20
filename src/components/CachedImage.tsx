@@ -16,6 +16,11 @@ interface CachedImageProps {
   onLoad?: (event: React.SyntheticEvent<HTMLImageElement>) => void;
   onError?: () => void;
   onClick?: () => void;
+  // Modo avatar: si la descarga falla, se queda en el fallback (iniciales)
+  // y NUNCA monta la imagen remota rota. Ese montaje era el que producía el
+  // parpadeo en contactos sin foto o con la URL vieja/borrada. Para imágenes
+  // y videos se conserva el comportamiento anterior.
+  avatar?: boolean;
 }
 
 // Memory cache (session-level) keyed by `src` — survives remounts so avatars
@@ -254,6 +259,7 @@ export default function CachedImage({
   onLoad,
   onError,
   onClick,
+  avatar = false,
 }: CachedImageProps) {
   const [displaySrc, setDisplaySrc] = useState<string | null>(() => {
     if (!src || brokenSet.has(src)) return null;
@@ -311,6 +317,14 @@ export default function CachedImage({
       if (result.kind === "ok") {
         setDisplaySrc(result.dataUrl);
         setHasError(false);
+      } else if (avatar) {
+        // Avatar roto: fallback estable (iniciales). No montar el <img>
+        // remoto evita el flash iniciales → imagen rota → iniciales.
+        brokenSet.add(src);
+        lastErrorAt.set(src, Date.now());
+        memoryCacheDelete(src);
+        setDisplaySrc(null);
+        setHasError(true);
       } else {
         memoryCacheDelete(src);
         setDisplaySrc(src);
@@ -394,6 +408,28 @@ export default function CachedImage({
           style={style}
         >
           <span className="text-white font-bold text-xs">{initials}</span>
+        </div>
+      );
+    }
+    if (avatar) {
+      return (
+        <div
+          className={`${className} overflow-hidden bg-gradient-to-br from-teal-400 to-emerald-600 flex items-center justify-center`}
+          style={style}
+        >
+          <svg
+            className="w-1/2 h-1/2 text-white/80"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 21v-1a8 8 0 0 1 16 0v1" />
+          </svg>
         </div>
       );
     }

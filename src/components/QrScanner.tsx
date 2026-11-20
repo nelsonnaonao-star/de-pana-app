@@ -314,7 +314,8 @@ export default function QrScanner({ userName, userPhone, onBack, onContactAdded 
                 {foundProfile.avatar_url ? (
                   <CachedImage
                     src={foundProfile.avatar_url}
-                    alt=""
+                    alt={foundProfile.name}
+                    avatar
                     className="w-full h-full object-cover"
                   />
                 ) : (
