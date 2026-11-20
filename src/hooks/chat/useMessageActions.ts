@@ -936,7 +936,15 @@ pendingSendIdsRef.current.add(tempId);
             const payload: any = { chat_id: chatId, sender_id: uid, type: msgType, text: file.name, client_id: clientIdFile, temp_id: tempId };
             if (msgType === "image") { payload.image_url = url; payload.text = "Imagen"; }
             else if (msgType === "video") { payload.video_url = url; payload.text = "Video"; }
-            else if (msgType === "audio") { payload.audio_url = url; payload.text = "Audio"; }
+            else if (msgType === "audio") {
+              payload.audio_url = url;
+              payload.text = "Audio";
+              // La tarjeta de música muestra el nombre y tamaño reales también
+              // al recargar el chat o en el otro dispositivo.
+              payload.document_name = file.name;
+              payload.document_size = file.size ? formatFileSize(file.size) : null;
+              payload.mime_type = file.type || null;
+            }
             else {
               payload.file_url = url;
               payload.document_name = file.name;

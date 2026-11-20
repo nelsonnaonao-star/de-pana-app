@@ -846,6 +846,9 @@ export default React.memo(function MessageBubble({
               isMe={isMe}
               isGlass={isGlass}
               duration={msg.duration}
+              variant="track"
+              fileName={msg.fileName}
+              fileSize={msg.fileSize}
             />
           </div>
         )}

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Mic, Loader2, RotateCw } from "lucide-react";
+import { Mic, Loader2, RotateCw, Music, Play, Pause } from "lucide-react";
 import BrandOrb from "../BrandOrb";
 
 const PLAY_EVENT = "audio-message-play";
@@ -24,6 +24,11 @@ interface AudioMessagePlayerProps {
   isGlass?: boolean;
   duration?: string;
   orbSize?: number;
+  // "voice" = nota grabada (orbe WEPA). "track" = archivo de audio/música
+  // enviado desde el adjunto, con tarjeta de pista y barra de progreso.
+  variant?: "voice" | "track";
+  fileName?: string;
+  fileSize?: string;
 }
 
 export default function AudioMessagePlayer({
@@ -33,6 +38,9 @@ export default function AudioMessagePlayer({
   isGlass = false,
   duration,
   orbSize = DEFAULT_ORB_SIZE,
+  variant = "voice",
+  fileName,
+  fileSize,
 }: AudioMessagePlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -192,10 +200,24 @@ export default function AudioMessagePlayer({
   const textColor = isDarkBubble ? "rgba(255,255,255,0.9)" : "#0a4d52";
   const speedColor = isDarkBubble ? "rgba(255,255,255,0.7)" : "#0a4d52";
 
+  const onSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const audio = audioRef.current;
+    if (!audio || durationSec <= 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    audio.currentTime = frac * durationSec;
+    setCurrentTime(audio.currentTime);
+  };
+
   if (hasError) {
     return (
       <div className="flex items-center gap-2 p-1 min-w-[180px]">
-        <Mic className={`w-4 h-4 shrink-0 opacity-40 ${isGlass ? "text-gray-400" : ""}`} />
+        {variant === "track" ? (
+          <Music className={`w-4 h-4 shrink-0 opacity-40 ${isGlass ? "text-gray-400" : ""}`} />
+        ) : (
+          <Mic className={`w-4 h-4 shrink-0 opacity-40 ${isGlass ? "text-gray-400" : ""}`} />
+        )}
         <span className={`text-[10px] opacity-50 ${isGlass ? "text-gray-500" : ""}`}>Audio no disponible</span>
         <button
           onClick={(e) => {
@@ -209,6 +231,82 @@ export default function AudioMessagePlayer({
         >
           <RotateCw className="w-3.5 h-3.5" />
         </button>
+      </div>
+    );
+  }
+
+  if (variant === "track") {
+    const ext = fileName && fileName.includes(".") ? fileName.split(".").pop()?.toUpperCase() : "";
+    const secondaryColor = isDarkBubble ? "rgba(255,255,255,0.65)" : "rgba(10,77,82,0.6)";
+    return (
+      <div
+        className={`w-[248px] max-w-full rounded-xl p-2 ${isMe ? "bg-white/10" : isGlass ? "bg-black/5" : "bg-black/5 dark:bg-white/5"}`}
+      >
+        <div className="flex items-center gap-2.5">
+          <div
+            className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isMe ? "bg-white/15 text-white" : "bg-teal-500/15 text-[#0a4d52]"}`}
+          >
+            <Music className="w-4 h-4" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-semibold truncate" style={{ color: textColor }}>
+              {fileName || "Audio"}
+            </p>
+            <span className="text-[9px] font-mono truncate block" style={{ color: secondaryColor }}>
+              {ext ? `${ext} • ` : ""}{fileSize ? `${fileSize} • ` : ""}{formatTime(displayDuration)}
+            </span>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlay();
+            }}
+            className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 border-0 cursor-pointer transition-transform active:scale-95 ${isMe ? "bg-white text-[#0a4d52]" : "bg-[#0a4d52] text-white"}`}
+            aria-label={isPlaying ? "Pausar" : "Reproducir"}
+          >
+            {isLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="w-4 h-4" />
+            ) : (
+              <Play className="w-4 h-4 ml-0.5" />
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 mt-2">
+          <span className="text-[9px] font-mono tabular-nums shrink-0" style={{ color: secondaryColor }}>
+            {formatTime(currentTime)}
+          </span>
+          <div
+            onClick={onSeek}
+            className="relative flex-1 h-1.5 rounded-full cursor-pointer"
+            style={{ background: ringTrackColor }}
+            role="slider"
+            aria-label="Progreso del audio"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progressFrac * 100)}
+          >
+            <div
+              className="absolute inset-y-0 left-0 rounded-full"
+              style={{ width: `${progressFrac * 100}%`, background: ringProgressColor }}
+            />
+          </div>
+          <span className="text-[9px] font-mono tabular-nums shrink-0" style={{ color: secondaryColor }}>
+            {formatTime(displayDuration)}
+          </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleSpeed();
+            }}
+            className="p-0 border-0 bg-transparent cursor-pointer shrink-0 text-[9px] font-bold"
+            style={{ color: speedColor }}
+          >
+            {speed}x
+          </button>
+        </div>
       </div>
     );
   }

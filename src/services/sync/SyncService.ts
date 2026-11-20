@@ -737,6 +737,15 @@ class SyncService {
           longitude: (msg.longitude as number) ?? undefined,
           location_name: (msg.locationName as string) || (msg.location_name as string) || undefined,
           audio_duration: (msg.duration as string) || undefined,
+          // Los audios enviados como archivo (música) conservan nombre y tamaño
+          // para que la tarjeta se vea igual tras sincronizar.
+          ...(type === "audio"
+            ? {
+                document_name: (msg.fileName as string) || (msg.file_name as string) || undefined,
+                document_size: (msg.fileSize as string) || (msg.file_size as string) || undefined,
+                mime_type: (msg.mimeType as string) || (msg.mime_type as string) || undefined,
+              }
+            : {}),
           reply_to_id: replyToId,
           reply_to_text: replyToText,
           reply_to_sender: replyToSender,
