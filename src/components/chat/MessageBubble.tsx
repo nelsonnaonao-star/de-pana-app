@@ -27,8 +27,12 @@ const VIDEO_MAX_H = 420;
 function getStoryReplyMediaKind(replyToText?: string): "image" | "video" | "text" | null {
   if (!replyToText) return null;
   if (/^data:image\//i.test(replyToText) || /\.(jpe?g|png|gif|webp|bmp|avif|heic)(\?|#|$)/i.test(replyToText)) return "image";
-  if (/^data:video\//i.test(replyToText) || /\.(mp4|webm|mov|m4v|ogv|ogg)(\?|#|$)/i.test(replyToText)) return "video";
-  if (/^https?:\/\//i.exec(replyToText)) return "image";
+  if (/^data:video\//i.test(replyToText) || /\.(mp4|webm|mov|m4v|ogv|ogg|3gp)(\?|#|$)/i.test(replyToText)) return "video";
+  // Un enlace de un estado de TEXTO no es una imagen: solo tratamos como media
+  // los objetos de Storage (las respuestas a media guardan esa URL pública).
+  if (/^https?:\/\//i.test(replyToText)) {
+    return /\/storage\/v1\/object\//i.test(replyToText) ? "image" : "text";
+  }
   return "text";
 }
 
@@ -553,6 +557,7 @@ export default React.memo(function MessageBubble({
   const isMediaType = msg.type === "sticker" || msg.type === "image" || msg.type === "video";
   const isStoryReply = !!msg.replyToId?.startsWith("story_");
   const storyReplyMediaKind = isStoryReply ? getStoryReplyMediaKind(msg.replyToText) : null;
+  const storyReplyLabel = isMe ? "Respondiste a su estado" : "Respondiendo a tu estado";
   if (isMediaType) {
     const isSticker = msg.type === "sticker";
     return (
@@ -797,27 +802,27 @@ export default React.memo(function MessageBubble({
             <span className={`text-[9px] font-bold uppercase tracking-wider ${isGlass ? "text-gray-500" : "text-slate-400"}`}>Reenviado</span>
           </div>
         )}
-        {isStoryReply && storyReplyMediaKind === "image" && (
-          <div className={`mb-1.5 overflow-hidden rounded-lg border ${isMe ? "border-teal-300" : "border-teal-500"} bg-black/5 dark:bg-white/5`}>
-            <CachedImage src={msg.replyToText || ""} className="w-14 h-16 object-cover" />
-            <p className={`text-[8px] font-bold uppercase tracking-wide px-1.5 py-1 ${isGlass ? "text-gray-600" : "text-slate-400"}`}>Respondiendo a tu estado</p>
-          </div>
-        )}
-        {isStoryReply && storyReplyMediaKind === "video" && (
-          <div className={`mb-1.5 overflow-hidden rounded-lg border w-14 h-20 ${isMe ? "border-teal-300" : "border-teal-500"} bg-black`}>
-            <video
-              src={msg.replyToText || ""}
-              muted
-              playsInline
-              preload="metadata"
-              className="w-full h-full object-cover"
-            />
-            <p className={`text-[8px] font-bold uppercase tracking-wide px-1.5 py-1 -mt-4 relative ${isGlass ? "text-gray-600" : "text-slate-300"}`}>Respondiendo a tu estado</p>
+        {isStoryReply && (storyReplyMediaKind === "image" || storyReplyMediaKind === "video") && (
+          <div className={`relative mb-1.5 w-32 aspect-[9/16] overflow-hidden rounded-lg border bg-black ${isMe ? "border-teal-300" : "border-teal-500"}`}>
+            {storyReplyMediaKind === "image" ? (
+              <CachedImage src={msg.replyToText || ""} className="absolute inset-0 w-full h-full object-cover" />
+            ) : (
+              <video
+                src={msg.replyToText || ""}
+                muted
+                playsInline
+                preload="metadata"
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            )}
+            <p className="absolute inset-x-0 bottom-0 px-1 pb-1 pt-4 text-[7px] font-bold uppercase tracking-normal leading-tight text-center text-white bg-gradient-to-t from-black/85 to-transparent">
+              {storyReplyLabel}
+            </p>
           </div>
         )}
         {isStoryReply && storyReplyMediaKind === "text" && (
           <div className={`mb-1.5 pl-2 border-l-2 ${isMe ? "border-teal-300" : "border-teal-500"} bg-black/5 dark:bg-white/5 rounded-r-md py-1 px-2`}>
-            <p className={`text-[8px] font-bold uppercase tracking-wide ${isGlass ? "text-gray-600" : "text-slate-400"}`}>Respondiendo a tu estado</p>
+            <p className={`text-[8px] font-bold uppercase tracking-wide ${isGlass ? "text-gray-600" : "text-slate-400"}`}>{storyReplyLabel}</p>
             <p className={`text-[10px] opacity-60 truncate ${isGlass ? "text-gray-600" : ""}`}>{msg.replyToText}</p>
           </div>
         )}

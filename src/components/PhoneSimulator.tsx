@@ -1098,15 +1098,18 @@ export default function PhoneSimulator({
 
       if (targetId) {
         const replyToId = `story_${storyReply.storyId}`;
-        // Nunca guardar la URL/contenido completo del estado en reply_to_text:
-        // las fotos antiguas eran data URLs de varios MB y el envío fallaba
-        // (413 en el API / fila demasiado grande). Un texto corto basta porque
-        // las respuestas a estados no muestran la cita.
+        // Para pintar la miniatura del estado respondido se guarda su URL
+        // pública en reply_to_text. Solo si es http(s) y corta: los estados
+        // antiguos guardaban data URLs de varios MB y el envío fallaba (413).
+        const storyMediaUrl = storyReply.mediaUrl || "";
+        const isShortRemoteUrl = /^https?:\/\//i.test(storyMediaUrl) && storyMediaUrl.length <= 500;
         const replyToText = storyReply.storyType === "text"
           ? (storyReply.storyText || "").slice(0, 280)
-          : storyReply.storyType === "video"
-            ? "🎥 Video"
-            : "📷 Foto";
+          : isShortRemoteUrl
+            ? storyMediaUrl
+            : storyReply.storyType === "video"
+              ? "🎥 Video"
+              : "📷 Foto";
         const replyToSender = name;
 
         const tempId = `temp_${Date.now()}_txt`;

@@ -8,7 +8,7 @@ import { Chat, getChats } from "../services/chats";
 import { Contact, getContacts, addContact } from "../services/contacts";
 import { Call, getCalls } from "../services/calls";
 import { registerPushNotifications, unregisterPushNotifications } from "../services/pushNotifications";
-import { setupCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
+import { setupCapacitorPush, refreshCapacitorPush, unregisterCapacitorPush } from "../services/pushCapacitor";
 import { chatRepo } from "../services/database/repositories/ChatRepository";
 import { contactRepo } from "../services/database/repositories/ContactRepository";
 import { db } from "../services/database/DatabaseService";
@@ -57,6 +57,8 @@ function clearUserCache(userId: string) {
 }
 
 const LAST_USER_KEY = "redon_last_user";
+const LAST_IDENTIFIER_KEY = "redon_last_identifier";
+const SESSION_EXPIRED_KEY = "redon_session_expired";
 
 function saveLastUser(userId: string) {
   try {
@@ -64,6 +66,27 @@ function saveLastUser(userId: string) {
     localStorage.setItem("redon_has_registered", "1");
   } catch (e) {
     logger.warn("[SupabaseContext] saveLastUser failed", { error: e, userId });
+  }
+}
+
+// Guarda el usuario/teléfono para precargar el login cuando la sesión haya
+// caducado de verdad. NUNCA guarda la contraseña.
+function saveLastIdentifier(username?: string | null, phone?: string | null) {
+  const identifier = (username || phone || "").trim();
+  if (!identifier) return;
+  try {
+    localStorage.setItem(LAST_IDENTIFIER_KEY, identifier);
+  } catch (e) {
+    logger.warn("[SupabaseContext] saveLastIdentifier failed", { error: e });
+  }
+}
+
+function setSessionExpiredFlag(expired: boolean) {
+  try {
+    if (expired) localStorage.setItem(SESSION_EXPIRED_KEY, "1");
+    else localStorage.removeItem(SESSION_EXPIRED_KEY);
+  } catch (e) {
+    logger.warn("[SupabaseContext] setSessionExpiredFlag failed", { error: e });
   }
 }
 
@@ -329,6 +352,57 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       setTimeout(() => resolve({ timeout: true }), 4000)
     );
 
+    const applySession = (session: any) => {
+      // Coming from a password-recovery email link: don't enter the app,
+      // show the "set new password" screen instead.
+      if (isPasswordRecoveryUrl()) {
+        logger.info("[SUPABASE] Recovery token detected — showing password reset screen");
+        setPasswordRecovery(true);
+        setUser(session.user);
+        setLoading(false);
+        return;
+      }
+      saveLastUser(session.user.id);
+      if (loadedUserId.current && loadedUserId.current !== session.user.id) {
+        // Account switched while the app was closed: drop the eager cached
+        // state so the correct user loads below.
+        logger.info("[SUPABASE] Session is a different user — reloading for", { userId: session.user.id.slice(0, 8) });
+        loadedUserId.current = null;
+        setProfile(null);
+        setChats([]);
+        setContacts([]);
+        setCalls([]);
+      }
+      setUser(session.user);
+      if (!loadedUserId.current) {
+        loadUserData(session.user.id);
+      } else {
+        setLoading(false);
+      }
+    };
+
+    // Sin sesión al arrancar (token vencido o Preferences lento): antes de caer
+    // al modo offline se intenta UN refresh. Si el refresh token sigue vivo, la
+    // sesión se recupera sola sin pedir login ni quedarse offline.
+    const recoverSessionOrFallback = async () => {
+      try {
+        const refreshed: any = await Promise.race([
+          supabase.auth.refreshSession(),
+          new Promise((resolve) => setTimeout(() => resolve({ data: { session: null } }), 3500)),
+        ]);
+        const recovered = refreshed?.data?.session;
+        if (recovered?.user) {
+          logger.info("[SUPABASE] Session recovered via refreshSession on boot");
+          applySession(recovered);
+          return;
+        }
+      } catch (e) {
+        logger.warn("[SUPABASE] boot refreshSession failed — offline fallback", { error: e });
+      }
+      // No se pudo recuperar: si conocemos al último usuario, modo offline.
+      restoreWithoutSession();
+    };
+
     Promise.race([supabase.auth.getSession(), sessionTimeout])
       .then((result: any) => {
         const timedOut = !!result?.timeout;
@@ -336,41 +410,16 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         const error = timedOut ? new Error("session restore timeout") : result?.error;
         logger.info("[SUPABASE] Session on mount", { hasSession: !!session, error, timedOut });
         if (session?.user) {
-          // Coming from a password-recovery email link: don't enter the app,
-          // show the "set new password" screen instead.
-          if (isPasswordRecoveryUrl()) {
-            logger.info("[SUPABASE] Recovery token detected — showing password reset screen");
-            setPasswordRecovery(true);
-            setUser(session.user);
-            setLoading(false);
-            return;
-          }
-          saveLastUser(session.user.id);
-          if (loadedUserId.current && loadedUserId.current !== session.user.id) {
-            // Account switched while the app was closed: drop the eager cached
-            // state so the correct user loads below.
-            logger.info("[SUPABASE] Session is a different user — reloading for", { userId: session.user.id.slice(0, 8) });
-            loadedUserId.current = null;
-            setProfile(null);
-            setChats([]);
-            setContacts([]);
-            setCalls([]);
-          }
-          setUser(session.user);
-          if (!loadedUserId.current) {
-            loadUserData(session.user.id);
-          } else {
-            setLoading(false);
-          }
+          applySession(session);
         } else {
-          // No session (offline, timeout or expired). If we know a last user,
-          // enter in offline mode with cached data instead of the login screen.
-          restoreWithoutSession();
+          // No session (offline, timeout or expired). Se intenta refrescar antes
+          // del fallback offline.
+          recoverSessionOrFallback();
         }
       })
       .catch((err) => {
-        logger.warn("[SUPABASE] getSession failed — offline fallback", { error: err });
-        restoreWithoutSession();
+        logger.warn("[SUPABASE] getSession failed — trying refresh fallback", { error: err });
+        recoverSessionOrFallback();
       });
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
@@ -458,7 +507,10 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     // chats para que al volver a loguearse todo esté intacto.
     const handleSessionUnrecoverable = () => {
       logger.info("[AUTH] session-unrecoverable received — clearing session, keeping local cache");
-      toast.error("Tu sesión expiró. Inicia sesión de nuevo.", { duration: 5000 });
+      // El refresh token es inválido de verdad: al login con identificador
+      // precargado (sin volver a registrarse). La contraseña nunca se guarda.
+      setSessionExpiredFlag(true);
+      toast.error("Tu sesión expiró. Escribe tu contraseña para continuar.", { duration: 5000 });
       loadedUserId.current = null;
       clearLastUser();
       setUser(null);
@@ -621,6 +673,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           });
 
       setProfile(newProfile);
+      saveLastIdentifier(newProfile?.username, newProfile?.phone_number);
       if (!chatsWipeGuard) setChats(enrichedChats);
       if (!contactsWipeGuard) setContacts(newContacts);
       if (!callsWipeGuard) setCalls(newCalls);
@@ -1015,6 +1068,25 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
           { onConflict: "user_id" }
         ).then(() => {}, () => {});
       } else {
+        // FOREGROUND: renovar sesión si el token venció o está por vencer (los
+        // timers de autoRefresh de Supabase se pausan en background). Luego se
+        // re-registra el token de push para este usuario sin duplicar listeners.
+        (async () => {
+          try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const expiresAt = session?.expires_at ?? 0;
+            const nowSec = Math.floor(Date.now() / 1000);
+            if (!session?.access_token || expiresAt - nowSec < 120) {
+              await supabase.auth.refreshSession();
+            }
+          } catch (e) {
+            logger.warn("[SUPABASE] resume session refresh failed", { error: e });
+          }
+        })();
+        refreshCapacitorPush(userId).catch((e) =>
+          logger.warn("[SUPABASE] refreshCapacitorPush failed", { error: e })
+        );
+
         // FOREGROUND: marcar online + reconectar presence channel + heartbeat
         supabase.from("profiles").update({ status: "online" }).eq("id", userId).then(() => {
           logger.info("[Presence] Foreground → online (immediate)");
@@ -1089,6 +1161,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     const row = Array.isArray(data) ? data[0] : data;
     if (!error && row) {
       setProfile(row as Profile);
+      saveLastIdentifier((row as Profile).username, (row as Profile).phone_number);
       saveCache(cacheKey(user.id, "profile"), row as Profile);
     }
   };
@@ -1157,6 +1230,7 @@ const refreshChats = async () => {
     if (error) throw error;
     setPasswordRecovery(false);
     setLoading(false);
+    setSessionExpiredFlag(false);
     clearLastUser();
     await authSignOut();
     loadedUserId.current = null;
@@ -1170,6 +1244,7 @@ const refreshChats = async () => {
 
   const logout = async () => {
     // Manual logout: clear the remembered user so SIGNED_OUT goes to login screen
+    setSessionExpiredFlag(false);
     clearLastUser();
     const uid = user?.id;
     // Salida INMEDIATA a la pantalla de login: no esperar a la limpieza de red,

@@ -8,8 +8,27 @@ import BrandOrb from "./BrandOrb";
 
 const PHONE_RE = /^\+?[0-9]{0,15}$/;
 
+function wasSessionExpired(): boolean {
+  try {
+    return localStorage.getItem("redon_session_expired") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function getSavedIdentifier(): string {
+  try {
+    return localStorage.getItem("redon_last_identifier") || "";
+  } catch {
+    return "";
+  }
+}
+
 function getInitialMode(): "login" | "register" {
   try {
+    // Sesión caducada de verdad: siempre al login (con el identificador ya
+    // precargado) y nunca al registro.
+    if (wasSessionExpired()) return "login";
     return localStorage.getItem("redon_has_registered") ? "login" : "register";
   } catch {
     return "login";
@@ -18,7 +37,8 @@ function getInitialMode(): "login" | "register" {
 
 export default function AuthScreen() {
   const [mode, setMode] = useState<"login" | "register" | "forgot">(getInitialMode);
-  const [identifier, setIdentifier] = useState("");
+  const [sessionExpired] = useState(wasSessionExpired);
+  const [identifier, setIdentifier] = useState(() => getSavedIdentifier());
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -52,6 +72,7 @@ export default function AuthScreen() {
         setSuccess(true);
       } else {
         await login(identifier, password);
+        try { localStorage.removeItem("redon_session_expired"); } catch {}
         setSuccess(true);
       }
     } catch (err: any) {
@@ -405,6 +426,11 @@ export default function AuthScreen() {
             </div>
           ) : (
             <>
+              {sessionExpired && mode === "login" && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-[11px] text-amber-200 font-medium leading-relaxed">
+                  Tu sesión expiró. Tu usuario ya está puesto; solo escribe tu contraseña para continuar.
+                </div>
+              )}
               {error && (
                 <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 text-xs text-rose-300 font-medium">
                   {error}
@@ -494,6 +520,7 @@ export default function AuthScreen() {
                         type={showPassword ? "text" : "password"}
                         required
                         minLength={4}
+                        autoFocus={mode === "login" && !!identifier}
                         placeholder="Mínimo 4 caracteres"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}

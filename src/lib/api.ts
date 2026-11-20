@@ -53,6 +53,24 @@ async function resolveAccessToken(): Promise<string | null> {
   return session?.access_token ?? null;
 }
 
+// Solo un refresh token realmente inválido debe cerrar la sesión. Un fallo de
+// red, un timeout o un 5xx de Supabase son transitorios y NO deben expulsar al
+// usuario (antes cualquier excepción de refreshSession lo hacía).
+function isInvalidRefreshTokenError(e: unknown): boolean {
+  const err = e as { code?: string; error_code?: string; message?: string; error?: string } | null;
+  const code = String(err?.code || err?.error_code || "");
+  const msg = String(err?.message || err?.error || "");
+  if (code === "refresh_token_not_found" || code === "invalid_grant" || code === "refresh_token_already_used") {
+    return true;
+  }
+  return /invalid refresh token|refresh token not found|invalid_grant/i.test(msg);
+}
+
+async function tryRefreshAccessToken(): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.refreshSession();
+  return session?.access_token ?? null;
+}
+
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -80,28 +98,37 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
   }
 
   if (response.status === 401) {
-    let refreshThrew = false;
+    let refreshedToken: string | null = null;
+    let refreshInvalid = false;
+
     try {
-      const { data: { session: refreshed } } = await supabase.auth.refreshSession();
-      if (refreshed?.access_token) {
-        headers['Authorization'] = `Bearer ${refreshed.access_token}`;
-        response = await fetch(url, { ...opts, headers });
-      }
-      // Si refreshSession no lanzó pero devolvió null → token vencido pero
-      // no "explotó". Podría ser 401 del servidor por otra razón (rate limit,
-      // permisos, etc.). No disparar sesión muerta — es ambiguo.
-    } catch {
-      // refreshSession() lanzó excepción real → token/refresh irrecuperable
-      refreshThrew = true;
+      refreshedToken = await tryRefreshAccessToken();
+    } catch (e) {
+      refreshInvalid = isInvalidRefreshTokenError(e);
     }
 
-    if (refreshThrew && response.status >= 400) {
+    // Fallo transitorio (red/timeout/5xx): un único reintento antes de rendirse.
+    if (!refreshedToken && !refreshInvalid) {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        refreshedToken = await tryRefreshAccessToken();
+      } catch (e) {
+        refreshInvalid = isInvalidRefreshTokenError(e);
+      }
+    }
+
+    if (refreshedToken) {
+      headers['Authorization'] = `Bearer ${refreshedToken}`;
+      response = await fetch(url, { ...opts, headers });
+    } else if (refreshInvalid && response.status >= 400) {
       const now = Date.now();
       if (now - lastRefreshFailureAt > REFRESH_FAILURE_COOLDOWN_MS) {
         lastRefreshFailureAt = now;
         window.dispatchEvent(new CustomEvent("session-unrecoverable"));
       }
     }
+    // refreshSession sin excepción pero sin sesión: 401 ambiguo (permisos,
+    // rate limit). No se marca la sesión como muerta.
   }
 
   return response;
