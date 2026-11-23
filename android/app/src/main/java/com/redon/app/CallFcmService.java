@@ -169,10 +169,15 @@ public class CallFcmService extends FirebaseMessagingService {
             if (chatId == null || chatId.isEmpty()) return;
             org.json.JSONObject payload = new org.json.JSONObject();
             payload.put("chatId", chatId);
+            payload.put("messageId", message.getData().get("messageId"));
             payload.put("contactId", contactId != null ? contactId : "");
             payload.put("title", message.getData().get("title"));
             payload.put("body", message.getData().get("body"));
             payload.put("is_group", message.getData().get("is_group"));
+            payload.put("is_ephemeral", message.getData().get("is_ephemeral"));
+            payload.put("ephemeral_expires_at", message.getData().get("ephemeral_expires_at"));
+            payload.put("hasPreview", message.getData().get("hasPreview"));
+            payload.put("msgType", message.getData().get("msgType"));
             payload.put("ts", message.getData().get("ts"));
             prefs.edit().putString(PENDING_MESSAGE_KEY, payload.toString()).apply();
             Log.d(TAG, "Persisted pending message for chat " + chatId);

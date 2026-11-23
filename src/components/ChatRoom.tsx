@@ -332,6 +332,12 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     if (chat.id) {
       setHasMoreOlder(true);
 
+      // Lanzar la red YA, en paralelo con la reconciliación local. La caché
+      // sigue pintándose primero; solo dejamos de serializar "leer cache ->
+      // pedir red" para que el fetch arranque sin esperar a SQLite/idb.
+      const initialNetwork = getMessages(chat.id, { limit: 50 });
+      initialNetwork.catch(() => {});
+
       // 1. Load cached messages immediately (offline-first). reconcileResolvedOrphans
       // reconcilia ANTES del pintado cualquier temp huérfana con confirmación
       // verificable, de modo que la primera ronda ya muestra una sola entidad
@@ -390,8 +396,8 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
         // si el primer getMessages falla por red/sesión, da una segunda oportunidad
         // (~4s) sin reemplazar jamás el caché local (solo se fusiona en éxito).
         let retriesLeft = 1;
-        const fetchLatest = (): void => {
-          getMessages(chat.id, { limit: 50 }).then(apiMessages => {
+        const fetchLatest = (initial?: ReturnType<typeof getMessages>): void => {
+          (initial ?? getMessages(chat.id, { limit: 50 })).then(apiMessages => {
             console.log('[CHAT] getMessages result count:', apiMessages?.length);
             if (apiMessages && apiMessages.length > 0) {
               const mapped = apiMessages.map(mapApiMsg).filter(Boolean) as Message[];
@@ -415,7 +421,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
             }
           });
         };
-        fetchLatest();
+        fetchLatest(initialNetwork);
       });
     }
     return () => {
@@ -470,6 +476,26 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
       }
     });
     return () => { handler.then(h => h.remove()); };
+  }, [chat.id]);
+
+  // Mensaje ya persistido desde el payload FCM (PhoneSimulator). Permite pintarlo
+  // al instante cuando el chat está abierto, sin esperar el refetch de red. Es
+  // idempotente por id: si Realtime/refetch lo vuelven a traer, safeMergeMessages
+  // lo deduplica.
+  const safeMergeRef = useRef(safeMergeMessages);
+  safeMergeRef.current = safeMergeMessages;
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail || detail.chatId !== chat.id || !detail.message) return;
+      const incoming = detail.message as Message;
+      setMessages(prev => safeMergeRef.current(prev, [incoming]));
+      if (incoming.rawCreatedAt && incoming.rawCreatedAt > (lastSyncTimestampRef.current || '')) {
+        lastSyncTimestampRef.current = incoming.rawCreatedAt;
+      }
+    };
+    window.addEventListener('chat-message-seeded', handler);
+    return () => window.removeEventListener('chat-message-seeded', handler);
   }, [chat.id]);
 
   // ── Infinite scroll: load older messages ────────────────────────

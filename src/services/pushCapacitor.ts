@@ -91,6 +91,11 @@ function bindPushListeners() {
           mimeType: data.mimeType,
           msgType: data.msgType,
           ts: data.ts || undefined,
+          messageId: data.messageId || undefined,
+          isGroup: data.is_group || undefined,
+          isEphemeral: data.is_ephemeral || undefined,
+          ephemeralExpiresAt: data.ephemeral_expires_at || undefined,
+          hasPreview: data.hasPreview || undefined,
         },
       }));
     } else if (data?.type === 'group_added' && data?.chatId) {
@@ -120,6 +125,12 @@ function bindPushListeners() {
           documentName: data.documentName,
           mimeType: data.mimeType,
           msgType: data.msgType,
+          ts: data.ts || undefined,
+          messageId: data.messageId || undefined,
+          isGroup: data.is_group || undefined,
+          isEphemeral: data.is_ephemeral || undefined,
+          ephemeralExpiresAt: data.ephemeral_expires_at || undefined,
+          hasPreview: data.hasPreview || undefined,
         },
       }));
     }

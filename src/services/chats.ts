@@ -59,11 +59,19 @@ export async function getChats(userId: string): Promise<Chat[]> {
     .filter(c => !c.is_group && c.profile_id && c.admin_id)
     .map(c => (c.profile_id === userId ? c.admin_id! : c.profile_id!));
   if (partnerIds.length > 0) {
-    const contactsResult = await supabase
-      .from("contacts")
-      .select("contact_user_id, name")
-      .eq("user_id", userId)
-      .in("contact_user_id", partnerIds);
+    // contacts y profiles no dependen entre sí: resolverlos en paralelo evita
+    // sumar dos round-trips secuenciales a cada refresco de la lista.
+    const [contactsResult, profilesResult] = await Promise.all([
+      supabase
+        .from("contacts")
+        .select("contact_user_id, name")
+        .eq("user_id", userId)
+        .in("contact_user_id", partnerIds),
+      supabase
+        .from("profiles")
+        .select("id, name, avatar, avatar_url, status")
+        .in("id", partnerIds),
+    ]);
     const contactMap = new Map<string, string>();
     if (contactsResult.data) {
       for (const c of contactsResult.data) {
@@ -73,10 +81,7 @@ export async function getChats(userId: string): Promise<Chat[]> {
       }
     }
 
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("id, name, avatar, avatar_url, status")
-      .in("id", partnerIds);
+    const profiles = profilesResult.data;
     const partnerMap = new Map(
       (profiles ?? []).map(p => [p.id, { name: p.name, avatar: p.avatar, avatar_url: p.avatar_url, status: p.status }])
     );

@@ -438,6 +438,23 @@ export default function PhoneSimulator({
     if (!Capacitor.isNativePlatform()) return;
     let listener: { remove: () => Promise<void> } | null = null;
     let removed = false;
+
+    const processPendingMessage = async () => {
+      if (removed) return;
+      try {
+        const pending = await Preferences.get({ key: 'redon_pending_message' });
+        if (!pending?.value) return;
+        const data = JSON.parse(pending.value);
+        if (!data || !data.chatId) return;
+        logger.info('[PENDING-MSG] Recuperando mensaje pendiente de FCM', { chatId: data.chatId });
+        window.dispatchEvent(new CustomEvent('new-message-received', { detail: data }));
+        await Preferences.remove({ key: 'redon_pending_message' });
+        logger.info('[PENDING-MSG] Pendiente procesado y eliminado');
+      } catch (e) {
+        logger.warn('[PENDING-MSG] Fallo al procesar pendiente (NO se borra)', { error: e });
+      }
+    };
+
     const setupListener = async () => {
       const { App } = await import('@capacitor/app');
       listener = await App.addListener('appStateChange', ({ isActive }) => {
@@ -446,25 +463,16 @@ export default function PhoneSimulator({
         // persistido. Así el badge no depende de que React haya recibido
         // exactamente un evento determinado.
         recalculateAllUnreadRef.current();
-        (async () => {
-          try {
-            const pending = await Preferences.get({ key: 'redon_pending_message' });
-            if (!pending?.value) return;
-            const data = JSON.parse(pending.value);
-            if (!data || !data.chatId) return;
-            logger.info('[PENDING-MSG] Recuperando mensaje pendiente de FCM', { chatId: data.chatId });
-            window.dispatchEvent(new CustomEvent('new-message-received', { detail: data }));
-            await Preferences.remove({ key: 'redon_pending_message' });
-            logger.info('[PENDING-MSG] Pendiente procesado y eliminado');
-          } catch (e) {
-            logger.warn('[PENDING-MSG] Fallo al procesar pendiente (NO se borra)', { error: e });
-          }
-        })();
+        void processPendingMessage();
       });
     };
     setupListener();
+    // Arranque en frío: procesar el pendiente una vez, después de que el
+    // listener de `new-message-received` ya esté montado.
+    const coldStartTimer = setTimeout(() => { void processPendingMessage(); }, 0);
     return () => {
       removed = true;
+      clearTimeout(coldStartTimer);
       listener?.remove();
     };
   }, []);
@@ -2119,6 +2127,69 @@ const lastSentAtRef = useRef<Record<string, number>>({});
       return null;
     };
 
+    // Actualiza el preview de la lista con el payload del push (misma lógica que
+    // usa el canal chats-for). No toca el contador de no leídos: ese se deriva
+    // del marcador de lectura, igual que antes.
+    const updateChatPreview = (chatId: string, body?: string, ts?: string) => {
+      if (!chatId || (!body && !ts)) return;
+      setChats(prev => {
+        const idx = prev.findIndex(chat => chat.id === chatId);
+        if (idx === -1) return prev;
+        const existing = prev[idx];
+        const next = { ...existing };
+        if (body) next.lastMessage = body as any;
+        if (ts && ts > (existing.lastMessageTimeRaw || "")) {
+          const d = new Date(ts);
+          const currentDate = new Date();
+          next.lastMessageTimeRaw = ts;
+          next.updated_at = ts;
+          next.lastMessageTime = d.toDateString() === currentDate.toDateString()
+            ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : d.toLocaleDateString([], { day: "numeric", month: "short" });
+        }
+        const updated = [...prev];
+        updated[idx] = next;
+        return updated.sort(sortChats);
+      });
+    };
+
+    // Siembra la fila canónica del mensaje desde el payload FCM (servidor 1.24+).
+    // Solo aplica a texto, con preview real y no efímero; para media, preview
+    // desactivado o efímeros se conserva el flujo actual (fetch a Supabase).
+    // Es idempotente por id y el evento se difiere un tick para que ChatRoom ya
+    // tenga su listener montado cuando el chat se abre desde la notificación.
+    const seedIncomingMessageFromPush = async (d: any): Promise<boolean> => {
+      if (!user) return false;
+      if (!d?.messageId || !d?.chatId || !d?.body) return false;
+      if (d.msgType !== 'text') return false;
+      if (!(d.hasPreview === true || d.hasPreview === 'true')) return false;
+      if (d.isEphemeral === true || d.isEphemeral === 'true') return false;
+      try {
+        const mapped = mapDtoToUiMessage({
+          id: d.messageId,
+          chat_id: d.chatId,
+          sender_id: d.contactId || '',
+          text: d.body,
+          type: 'text',
+          status: 'sent',
+          created_at: d.ts || new Date().toISOString(),
+          is_deleted: false,
+          is_ephemeral: false,
+        }, user.id);
+        const seeded = { ...mapped, chatId: d.chatId, synced: true };
+        await messageRepo.upsertMessage(d.chatId, seeded);
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('chat-message-seeded', {
+            detail: { chatId: d.chatId, message: seeded },
+          }));
+        }, 0);
+        return true;
+      } catch (e) {
+        logger.warn('[FCM-SEED] Failed to seed incoming message', { error: e, chatId: d.chatId });
+        return false;
+      }
+    };
+
     const handleOpenChat = (e: Event) => {
       // Acepta ambas formas del evento: CustomEvent con `detail` (plugin de
       // Capacitor, ver pushCapacitor.ts) y Event plano de MainActivity, donde
@@ -2133,10 +2204,16 @@ const lastSentAtRef = useRef<Record<string, number>>({});
         // libera para que la lista no quede enmascarada. La ruta caliente
         // sigue comportándose exactamente igual que antes.
         setBootChatId(null);
+        // Actualizar el preview de la lista ya con el payload (body/ts), sin
+        // esperar al refresh de Supabase.
+        if (d.body || d.ts) updateChatPreview(d.chatId, d.body, d.ts);
         setSelectedChatId(d.chatId);
         setCurrentScreen('chat_room');
         // Abrir el chat marca el leído de forma persistente (no un reset visual).
         markChatAsReadRef.current(d.chatId);
+        // Persistir el mensaje del push en SQLite/idb. ChatRoom lo leerá de la
+        // caché al montar o lo fusionará con el evento diferido.
+        void seedIncomingMessageFromPush(d);
         // Evento ya procesado (app viva): eliminar el pendiente para que la restauración
         // no vuelva a abrir el chat en una futura vuelta a primer plano / montaje.
         Preferences.remove({ key: 'redon_pending_open_chat' }).catch(() => {});
@@ -2178,26 +2255,11 @@ const lastSentAtRef = useRef<Record<string, number>>({});
           });
         });
       } else {
-        setChats(prev => {
-          const idx = prev.findIndex(chat => chat.id === d.chatId);
-          if (idx === -1) return prev;
-          const existing = prev[idx];
-          const next = { ...existing };
-          if (d.body) next.lastMessage = d.body;
-          if (d.ts && d.ts > (existing.lastMessageTimeRaw || "")) {
-            const fcmTime = new Date(d.ts);
-            const currentDate = new Date();
-            next.lastMessageTimeRaw = d.ts;
-            next.updated_at = d.ts;
-            next.lastMessageTime = fcmTime.toDateString() === currentDate.toDateString()
-              ? fcmTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-              : fcmTime.toLocaleDateString([], { day: "numeric", month: "short" });
-          }
-          const updated = [...prev];
-          updated[idx] = next;
-          return updated.sort(sortChats);
-        });
+        updateChatPreview(d.chatId, d.body, d.ts);
       }
+      // Sembrar la fila canónica desde el push (texto + preview real). Para
+      // media/preview-off/efímeros no hace nada y el flujo actual sigue igual.
+      void seedIncomingMessageFromPush(d);
       if (!isChatOpen) {
         // Mensaje recibido con el chat cerrado desde PUSH/FCM: persistir en
         // SQLite INMEDIATAMENTE (0ms) para que ChatRoom lo encuentre en caché
