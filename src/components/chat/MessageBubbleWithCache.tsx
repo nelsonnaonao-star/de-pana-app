@@ -27,6 +27,7 @@ interface MessageBubbleWithCacheProps {
   onEdit: (msg: Message) => void;
   onUpdatePrice: (msgId: string, price: string) => void;
   onVideoPosterReady?: (msgId: string, posterDataUrl: string) => void;
+  onRetrySend?: (msg: Message) => void;
 }
 
 type MediaResolutionState = "pending" | "ready" | "failed";
@@ -209,7 +210,8 @@ function arePropsEqual(prev: MessageBubbleWithCacheProps, next: MessageBubbleWit
     prev.currentUserId === next.currentUserId &&
     prev.activeReactionMenu === next.activeReactionMenu &&
     prev.bubbleColorMeId === next.bubbleColorMeId &&
-    prev.bubbleColorThemId === next.bubbleColorThemId
+    prev.bubbleColorThemId === next.bubbleColorThemId &&
+    prev.onRetrySend === next.onRetrySend
   );
 }
 

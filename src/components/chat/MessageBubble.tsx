@@ -111,9 +111,11 @@ interface MessageBubbleProps {
   onUpdatePrice?: (msgId: string, price: string) => void;
   onVideoPosterReady?: (msgId: string, posterDataUrl: string) => void;
   onRetryMedia?: () => void;
+  onRetrySend?: (msg: Message) => void;
 }
 
 function useSaveMedia() {
+
   const [saving, setSaving] = useState(false);
   const save = useCallback(async (url: string, fileName: string): Promise<boolean> => {
     if (saving) return false;
@@ -522,7 +524,7 @@ function ImageMessage({ msg, isMe, isSticker, activeReactionMenu, setActiveReact
 
 export default React.memo(function MessageBubble({
   msg, isMe, activeReactionMenu, setActiveReactionMenu,
-  handleVote, currentUserId, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice, onVideoPosterReady, onRetryMedia,
+  handleVote, currentUserId, handleAddReaction, handleDeleteMessage, handleDeleteForMe, handleForwardMessage, handleReplyMessage, bubbleColorMeId, bubbleColorThemId, isPending, onEdit, onUpdatePrice, onVideoPosterReady, onRetryMedia, onRetrySend,
 }: MessageBubbleProps) {
   const activeMeBubble = BUBBLE_PRESETS_ME.find(b => b.id === bubbleColorMeId) || BUBBLE_PRESETS_ME[0];
   const activeThemBubble = BUBBLE_PRESETS_THEM.find(b => b.id === bubbleColorThemId) || BUBBLE_PRESETS_THEM[0];
@@ -533,6 +535,11 @@ export default React.memo(function MessageBubble({
   const isTextOnlyEmoji = msg.type === "text" && msg.text && isEmoji(msg.text);
   const { bubbleRef, menuRef, dropDown } = useMenuDropDirection(activeReactionMenu === msg.id);
   const isFile = msg.type === "file";
+  const canRetrySend =
+    isMe &&
+    msg.status === "error" &&
+    (msg.type === "voice_note" || msg.type === "video_note") &&
+    !!(msg.clientId || msg.client_id);
   const longPressRef = useRef(false);
   const cacheableMediaUrl =
     msg.type === "audio" ||
@@ -1026,7 +1033,23 @@ export default React.memo(function MessageBubble({
               {msg.status === "sent" && <MsgTicks status="sent" />}
               {msg.status === "delivered" && <MsgTicks status="delivered" />}
               {msg.status === "read" && <MsgTicks status="read" />}
-              {msg.status === "error" && <span className="text-red-400">⚠️</span>}
+              {msg.status === "error" && (
+                <span className="inline-flex items-center gap-1">
+                  <span className="text-red-400">⚠️</span>
+                  {canRetrySend && onRetrySend && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onRetrySend(msg); }}
+                      className="pointer-events-auto inline-flex items-center gap-1 rounded-full bg-white/15 px-1.5 py-0.5 text-[9px] font-semibold text-red-50 hover:bg-white/25"
+                      title="Reintentar envío"
+                      aria-label="Reintentar envío"
+                    >
+                      <RotateCw className="w-3 h-3" />
+                      Reintentar
+                    </button>
+                  )}
+                </span>
+              )}
               {!msg.status && <MsgTicks status="sent" />}
             </span>
           )}

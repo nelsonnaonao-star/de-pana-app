@@ -9,6 +9,7 @@ import { flushPendingReadReceipts } from "../readReceiptQueue";
 import { uploadChatMedia, uploadPrivateChatMedia, isValidChatId, planConversationUpload, type PrivateMediaKind } from "../storage";
 import { Capacitor } from "@capacitor/core";
 import { logger } from "../../lib/logger";
+import type { Message } from "../../types";
 
 // Error de política: adjunto de un chat remoto con un MIME no admitido por la
 // subida privada. NO debe caer nunca al bucket público `chat-images`; el mensaje
@@ -36,6 +37,13 @@ export type SyncedCallback = (
   savedId: string
 ) => void;
 
+export type RetrySendResult =
+  | "sent"
+  | "already-sent"
+  | "failed"
+  | "in-progress"
+  | "skipped";
+
 // IDs de mensajes que la UI está enviando AHORA MISMO (temp_id/msg_*). El
 // SyncService los OMITE: si la UI ya lanzó el POST, reintentarlo crearía un
 // duplicado cuando el servidor no deduplica por client_id (versión desplegada).
@@ -62,6 +70,7 @@ class SyncService {
   private started = false;
   private messageQueue: QueuedMessage[] = [];
   private processingQueue = false;
+  private sendingMessageIds = new Set<string>();
   private readonly MAX_RETRIES = 5;
   private readonly BASE_DELAY = 2000; // 2s base
   private retryTimer: ReturnType<typeof setInterval> | null = null;
@@ -345,6 +354,107 @@ class SyncService {
     await this.trySend(queued);
   }
 
+  async retryMessage(
+    chatId: string,
+    message: Message,
+    ownerUserId?: string,
+  ): Promise<RetrySendResult> {
+    if (!chatId || !message?.id || message.sender !== "me") return "skipped";
+    if (message.status !== "error") return "skipped";
+    if (message.type !== "voice_note" && message.type !== "video_note") return "skipped";
+    if (ownerUserId) this.cachedUid = ownerUserId;
+
+    const tempId = message.id;
+    if (inFlightMessageIds.has(tempId)) return "in-progress";
+
+    const savedId = getReconciledSavedId(chatId, tempId);
+    if (savedId) {
+      this.notifyListeners(tempId, chatId, savedId);
+      await messageRepo.upsertMessage(
+        chatId,
+        { ...message, id: savedId, status: "sent", synced: true },
+        ownerUserId,
+      );
+      this.removeFromQueue(tempId);
+      return "already-sent";
+    }
+
+    const storedMessages = await messageRepo.getMessages(chatId);
+    const stored = storedMessages.find((m) => m.id === tempId);
+    const clientId =
+      stored?.clientId ||
+      stored?.client_id ||
+      message.clientId ||
+      message.client_id;
+
+    const confirmedTwin = storedMessages.find(
+      (m) =>
+        m.id !== tempId &&
+        m.synced !== false &&
+        ((!!clientId && (m.clientId === clientId || m.client_id === clientId)) ||
+          m.clientTempId === tempId),
+    );
+    if (confirmedTwin) {
+      recordReconciledId(chatId, tempId, confirmedTwin.id);
+      this.notifyListeners(tempId, chatId, confirmedTwin.id);
+      await messageRepo.reconcileTemp(chatId, tempId, confirmedTwin).catch(() => {});
+      this.removeFromQueue(tempId);
+      return "already-sent";
+    }
+
+    if (!clientId) return "skipped";
+
+    const source = stored || message;
+    const canonical: Message = {
+      ...message,
+      ...source,
+      mediaUrl: stored?.mediaUrl || message.mediaUrl,
+      localVideoUrl: stored?.localVideoUrl || message.localVideoUrl,
+      posterUrl: stored?.posterUrl || message.posterUrl,
+      id: tempId,
+      sender: "me",
+      status: "sending",
+      synced: false,
+      clientId,
+      client_id: clientId,
+      sender_id:
+        stored?.sender_id ||
+        stored?.senderId ||
+        message.sender_id ||
+        message.senderId ||
+        ownerUserId ||
+        this.cachedUid ||
+        undefined,
+      text:
+        stored?.text ||
+        message.text ||
+        (message.type === "voice_note"
+          ? "Nota de voz"
+          : "Nota de video"),
+    };
+    if (!canonical.sender_id || !canonical.mediaUrl) return "skipped";
+
+    const queued = this.messageQueue.find((q) => q.tempId === tempId);
+    if (queued) {
+      queued.message = canonical;
+      queued.retries = 0;
+      queued.createdAt = Date.now();
+    }
+
+    inFlightMessageIds.add(tempId);
+    this.lastAttemptAt.set(tempId, Date.now());
+    try {
+      await messageRepo.upsertMessage(chatId, canonical, ownerUserId);
+      const saved = await this.sendSingle(chatId, canonical);
+      if ((saved as any)?.skipped) return "in-progress";
+      if (!saved?.id) return "failed";
+      this.removeFromQueue(tempId);
+      return "sent";
+    } finally {
+      inFlightMessageIds.delete(tempId);
+    }
+  }
+
   private async trySend(queued: QueuedMessage): Promise<boolean> {
     const { chatId, message, retries } = queued;
     
@@ -567,6 +677,23 @@ class SyncService {
   }
 
   private async sendSingle(
+    chatId: string,
+    msg: any,
+  ): Promise<any> {
+    const sendKey = `${chatId}::${msg?.id ?? ""}`;
+    if (this.sendingMessageIds.has(sendKey)) {
+      dbg("sendSingle: ya hay envío en curso, no duplicar", msg?.id);
+      return { skipped: true };
+    }
+    this.sendingMessageIds.add(sendKey);
+    try {
+      return await this.sendSingleInternal(chatId, msg);
+    } finally {
+      this.sendingMessageIds.delete(sendKey);
+    }
+  }
+
+  private async sendSingleInternal(
     chatId: string,
     msg: any
   ): Promise<any> {

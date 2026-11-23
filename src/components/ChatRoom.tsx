@@ -1124,6 +1124,34 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
     videoPreviewRef,
   });
 
+  const handleRetrySend = useCallback(async (msg: Message) => {
+    if (!chat.id || msg.sender !== "me" || msg.status !== "error") return;
+    if (msg.type !== "voice_note" && msg.type !== "video_note") return;
+    if (!(msg.clientId || msg.client_id)) {
+      toast.error("No se puede reintentar este mensaje");
+      return;
+    }
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: "sending" as const } : m));
+    try {
+      const result = await syncService.retryMessage(chat.id, msg, uid);
+      if (result === "sent" || result === "already-sent") {
+        const savedId = getReconciledSavedId(chat.id, msg.id);
+        setMessages(prev => prev.map(m => m.id === msg.id
+          ? { ...m, ...(savedId ? { id: savedId } : {}), status: "sent" as const, synced: true }
+          : m));
+        toast.success("Mensaje enviado");
+        return;
+      }
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: "error" as const } : m));
+      if (result === "in-progress") toast("El mensaje ya se está enviando");
+      else toast.error("No se pudo enviar. Intenta de nuevo.");
+    } catch (e) {
+      console.error("[ChatRoom] retry send failed:", e);
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: "error" as const } : m));
+      toast.error("No se pudo enviar. Intenta de nuevo.");
+    }
+  }, [chat.id, uid]);
+
   const handleSetEphemeralTimer = useCallback(async (timer: number) => {
     try {
       await setEphemeralTimer(chat.id, timer);
@@ -1518,6 +1546,7 @@ export default function ChatRoom({ chat, onBack, onSendMessage, onTriggerCall, c
                   onEdit={(m) => setEditingMessage({ id: m.id, text: m.text || "" })}
                   onUpdatePrice={actions.handleUpdatePrice}
                   onVideoPosterReady={handleVideoPosterReady}
+                  onRetrySend={handleRetrySend}
                 />
                 </>
               )}
