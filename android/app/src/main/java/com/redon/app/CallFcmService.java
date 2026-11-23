@@ -95,9 +95,9 @@ public class CallFcmService extends FirebaseMessagingService {
         try {
             NotificationManager nmgr = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nmgr == null) return;
-            // Forzar recreación para aplicar siempre el sonido actual del canal solicitado
-            // (Android 8+ ignora setSound() sobre un canal ya creado).
-            nmgr.deleteNotificationChannel(channelId);
+            // Si el canal ya existe, reutilizarlo. Borrarlo en cada mensaje cancelaba
+            // las notificaciones activas y podía silenciar la ráfaga en curso.
+            if (nmgr.getNotificationChannel(channelId) != null) return;
             AudioAttributes audioAttrs = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION).build();
             NotificationChannel chan = new NotificationChannel(
@@ -586,6 +586,9 @@ public class CallFcmService extends FirebaseMessagingService {
 
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
+            // Cancelar antes de volver a publicar con el mismo id fuerza a Android a
+            // re-alertar (sonido/vibración) en cada mensaje del mismo chat.
+            nm.cancel(notificationId);
             nm.notify(notificationId, builder.build());
         }
         maybeAttachAvatar(builder, notificationId, message.getData().get("avatarUrl"));
@@ -632,7 +635,9 @@ public class CallFcmService extends FirebaseMessagingService {
 
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
-            nm.notify(notificationId + 100000, builder.build());
+            int foregroundId = notificationId + 100000;
+            nm.cancel(foregroundId);
+            nm.notify(foregroundId, builder.build());
         }
         maybeAttachAvatar(builder, notificationId + 100000, message.getData().get("avatarUrl"));
     }

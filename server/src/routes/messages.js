@@ -1,8 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { supabaseAdmin } from '../db.js';
-import { getMessaging } from 'firebase-admin/messaging';
-import { isGroupMuted } from './groups.js';
 import { isAllowedMediaRef } from './media.js';
 import { mediaRefAllowedForChat } from '../lib/storageRefs.js';
 
@@ -53,53 +51,6 @@ async function isChatMember(chatId, userId) {
     .eq('profile_id', userId)
     .maybeSingle();
   return !!participant;
-}
-
-async function sendPushToChat(chatId, senderId, senderName, senderAvatar, text) {
-  try {
-    const { data: chat } = await supabaseAdmin
-      .from('chats')
-      .select('profile_id, admin_id, is_group')
-      .eq('id', chatId)
-      .maybeSingle();
-    if (!chat) return;
-
-    // Silencio de grupo: si el grupo está silenciado, no se envía push a nadie.
-    if (chat.is_group && (await isGroupMuted(chatId))) return;
-
-    let receiverIds = [];
-    if (chat.is_group) {
-      const { data: participants } = await supabaseAdmin
-        .from('chat_participants')
-        .select('profile_id')
-        .eq('chat_id', chatId)
-        .neq('profile_id', senderId);
-      receiverIds = (participants || []).map(p => p.profile_id);
-    } else {
-      const rid = chat.profile_id === senderId ? chat.admin_id : chat.profile_id;
-      if (rid) receiverIds = [rid];
-    }
-
-    for (const rid of receiverIds) {
-      const { data: tokens } = await supabaseAdmin
-        .from('push_tokens')
-        .select('token, device')
-        .eq('profile_id', rid);
-      if (!tokens?.length) continue;
-
-      for (const t of tokens) {
-        if (t.device === 'android-fcm' || t.device === 'android') {
-          try {
-            await getMessaging().send({
-              token: t.token,
-data: { title: senderName || 'RED ON', body: text || 'Nuevo mensaje', type: 'message', chatId, contactId: senderId, is_group: chat.is_group ? 'true' : 'false', ts: new Date().toISOString(), avatarUrl: senderAvatar || undefined },
-              android: { priority: 'high', ttl: 86400000 },
-            });
-          } catch {}
-        }
-      }
-    }
-  } catch {}
 }
 
 // ─── Send message ────────────────────────────────────────────────
@@ -345,17 +296,6 @@ router.post('/send', sendLimiter, async (req, res) => {
       }
     } catch (e) {
       console.error('[MESSAGES] chat_unread_pings block failed:', e.message);
-    }
-
-    try {
-      const { data: senderProfile } = await supabaseAdmin
-        .from('profiles')
-        .select('name, avatar_url')
-        .eq('id', msg.sender_id)
-        .maybeSingle();
-      sendPushToChat(msg.chat_id, msg.sender_id, senderProfile?.name, senderProfile?.avatar_url, sanitizedText || 'Nuevo mensaje');
-    } catch (e) {
-      console.error('[MESSAGES] push/profile failed:', e.message);
     }
 
     res.json(message);

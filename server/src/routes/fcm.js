@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { supabaseAdmin } from '../db.js';
 import { initializeApp, getApps, cert } from 'firebase-admin';
 import { isGroupMuted } from './groups.js';
-import { getMessaging } from 'firebase-admin/messaging';
+import { sendAndroidPush, isAndroidDevice, sanitizeFcmData } from '../lib/fcmPush.js';
 
 const router = express.Router();
 
@@ -36,21 +36,6 @@ if (serviceAccount && getApps().length === 0) {
     } catch (error) {
         console.error("[FCM] Error in initializeApp:", error.message);
     }
-}
-
-let firebaseMessaging = null;
-function initFirebaseAdmin() {
-  if (firebaseMessaging) return firebaseMessaging;
-  if (getApps().length === 0) {
-    return null;
-  }
-  try {
-    firebaseMessaging = { messaging: () => getMessaging() };
-    return firebaseMessaging;
-  } catch (e) {
-    console.error('[FCM] Failed to get Messaging instance:', e.message);
-    return null;
-  }
 }
 
 if (vapidPublicKey && vapidPrivateKey) {
@@ -112,81 +97,37 @@ router.post('/send', async (req, res) => {
     return res.json({ ok: true, sent: 0 });
   }
 
-  const results = { web: 0, android: 0, errors: 0 };
+  const isCall = data && data.type === 'call';
+  const notifBody = isCall ? (body || 'Llamada entrante...') : (body || 'Nuevo mensaje');
+  const baseData = sanitizeFcmData({
+    ...(data || {}),
+    title: title || 'RED ON',
+    body: notifBody,
+    badge: '1',
+    notificationCount: '1',
+    ...(isCall ? { type: 'call' } : {}),
+  });
+  delete baseData.callerAvatar;
 
-  for (const t of tokens) {
-    if (t.device === 'android-fcm' || t.device === 'android') {
-      const admin = await initFirebaseAdmin();
-      if (admin) {
-        try {
-          const isCall = data && data.type === 'call';
-          const notifBody = isCall ? (body || 'Llamada entrante...') : (body || 'Nuevo mensaje');
+  const androidStats = await sendAndroidPush(
+    tokens.filter(t => isAndroidDevice(t.device)),
+    (token) => ({
+      token,
+      data: baseData,
+      android: { priority: 'high', ttl: 86400000 },
+    })
+  );
 
-          if (isCall) {
-            const callData = data || {};
-            const { callerAvatar, ...safeCallData } = callData;
-            await admin.messaging().send({
-              token: t.token,
-              data: {
-                title: title || 'RED ON', body: notifBody,
-                badge: '1', notificationCount: '1',
-                ...safeCallData,
-                type: 'call',
-              },
-              android: {
-                priority: 'high', ttl: 86400000,
-              },
-            });
-          } else {
-            const channelId = 'redon-messages';
-            const msgData = data || {};
-            const { callerAvatar: _, ...safeMsgData } = msgData;
-            await admin.messaging().send({
-              token: t.token,
-              notification: { title: title || 'RED ON', body: notifBody },
-              data: {
-                title: title || 'RED ON', body: notifBody,
-                badge: '1', notificationCount: '1',
-                ...safeMsgData,
-              },
-              android: {
-                priority: 'high', ttl: 86400000,
-                notification: {
-                  channel_id: channelId, tag: data?.chatId || 'redon-message',
-                  click_action: 'OPEN_APP', notification_count: 1, visibility: 'public',
-                  sound: 'notificacion',
-                },
-              },
-              apns: {
-                payload: {
-                  aps: {
-                    category: 'message',
-                    'mutable-content': 1,
-                  },
-                },
-              },
-              // Quick reply action for Android
-              fcm_options: {
-                analytics_label: 'message_reply',
-              },
-            });
-          }
-          results.android++;
-        } catch (err) {
-          results.errors++;
-        }
-      } else {
-        results.errors++;
-      }
-    } else {
-      try {
-        const subscription = JSON.parse(t.token);
-        const payload = JSON.stringify({ title, body, data: data || {}, icon: '/icon.png', badge: '/badge.png' });
-        await webpush.sendNotification(subscription, payload);
-        results.web++;
-      } catch (err) {
-        results.errors++;
-      }
+  const results = { web: 0, android: androidStats.sent, errors: androidStats.failed };
+
+  for (const t of tokens.filter(t => !isAndroidDevice(t.device))) {
+    try {
+      const subscription = JSON.parse(t.token);
+      const payload = JSON.stringify({ title, body, data: data || {}, icon: '/icon.png', badge: '/badge.png' });
+      await webpush.sendNotification(subscription, payload);
+      results.web++;
+    } catch (err) {
+      results.errors++;
     }
   }
 
@@ -378,9 +319,8 @@ router.post('/webhook', async (req, res) => {
       }
 
       const title = isGroup ? chatName : (senderName || 'RED ON');
-      const body = showPreview ? (text || 'Nuevo mensaje') : 'Nuevo mensaje';
 
-      for (const rid of receiverIds) {
+      await Promise.allSettled(receiverIds.map(async (rid) => {
         try {
           const { data: blockCheck } = await supabase
             .from('blocks')
@@ -388,7 +328,7 @@ router.post('/webhook', async (req, res) => {
             .eq('blocker_id', rid)
             .eq('blocked_id', sender_id)
             .maybeSingle();
-          if (blockCheck) continue;
+          if (blockCheck) return;
         } catch {}
 
         let showPreviewForUser = showPreview;
@@ -409,39 +349,37 @@ router.post('/webhook', async (req, res) => {
           .from('push_tokens')
           .select('token, device')
           .eq('profile_id', rid);
-        if (!tokens?.length) continue;
+        if (!tokens?.length) return;
 
-        for (const t of tokens) {
-          if (t.device === 'android-fcm' || t.device === 'android') {
-            try {
-              await getMessaging().send({
-                token: t.token,
-                data: {
-                  title,
-                  body: showPreviewForUser ? (text || 'Nuevo mensaje') : 'Nuevo mensaje',
-                  type: 'message',
-                  chatId: chat_id,
-                  contactId: sender_id,
-                  avatarUrl: senderAvatar || undefined,
-                  is_group: isGroup ? 'true' : 'false',
-                  msgType: msgType || undefined,
-                  fileUrl: file_url || undefined,
-                  documentName: document_name || undefined,
-                  documentSize: document_size || undefined,
-                  documentType: document_type || undefined,
-                  mimeType: mime_type || undefined,
-                  imageUrl: image_url || undefined,
-                  videoUrl: video_url || undefined,
-                  audioUrl: audio_url || undefined,
-                },
-                android: { priority: 'high', ttl: 86400000 },
-              });
-            } catch (e) {
-              console.error('[FCM-WEBHOOK] send error:', e.message);
-            }
-          }
-        }
-      }
+        const messageData = sanitizeFcmData({
+          title,
+          body: showPreviewForUser ? (text || 'Nuevo mensaje') : 'Nuevo mensaje',
+          type: 'message',
+          chatId: chat_id,
+          contactId: sender_id,
+          avatarUrl: senderAvatar,
+          is_group: isGroup ? 'true' : 'false',
+          ts: record.created_at || new Date().toISOString(),
+          msgType: msgType || 'text',
+          fileUrl: file_url,
+          documentName: document_name,
+          documentSize: document_size,
+          documentType: document_type,
+          mimeType: mime_type,
+          imageUrl: image_url,
+          videoUrl: video_url,
+          audioUrl: audio_url,
+        });
+
+        await sendAndroidPush(
+          tokens.filter(t => isAndroidDevice(t.device)),
+          (token) => ({
+            token,
+            data: messageData,
+            android: { priority: 'high', ttl: 86400000 },
+          })
+        );
+      }));
     } catch (err) {
       console.error('[FCM-WEBHOOK] push send failed:', err.message);
     }
@@ -459,41 +397,32 @@ router.post('/webhook', async (req, res) => {
       if (oldStatus === 'ringing' && endedStatuses.includes(newStatus) && callee_id) {
         console.log(`[FCM-WEBHOOK] Call ${recordId} dismissed (${newStatus}) — notifying callee ${callee_id}`);
         const tokens = await getTokens(callee_id);
-        const results = { web: 0, android: 0, errors: 0 };
-        for (const t of tokens) {
-          if (t.device === 'android-fcm' || t.device === 'android') {
-            const admin = await initFirebaseAdmin();
-            if (admin) {
-              try {
-                await admin.messaging().send({
-                  token: t.token,
-                  data: {
-                    type: 'call_dismissed',
-                    callId: recordId,
-                    chatId: chat_id || '',
-                    callerId: caller_id || '',
-                  },
-                  android: { priority: 'high', ttl: 86400000 },
-                });
-                results.android++;
-              } catch (err) {
-                results.errors++;
-              }
-            } else {
-              results.errors++;
-            }
-          } else {
-            try {
-              const subscription = JSON.parse(t.token);
-              await webpush.sendNotification(subscription, JSON.stringify({
-                title: 'Llamada finalizada',
-                body: 'La llamada entrante ha terminado',
-                data: { type: 'call_dismissed', callId: recordId, chatId: chat_id || '', callerId: caller_id || '' },
-              }));
-              results.web++;
-            } catch (err) {
-              results.errors++;
-            }
+        const dismissedData = sanitizeFcmData({
+          type: 'call_dismissed',
+          callId: recordId,
+          chatId: chat_id || '',
+          callerId: caller_id || '',
+        });
+        const androidStats = await sendAndroidPush(
+          tokens.filter(t => isAndroidDevice(t.device)),
+          (token) => ({
+            token,
+            data: dismissedData,
+            android: { priority: 'high', ttl: 86400000 },
+          })
+        );
+        const results = { web: 0, android: androidStats.sent, errors: androidStats.failed };
+        for (const t of tokens.filter(t => !isAndroidDevice(t.device))) {
+          try {
+            const subscription = JSON.parse(t.token);
+            await webpush.sendNotification(subscription, JSON.stringify({
+              title: 'Llamada finalizada',
+              body: 'La llamada entrante ha terminado',
+              data: { type: 'call_dismissed', callId: recordId, chatId: chat_id || '', callerId: caller_id || '' },
+            }));
+            results.web++;
+          } catch (err) {
+            results.errors++;
           }
         }
         return res.json({ ok: true, ...results });
@@ -525,47 +454,40 @@ router.post('/webhook', async (req, res) => {
       return res.status(200).json({ ok: true, sent: 0, reason: 'no tokens for callee' });
     }
 
-    const results = { web: 0, android: 0, errors: 0 };
+    const callData = sanitizeFcmData({
+      title: callerName,
+      body: 'Llamada entrante',
+      badge: '1',
+      notificationCount: '1',
+      chatId: chat_id,
+      type: 'call',
+      callerId: caller_id,
+      callerName,
+      callType: call_type || 'audio',
+      callId: recordId,
+      roomId: room_id || '',
+    });
+    const androidStats = await sendAndroidPush(
+      tokens.filter(t => isAndroidDevice(t.device)),
+      (token) => ({
+        token,
+        data: callData,
+        android: { priority: 'high', ttl: 86400000 },
+      })
+    );
+    const results = { web: 0, android: androidStats.sent, errors: androidStats.failed };
 
-    for (const t of tokens) {
-      if (t.device === 'android-fcm' || t.device === 'android') {
-        const admin = await initFirebaseAdmin();
-        if (admin) {
-          try {
-            await admin.messaging().send({
-              token: t.token,
-              data: {
-                title: callerName, body: 'Llamada entrante',
-                badge: '1', notificationCount: '1',
-                chatId: chat_id, type: 'call',
-                callerId: caller_id, callerName,
-                callType: call_type || 'audio',
-                callId: recordId,
-                roomId: room_id || '',
-              },
-              android: {
-                priority: 'high', ttl: 86400000,
-              },
-            });
-            results.android++;
-          } catch (err) {
-            results.errors++;
-          }
-        } else {
-          results.errors++;
-        }
-      } else {
-        try {
-          const subscription = JSON.parse(t.token);
-          await webpush.sendNotification(subscription, JSON.stringify({
-            title: callerName, body: 'Llamada entrante...',
-            data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callType: call_type || 'audio', callId: recordId, roomId: room_id || '' },
-            icon: '/icon.png', badge: '/badge.png', requireInteraction: true,
-          }));
-          results.web++;
-        } catch (err) {
-          results.errors++;
-        }
+    for (const t of tokens.filter(t => !isAndroidDevice(t.device))) {
+      try {
+        const subscription = JSON.parse(t.token);
+        await webpush.sendNotification(subscription, JSON.stringify({
+          title: callerName, body: 'Llamada entrante...',
+          data: { chatId: chat_id, type: 'call', callerId: caller_id, callerName, callType: call_type || 'audio', callId: recordId, roomId: room_id || '' },
+          icon: '/icon.png', badge: '/badge.png', requireInteraction: true,
+        }));
+        results.web++;
+      } catch (err) {
+        results.errors++;
       }
     }
 
@@ -621,45 +543,36 @@ router.post('/webhook', async (req, res) => {
         return res.json({ ok: true, sent: 0, reason: 'no tokens' });
       }
 
-      const results = { web: 0, android: 0, errors: 0 };
+      const groupData = sanitizeFcmData({
+        title,
+        body,
+        badge: '1',
+        notificationCount: '1',
+        type: 'group_added',
+        is_group: 'true',
+        chatId: chat_id,
+      });
+      const androidStats = await sendAndroidPush(
+        tokens.filter(t => isAndroidDevice(t.device)),
+        (token) => ({
+          token,
+          data: groupData,
+          android: { priority: 'high', ttl: 86400000 },
+        })
+      );
+      const results = { web: 0, android: androidStats.sent, errors: androidStats.failed };
 
-      for (const t of tokens) {
-        if (t.device === 'android-fcm' || t.device === 'android') {
-          const admin = await initFirebaseAdmin();
-          if (admin) {
-            try {
-              // Push data-only: el propio CallFcmService decide el canal/sonido
-              // y construye la notificación (patrón idéntico a los mensajes).
-              await admin.messaging().send({
-                token: t.token,
-                data: {
-                  title, body,
-                  badge: '1', notificationCount: '1',
-                  type: 'group_added',
-                  is_group: 'true',
-                  chatId: chat_id,
-                },
-                android: { priority: 'high', ttl: 86400000 },
-              });
-              results.android++;
-            } catch (err) {
-              results.errors++;
-            }
-          } else {
-            results.errors++;
-          }
-        } else {
-          try {
-            const subscription = JSON.parse(t.token);
-            await webpush.sendNotification(subscription, JSON.stringify({
-              title, body,
-              data: { type: 'group_added', is_group: 'true', chatId: chat_id },
-              icon: '/icon.png',
-            }));
-            results.web++;
-          } catch (err) {
-            results.errors++;
-          }
+      for (const t of tokens.filter(t => !isAndroidDevice(t.device))) {
+        try {
+          const subscription = JSON.parse(t.token);
+          await webpush.sendNotification(subscription, JSON.stringify({
+            title, body,
+            data: { type: 'group_added', is_group: 'true', chatId: chat_id },
+            icon: '/icon.png',
+          }));
+          results.web++;
+        } catch (err) {
+          results.errors++;
         }
       }
 
